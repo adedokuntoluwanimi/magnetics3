@@ -6,6 +6,7 @@ let mapsPromise = null;
 let _currentMap = null;
 let _surveyMarkers = [];
 let _predictedMarkers = [];
+let _infoWindow = null;
 
 export function recolorSurveyMarkers(color) {
   _surveyMarkers.forEach((m) => {
@@ -68,6 +69,8 @@ export async function renderStationMap(container, points, {weighted = false, zoo
   _currentMap = map;
   _surveyMarkers = [];
   _predictedMarkers = [];
+  if (_infoWindow) { _infoWindow.close(); }
+  _infoWindow = new maps.InfoWindow();
 
   if (!validPoints.length) {
     return map;
@@ -97,6 +100,17 @@ export async function renderStationMap(container, points, {weighted = false, zoo
         strokeWeight: 1,
       },
       title: `${Number(point.magnetic || 0).toFixed(2)} nT`,
+    });
+    marker.addListener("click", () => {
+      _infoWindow.setContent(`
+        <div style="font-family:'Manrope',sans-serif;font-size:12px;min-width:140px">
+          <div style="font-weight:700;margin-bottom:6px;color:#071a0b">Survey station</div>
+          <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:3px"><span style="color:#5a8264">Latitude</span><span style="font-family:'JetBrains Mono',monospace;font-weight:600">${Number(point.latitude).toFixed(6)}</span></div>
+          <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:3px"><span style="color:#5a8264">Longitude</span><span style="font-family:'JetBrains Mono',monospace;font-weight:600">${Number(point.longitude).toFixed(6)}</span></div>
+          ${point.magnetic != null ? `<div style="display:flex;justify-content:space-between;gap:12px;border-top:1px solid #e0e0e0;padding-top:5px;margin-top:5px"><span style="color:#5a8264">Magnetic</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:#13401d">${Number(point.magnetic).toFixed(2)} nT</span></div>` : ""}
+        </div>
+      `);
+      _infoWindow.open(map, marker);
     });
     _surveyMarkers.push(marker);
   });

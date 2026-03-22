@@ -377,6 +377,7 @@ async function submitTaskFlow() {
     if (spacingVal) fd.set("station_spacing", spacingVal);
     const spacingUnit = getEl("spacingUnit")?.value;
     if (spacingUnit) fd.set("station_spacing_unit", spacingUnit);
+    fd.set("line_interpolation", String(window.state?.lineMode !== "grid"));
     appState.surveyFiles.forEach((f) => fd.append("survey_files", f, f.name));
     if (appState.basemapFile) fd.append("basemap_file", appState.basemapFile, appState.basemapFile.name);
 
@@ -480,6 +481,25 @@ export function initSetup() {
     setStep(1);
   });
   getEl("setupSaveBtn")?.addEventListener("click", submitTaskFlow);
+
+  window.setLineMode = (m) => {
+    if (!window.state) window.state = {};
+    window.state.lineMode = m;
+    getEl("lm-line")?.classList.toggle("selected", m === "line");
+    getEl("lm-grid")?.classList.toggle("selected", m === "grid");
+    // Update radio circles
+    ["lm-line", "lm-grid"].forEach((id) => {
+      const el = getEl(id);
+      if (!el) return;
+      const circle = el.querySelector(".radio-circle");
+      if (!circle) return;
+      if (el.classList.contains("selected")) {
+        circle.innerHTML = `<div class="radio-dot"></div>`;
+      } else {
+        circle.innerHTML = "";
+      }
+    });
+  };
 
   // Override legacy inline setState to show/hide raw data section
   const legacySetState = window.setState?.bind(window);

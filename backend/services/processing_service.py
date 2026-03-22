@@ -386,6 +386,14 @@ class ProcessingService:
             lon_range_m = (lon_max - lon_min) * 111_320
             lat_range_m = (lat_max - lat_min) * 111_320
             traverse_length_m = max(float(np.sqrt(lon_range_m**2 + lat_range_m**2)), 1.0)
+            line_interp = task.get("line_interpolation", True)
+            if not line_interp:
+                # Full 2D grid mode — ignore traverse grouping
+                x_points = min(max(int(((lon_max - lon_min) / spacing_degrees) + 1), 25), 80)
+                y_points = min(max(int(((lat_max - lat_min) / spacing_degrees) + 1), 25), 80)
+                x_axis = np.linspace(lon_min, lon_max, x_points)
+                y_axis = np.linspace(lat_min, lat_max, y_points)
+                return np.meshgrid(x_axis, y_axis)
             if spacing_metres > traverse_length_m:
                 raise ValueError(
                     f"Station spacing ({spacing_value} {spacing_unit}) exceeds the survey traverse length "

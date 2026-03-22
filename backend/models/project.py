@@ -72,6 +72,7 @@ class TaskCreatePayload(GaiaModel):
     processing_mode: ProcessingMode
     station_spacing: float | None = None
     station_spacing_unit: str | None = None
+    line_interpolation: bool = True
     corrected_corrections: list[str] = Field(default_factory=list)
     column_mapping: ColumnMapping
     metadata: dict[str, Any] = Field(default_factory=dict)

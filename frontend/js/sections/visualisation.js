@@ -113,6 +113,58 @@ async function renderAurora() {
   `;
 }
 
+async function renderLineProfiles(results) {
+  const Plotly = await ensurePlotly();
+  const host = ensureHost();
+  const points = results.points || [];
+  if (!points.length) {
+    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">No point data available for line profiles.</div>`;
+    return;
+  }
+  // Group points into traverses by rounding the perpendicular coordinate
+  const lats = points.map((p) => Number(p.latitude));
+  const lons = points.map((p) => Number(p.longitude));
+  const latRange = Math.max(...lats) - Math.min(...lats);
+  const lonRange = Math.max(...lons) - Math.min(...lons);
+  const groupByLat = latRange < lonRange; // E-W survey: group by lat, vary along lon
+  const step = (groupByLat ? latRange : lonRange) / Math.max(Math.sqrt(points.length / 5), 1);
+  const groups = new Map();
+  points.forEach((p) => {
+    const key = Math.round((groupByLat ? Number(p.latitude) : Number(p.longitude)) / (step || 0.001)) * (step || 0.001);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  });
+  const traces = [];
+  [...groups.entries()].sort(([a], [b]) => a - b).slice(0, 20).forEach(([key, pts]) => {
+    const sorted = pts.sort((a, b) => (groupByLat ? Number(a.longitude) - Number(b.longitude) : Number(a.latitude) - Number(b.latitude)));
+    const origin = {lat: Number(sorted[0].latitude), lon: Number(sorted[0].longitude)};
+    const distances = sorted.map((p) => {
+      const dlat = (Number(p.latitude) - origin.lat) * 111320;
+      const dlon = (Number(p.longitude) - origin.lon) * 111320 * Math.cos(origin.lat * Math.PI / 180);
+      return Math.sqrt(dlat * dlat + dlon * dlon);
+    });
+    traces.push({
+      x: distances,
+      y: sorted.map((p) => Number(p.magnetic || 0)),
+      type: "scatter",
+      mode: "lines",
+      name: `Line ${(groupByLat ? key.toFixed(4) + "°N" : key.toFixed(4) + "°E")}`,
+      line: {width: 1.5},
+    });
+  });
+  const commonLayout = {
+    margin: {t: 20, r: 12, b: 48, l: 56},
+    paper_bgcolor: "transparent",
+    plot_bgcolor: "transparent",
+    font: {color: "#5f6d64", size: 11},
+    xaxis: {title: "Distance along traverse (m)", gridcolor: "rgba(0,0,0,0.06)"},
+    yaxis: {title: "Magnetic field (nT)", gridcolor: "rgba(0,0,0,0.06)"},
+    showlegend: traces.length <= 8,
+    legend: {font: {size: 9}},
+  };
+  await Plotly.newPlot(host, traces, commonLayout, {displayModeBar: false, responsive: true});
+}
+
 async function renderPlot(mode, results) {
   const Plotly = await ensurePlotly();
   const host = ensureHost();
@@ -175,6 +227,8 @@ export async function loadVisualisation() {
   renderHeader(results);
   if (appState.activeVisualisation === "Map") {
     await renderMapOverlay(results);
+  } else if (appState.activeVisualisation === "Line Profiles") {
+    await renderLineProfiles(results);
   } else {
     await renderPlot(appState.activeVisualisation, results);
   }

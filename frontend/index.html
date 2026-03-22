@@ -445,6 +445,12 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
     </div>
     <div class="nav-right">
       <div class="ctx-pill" id="ctxBadge" style="display:none"><div class="ctx-pulse"></div><span id="ctxTxt">New project</span></div>
+      <div style="position:relative">
+        <button class="ibtn" id="projsDropBtn" onclick="toggleProjectsDropdown()" title="All projects" style="font-size:11px;font-weight:700;padding:0 10px;width:auto;gap:4px">Projects ▾</button>
+        <div id="projsDropdown" style="display:none;position:fixed;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r);box-shadow:var(--shadow-lg);z-index:999;min-width:220px;max-height:320px;overflow-y:auto;padding:4px 0" onclick="event.stopPropagation()">
+          <div id="projsDropList" style="display:flex;flex-direction:column"></div>
+        </div>
+      </div>
       <button class="ibtn" onclick="toggleDark()" id="dmBtn">☀</button>
       <button class="ibtn" onclick="toggleFS()" id="fsBtn">⛶</button>
     </div>
@@ -735,6 +741,22 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
               </div>
             </div>
 
+            <div id="lineModeRow" style="display:none;margin-bottom:14px">
+              <div class="sep" style="margin-top:0">Sparse interpolation mode</div>
+              <div class="card">
+                <div class="radio-group">
+                  <div class="radio-opt selected" id="lm-line" onclick="setLineMode('line')">
+                    <div class="radio-circle"><div class="radio-dot"></div></div>
+                    <div><div style="font-size:12.5px;font-weight:700">Along lines</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">Interpolate only within each survey traverse</div></div>
+                  </div>
+                  <div class="radio-opt" id="lm-grid" onclick="setLineMode('grid')">
+                    <div class="radio-circle"></div>
+                    <div><div style="font-size:12.5px;font-weight:700">Full grid</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">Predict over the entire bounding-box grid</div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div class="sep">Station spacing</div>
             <div class="card" style="margin-bottom:14px">
               <div class="frow" style="margin-bottom:0">
@@ -1007,6 +1029,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
             <div class="vt" onclick="pickVis(this,'Contour')">Contour</div>
             <div class="vt" onclick="pickVis(this,'3D')">3D surface</div>
             <div class="vt" onclick="pickVis(this,'Map')">Map overlay</div>
+            <div class="vt" onclick="pickVis(this,'Line Profiles')">Line profiles</div>
           </div>
           <div style="display:flex;align-items:center;gap:7px;margin-left:auto">
             <span class="badge bgr">Awaiting results</span>
@@ -1252,18 +1275,22 @@ function setScenario(sc){
   var su=document.getElementById('spacingUnit');
   var sl=document.getElementById('spacingLabel');
   var sh=document.getElementById('spacingHint');
+  var lmr=document.getElementById('lineModeRow');
   if(sc==='explicit'){
     ex.classList.add('selected');ex.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
     sp.classList.remove('selected');sp.querySelector('.radio-circle').innerHTML='';
     si.disabled=true;su.disabled=true;
     sl.style.color='var(--disabled-text)';
     sh.textContent='Station spacing is not used in Explicit mode — the predict.csv defines locations.';
+    if(lmr)lmr.style.display='none';
   }else{
     sp.classList.add('selected');sp.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
     ex.classList.remove('selected');ex.querySelector('.radio-circle').innerHTML='';
     si.disabled=false;su.disabled=false;
     sl.style.color='';
     sh.textContent='';
+    if(lmr)lmr.style.display='block';
+    if(window.setLineMode)window.setLineMode(window.state&&window.state.lineMode?window.state.lineMode:'line');
   }
 }
 
