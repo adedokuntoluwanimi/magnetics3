@@ -211,6 +211,12 @@ async function renderMapOverlay(results) {
   await renderStationMap(host, results.points, {weighted: true});
 }
 
+function isSurface1D(results) {
+  const s = results?.surface;
+  // Surface is 1-D when it has only 1 row (sparse along-line output)
+  return Array.isArray(s) && s.length <= 1;
+}
+
 export async function loadVisualisation() {
   const host = ensureHost();
   if (!appState.project || !appState.task) {
@@ -225,17 +231,25 @@ export async function loadVisualisation() {
     host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">Processing results are not available yet — run the task to generate them.</div>`;
     return;
   }
-  renderStats(results);
-  renderLayerBar(results);
-  renderHeader(results);
-  if (appState.activeVisualisation === "Map") {
+  // For single-traverse (1-row) surfaces, Line Profiles is the meaningful view
+  let mode = appState.activeVisualisation;
+  if (isSurface1D(results) && mode !== "Map" && mode !== "Line Profiles") {
+    mode = "Line Profiles";
+    setActiveVisualisation(mode);
+    document.querySelectorAll("#screen-visualisation .vt").forEach((n) => n.classList.remove("on"));
+    document.querySelector("#screen-visualisation .vt[onclick*='Line Profiles']")?.classList.add("on");
+  }
+  try { renderStats(results); } catch (e) { console.warn("renderStats:", e); }
+  try { renderLayerBar(results); } catch (e) { console.warn("renderLayerBar:", e); }
+  try { renderHeader(results); } catch (e) { console.warn("renderHeader:", e); }
+  if (mode === "Map") {
     await renderMapOverlay(results);
-  } else if (appState.activeVisualisation === "Line Profiles") {
+  } else if (mode === "Line Profiles") {
     await renderLineProfiles(results);
   } else {
-    await renderPlot(appState.activeVisualisation, results);
+    await renderPlot(mode, results);
   }
-  await renderAurora();
+  try { await renderAurora(); } catch (e) { console.warn("renderAurora:", e); }
 }
 
 export function initVisualisation() {

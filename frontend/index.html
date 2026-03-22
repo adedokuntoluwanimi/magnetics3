@@ -444,7 +444,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
       <div class="nlnk" data-s="export" onclick="go(this)">Export</div>
     </div>
     <div class="nav-right">
-      <div class="ctx-pill" id="ctxBadge" style="display:none"><div class="ctx-pulse"></div><span id="ctxTxt">New project</span></div>
+      <span id="ctxTxt" style="display:none"></span><span id="ctxBadge" style="display:none"></span>
       <div style="position:relative">
         <button class="ibtn" id="projsDropBtn" onclick="toggleProjectsDropdown()" title="All projects" style="font-size:11px;font-weight:700;padding:0 10px;width:auto;gap:4px">Projects ▾</button>
         <div id="projsDropdown" style="display:none;position:fixed;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r);box-shadow:var(--shadow-lg);z-index:999;min-width:220px;max-height:320px;overflow-y:auto;padding:4px 0" onclick="event.stopPropagation()">
@@ -1007,18 +1007,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
           </div>
           <div style="margin-top:12px;font-size:11.5px;color:var(--text3);font-weight:500" id="procEta">Processing in progress…</div>
         </div>
-        <!-- Side map -->
-        <div style="width:254px;flex-shrink:0;border-left:1px solid var(--border);padding:17px 15px;overflow-y:auto">
-          <div class="sep first">Station preview</div>
-          <div class="mapbox" style="height:200px;padding:0;overflow:hidden"><div id="procMapHost" style="width:100%;height:200px"></div></div>
-          <div style="margin-top:13px">
-            <div class="srow"><span class="sk">Survey lines</span><span class="sv">—</span></div>
-            <div class="srow"><span class="sk">Total points</span><span class="sv">—</span></div>
-            <div class="srow"><span class="sk">Coverage</span><span class="sv">—</span></div>
-            <div class="srow"><span class="sk">Min TMF</span><span class="sv">—</span></div>
-            <div class="srow"><span class="sk">Max TMF</span><span class="sv">—</span></div>
-          </div>
-        </div>
+        <div id="procMapHost" style="display:none"></div>
       </div>
 
       <!-- ═══ VISUALISATION ═══ -->
