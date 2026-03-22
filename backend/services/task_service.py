@@ -1,0 +1,220 @@
+from __future__ import annotations
+
+import csv
+from io import BytesIO, StringIO
+from statistics import fmean
+
+from backend.logging_utils import log_event
+from backend.models import ColumnMapping, DatasetProfile, TaskCreatePayload, TaskRecord
+from backend.models.common import MapBounds
+
+
+def _xlsx_to_csv_bytes(raw_bytes: bytes) -> bytes:
+    """Convert an xlsx file to CSV bytes, adding an __is_base_station__ column.
+
+    Any row where every non-empty cell in the row uses bold font is treated
+    as a base station reading and gets __is_base_station__ = 1.
+    """
+    import openpyxl
+
+    wb = openpyxl.load_workbook(BytesIO(raw_bytes), data_only=True)
+    ws = wb.active
+
+    rows = list(ws.iter_rows())
+    if not rows:
+        return b""
+
+    # Build header from first row, append sentinel column
+    header_cells = rows[0]
+    headers = [str(c.value) if c.value is not None else f"col{i}" for i, c in enumerate(header_cells)]
+    headers.append("__is_base_station__")
+
+    out = StringIO()
+    writer = csv.writer(out)
+    writer.writerow(headers)
+
+    for row in rows[1:]:
+        values = [c.value for c in row]
+        # A row is "base station" when at least one non-empty cell is bold
+        # and NO non-empty cell is non-bold (all populated cells are bold)
+        bold_cells = [c for c in row if c.value not in (None, "") and c.font and c.font.bold]
+        data_cells = [c for c in row if c.value not in (None, "")]
+        is_base = 1 if data_cells and len(bold_cells) == len(data_cells) else 0
+        values.append(is_base)
+        writer.writerow(values)
+
+    return out.getvalue().encode("utf-8")
+
+
+def _auto_detect_base_stations(csv_bytes: bytes, lat_col: str, lon_col: str) -> bytes:
+    """Mark base station rows by detecting duplicate coordinates.
+
+    Any (lat, lon) pair that appears more than once is a base station reading.
+    """
+    import io
+    import pandas as pd
+
+    frame = pd.read_csv(io.StringIO(csv_bytes.decode("utf-8", errors="replace")))
+    if lat_col not in frame.columns or lon_col not in frame.columns:
+        return csv_bytes
+    coord_key = frame[lat_col].astype(str) + "," + frame[lon_col].astype(str)
+    counts = coord_key.value_counts()
+    repeated = set(counts[counts > 1].index)
+    frame["__is_base_station__"] = coord_key.isin(repeated).astype(int)
+    return frame.to_csv(index=False).encode("utf-8")
+
+
+class TaskService:
+    def __init__(self, store, storage_backend) -> None:
+        self._store = store
+        self._storage = storage_backend
+
+    def list_tasks(self, project_id: str) -> list[dict]:
+        return self._store.list_tasks(project_id)
+
+    def get_task(self, task_id: str) -> dict | None:
+        return self._store.get_task(task_id)
+
+    def rename_task(self, task_id: str, name: str) -> dict:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        return self._store.update_task(task_id, {"name": name, "updated_at": now})
+
+    def delete_task(self, task_id: str) -> None:
+        self._store.delete_task(task_id)
+
+    def create_task(
+        self,
+        *,
+        project_id: str,
+        payload: TaskCreatePayload,
+        survey_files: list[tuple[str, str, bytes]],
+        basemap_file: tuple[str, str, bytes] | None = None,
+    ) -> dict:
+        if not survey_files:
+            raise ValueError("At least one survey CSV file is required.")
+        if payload.processing_mode == "single" and len(survey_files) != 1:
+            raise ValueError("Single-line mode requires exactly one survey CSV file.")
+
+        # Normalise xlsx → csv with bold-row base-station detection
+        normalised_survey: list[tuple[str, str, bytes]] = []
+        for file_name, content_type, data in survey_files:
+            if file_name.lower().endswith((".xlsx", ".xls")):
+                csv_bytes = _xlsx_to_csv_bytes(data)
+                base_name = file_name.rsplit(".", 1)[0] + ".csv"
+                normalised_survey.append((base_name, "text/csv", csv_bytes))
+            else:
+                # Always auto-detect by duplicate coordinates
+                data = _auto_detect_base_stations(data, payload.column_mapping.latitude, payload.column_mapping.longitude)
+                normalised_survey.append((file_name, content_type, data))
+
+        dataset_profile = self._build_dataset_profile(
+            survey_files=normalised_survey,
+            mapping=payload.column_mapping,
+        )
+
+        task = TaskRecord(
+            project_id=project_id,
+            dataset_profile=dataset_profile,
+            survey_files=[],
+            **payload.model_dump(),
+        )
+
+        task.survey_files = [
+            self._storage.upload_task_input(
+                project_id=project_id,
+                task_id=task.id,
+                file_name=file_name,
+                content_type=content_type,
+                data=data,
+                kind="survey",
+            )
+            for file_name, content_type, data in normalised_survey
+        ]
+
+        if basemap_file:
+            file_name, content_type, data = basemap_file
+            task.basemap_file = self._storage.upload_task_input(
+                project_id=project_id,
+                task_id=task.id,
+                file_name=file_name,
+                content_type=content_type,
+                data=data,
+                kind="basemap",
+            )
+
+        log_event(
+            "INFO",
+            "Task created",
+            action="task.create",
+            project_id=project_id,
+            task_id=task.id,
+        )
+        return self._store.create_task(task.model_dump(mode="json"))
+
+    def _build_dataset_profile(
+        self,
+        *,
+        survey_files: list[tuple[str, str, bytes]],
+        mapping: ColumnMapping,
+    ) -> DatasetProfile:
+        headers: list[str] = []
+        total_rows = 0
+        xs: list[float] = []
+        ys: list[float] = []
+        magnetic_values: list[float] = []
+        preview_points: list[dict[str, float]] = []
+
+        for file_name, _content_type, raw_bytes in survey_files:
+            text = raw_bytes.decode("utf-8-sig")
+            reader = csv.DictReader(StringIO(text))
+            if not reader.fieldnames:
+                raise ValueError(f"{file_name} does not contain a CSV header row.")
+            if not headers:
+                headers = list(reader.fieldnames)
+            missing = {
+                mapping.latitude,
+                mapping.longitude,
+                mapping.magnetic_field,
+            } - set(reader.fieldnames)
+            if missing:
+                missing_list = ", ".join(sorted(missing))
+                raise ValueError(f"{file_name} is missing required columns: {missing_list}.")
+
+            for row in reader:
+                total_rows += 1
+                try:
+                    longitude = float(row[mapping.longitude])
+                    latitude = float(row[mapping.latitude])
+                    magnetic = float(row[mapping.magnetic_field])
+                    xs.append(longitude)
+                    ys.append(latitude)
+                    magnetic_values.append(magnetic)
+                    if len(preview_points) < 500:
+                        preview_points.append(
+                            {
+                                "longitude": longitude,
+                                "latitude": latitude,
+                                "magnetic": magnetic,
+                            }
+                        )
+                except (TypeError, ValueError):
+                    continue
+
+        bounds = MapBounds(
+            min_x=min(xs) if xs else None,
+            min_y=min(ys) if ys else None,
+            max_x=max(xs) if xs else None,
+            max_y=max(ys) if ys else None,
+        )
+        return DatasetProfile(
+            headers=headers,
+            total_rows=total_rows,
+            files_count=len(survey_files),
+            column_mapping=mapping,
+            preview_points=preview_points,
+            bounds=bounds,
+            magnetic_min=min(magnetic_values) if magnetic_values else None,
+            magnetic_max=max(magnetic_values) if magnetic_values else None,
+            magnetic_mean=fmean(magnetic_values) if magnetic_values else None,
+        )

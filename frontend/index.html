@@ -1,0 +1,1538 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<link rel="icon" type="image/png" href="/frontend/favicon.png">
+<title>GAIA Magnetics — V2</title>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,400;0,500;0,700;0,900;1,300;1,400&family=Roboto+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --g900:#040f06;--g800:#071a0b;--g700:#0d2a13;--g600:#13401d;--g500:#22803c;
+  --g400:#2daa52;--g300:#52c472;--g200:#96dfa9;--g100:#c8efd4;--g50:#edf8f1;--g25:#f6fcf8;
+  --bg:#ffffff;--bg2:#f5faf7;--bg3:#eaf4ee;--bg4:#dceee3;
+  --text:#071a0b;--text2:#2a5035;--text3:#5a8264;--text4:#93b89a;
+  --border:rgba(13,42,19,0.09);--border2:rgba(13,42,19,0.16);--border3:rgba(13,42,19,0.26);
+  --amber:#a85e0e;--amber-bg:rgba(168,94,14,0.1);
+  --red:#b91c1c;--red-bg:rgba(185,28,28,0.08);
+  --blue:#1a5f8c;--blue-bg:rgba(26,95,140,0.1);
+  --disabled-bg:#f4f4f4;--disabled-text:#bbb;--disabled-border:#e0e0e0;
+  --shadow:0 1px 3px rgba(7,26,11,0.06);
+  --shadow-md:0 4px 14px rgba(7,26,11,0.09);
+  --shadow-lg:0 10px 36px rgba(7,26,11,0.13);
+  --r:8px;--rl:14px;
+}
+[data-theme="dark"]{
+  --bg:#0f1510;--bg2:#151d16;--bg3:#1b261c;--bg4:#222f23;
+  --text:#e8f5eb;--text2:#a8d4b0;--text3:#6a9e72;--text4:#3a5c3e;
+  --border:rgba(168,212,176,0.1);--border2:rgba(168,212,176,0.18);--border3:rgba(168,212,176,0.28);
+  --g50:#151d16;--g100:#1b261c;--g200:#243328;
+  --g500:#3dcb68;--g400:#52d878;--g300:#7de49a;--g600:#2aaa52;
+  --disabled-bg:#111812;--disabled-text:#2e3d2f;--disabled-border:#1a241b;
+  --amber:#f0a644;--amber-bg:rgba(240,166,68,0.13);
+  --red:#f87171;--red-bg:rgba(248,113,113,0.1);
+  --blue:#60b4e0;--blue-bg:rgba(96,180,224,0.12);
+  --shadow:0 1px 3px rgba(0,0,0,0.5);
+  --shadow-md:0 4px 14px rgba(0,0,0,0.55);
+  --shadow-lg:0 10px 36px rgba(0,0,0,0.7);
+}
+html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);overflow:hidden;transition:background 0.2s}
+#shell{display:flex;flex-direction:column;height:100vh;background:var(--bg);transition:background 0.2s,color 0.2s}
+
+/* TOP NAV */
+.topnav{height:50px;border-bottom:1px solid var(--border2);display:flex;align-items:center;padding:0 20px;flex-shrink:0;background:var(--bg);z-index:20;transition:background 0.2s,border-color 0.2s}
+.logo{display:flex;align-items:center;gap:8px;cursor:pointer;margin-right:24px;text-decoration:none}
+.logo-g{font-family:'Roboto',sans-serif;font-size:21px;font-weight:700;color:var(--g500);letter-spacing:3px;line-height:1}
+.logo-sep{width:1px;height:16px;background:var(--border2)}
+.logo-tag{font-size:9px;font-weight:700;letter-spacing:2px;color:var(--text3);text-transform:uppercase}
+.nav-links{display:flex;height:100%;align-items:center;gap:1px;flex:1;overflow-x:auto}
+.nav-links::-webkit-scrollbar{display:none}
+.nlnk{padding:0 12px;height:34px;display:flex;align-items:center;font-size:11.5px;font-weight:600;color:var(--text3);cursor:pointer;border-radius:var(--r);transition:all 0.15s;white-space:nowrap}
+.nlnk:hover{color:var(--text2);background:var(--bg3)}
+.nlnk.active{color:var(--g500);background:var(--g50);border-bottom:2px solid var(--g400)}
+.nav-right{display:flex;align-items:center;gap:7px;margin-left:12px;flex-shrink:0}
+.ctx-pill{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:10.5px;font-weight:700;background:var(--g50);border:1px solid var(--g100);color:var(--g600);white-space:nowrap}
+.ctx-pulse{width:5px;height:5px;border-radius:50%;background:var(--g400);animation:ctxpulse 2.5s ease-in-out infinite}
+@keyframes ctxpulse{0%,100%{opacity:1}50%{opacity:0.35}}
+.ibtn{width:32px;height:32px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;transition:all 0.15s;color:var(--text2)}
+.ibtn:hover{background:var(--bg3);border-color:var(--border3)}
+
+/* BODY */
+.body{display:flex;flex:1;overflow:hidden}
+.sidebar{width:214px;min-width:160px;max-width:480px;border-right:1px solid var(--border);background:var(--bg2);flex-shrink:0;display:flex;flex-direction:column;padding:14px 0;overflow-y:auto;transition:background 0.2s,border-color 0.2s;position:relative}
+.sidebar.off{display:none}
+/* Sidebar 3-dots menu */
+.sb-dots-wrap{display:none;margin-left:auto;flex-shrink:0;position:relative}
+.sbi:hover .sb-dots-wrap{display:flex}
+.sbi:hover .sb-count{display:none}
+.sb-dots-btn{width:22px;height:22px;border:none;background:transparent;cursor:pointer;border-radius:4px;font-size:15px;font-weight:700;color:var(--text3);display:flex;align-items:center;justify-content:center;padding:0;line-height:1;letter-spacing:1px;transition:all 0.12s}
+.sb-dots-btn:hover{background:var(--bg4);color:var(--text)}
+.sb-dropdown{position:fixed;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r);box-shadow:var(--shadow-lg);z-index:999;min-width:150px;padding:4px 0;display:none}
+.sb-dropdown.open{display:block}
+.sb-dd-item{display:flex;align-items:center;gap:8px;padding:7px 13px;font-size:12px;font-weight:600;color:var(--text2);cursor:pointer;transition:background 0.1s;white-space:nowrap}
+.sb-dd-item:hover{background:var(--bg3);color:var(--text)}
+.sb-dd-item.danger{color:var(--red)}
+.sb-dd-item.danger:hover{background:var(--red-bg)}
+.sb-dd-sep{height:1px;background:var(--border);margin:4px 0}
+/* legacy sb-acts kept for compat */
+.sb-acts{display:none}
+/* Sidebar chevron */
+.sb-chev{border:none;background:transparent;cursor:pointer;width:14px;height:14px;font-size:10px;color:var(--text4);flex-shrink:0;padding:0;display:flex;align-items:center;justify-content:center;transition:color 0.12s}
+.sb-chev:hover{color:var(--text2)}
+/* Task count badge */
+.sb-count{background:var(--g100);color:var(--g600);border-radius:10px;padding:1px 7px;font-size:10px;font-weight:700;margin-left:auto;flex-shrink:0;transition:opacity 0.1s}
+/* Inline rename input */
+.sb-rename-input{background:var(--bg3);border:1px solid var(--g400);border-radius:4px;font-family:'Manrope',sans-serif;font-size:12px;font-weight:600;color:var(--text);padding:2px 6px;width:100%;outline:none;box-shadow:0 0 0 2px rgba(45,170,82,0.15)}
+.sbs{margin-bottom:18px}
+.sbh{font-size:9px;font-weight:700;letter-spacing:2px;color:var(--text4);padding:0 16px 7px;text-transform:uppercase}
+.sbi{display:flex;align-items:center;gap:9px;padding:7px 16px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text3);border-left:2px solid transparent;transition:all 0.14s}
+.sbi:hover{color:var(--text2);background:var(--bg3);border-left-color:var(--g200)}
+.sbi.active{color:var(--g600);background:var(--g50);border-left-color:var(--g400)}
+.sdot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.d-idle{background:var(--bg4);border:1px solid var(--border2)}
+.d-active{background:var(--g400);box-shadow:0 0 0 3px rgba(45,170,82,0.2)}
+.d-done{background:var(--g400)}
+.d-new{background:transparent;border:1.5px dashed var(--g300)}
+.sb-divider{height:1px;background:var(--border);margin:10px 16px}
+.aurora-sb{display:flex;align-items:center;gap:9px;padding:9px 16px;cursor:pointer;font-size:12px;font-weight:700;color:var(--g500)}
+.aurora-sb:hover{background:var(--g50)}
+.a-ring{width:18px;height:18px;border-radius:50%;border:2px solid var(--g400);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.a-core{width:7px;height:7px;border-radius:50%;background:var(--g400);animation:gpulse 2s ease-in-out infinite}
+@keyframes gpulse{0%,100%{transform:scale(1)}50%{transform:scale(0.7);opacity:0.6}}
+
+/* MAIN */
+.main{flex:1;overflow:hidden;display:flex;flex-direction:column}
+.screen{display:none;flex:1;flex-direction:column;overflow:hidden;animation:fadeUp 0.2s ease}
+.screen.active{display:flex}
+@keyframes fadeUp{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+.shdr{padding:18px 26px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
+.stitle{font-family:'Roboto',sans-serif;font-size:16px;font-weight:600;color:var(--text);}
+.ssub{font-size:11px;color:var(--text3);margin-top:3px;font-weight:500}
+.scroll{flex:1;overflow-y:auto;padding:20px 26px}
+.scroll::-webkit-scrollbar{width:3px}
+.scroll::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+
+/* BUTTONS */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:var(--r);font-size:12.5px;font-weight:700;cursor:pointer;border:none;font-family:'Manrope',sans-serif;letter-spacing:0.2px;white-space:nowrap;transition:all 0.15s}
+.btn-g{background:var(--g500);color:#fff}
+.btn-g:hover{background:var(--g600);transform:translateY(-1px);box-shadow:var(--shadow-md)}
+.btn-out{background:transparent;color:var(--text2);border:1.5px solid var(--border3)}
+.btn-out:hover{background:var(--bg3);border-color:var(--border3)}
+.btn-ghost{background:transparent;color:var(--g500);border:1.5px solid var(--g200)}
+.btn-ghost:hover{background:var(--g50)}
+.btn-sm{padding:6px 13px;font-size:11.5px}
+.btn-xs{padding:4px 10px;font-size:11px}
+
+/* CARDS */
+.card{background:var(--bg);border:1px solid var(--border);border-radius:var(--rl);padding:17px}
+.card-g{background:var(--g50);border-color:var(--g100)}
+.card-sm{padding:13px}
+.card-active{border-color:var(--g300);background:var(--g25)}
+.proj-task-card:hover{border-color:var(--border2);box-shadow:var(--shadow)}
+
+/* FORM */
+.fl{font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);margin-bottom:7px;display:block;text-transform:uppercase}
+.fi{width:100%;padding:9px 12px;border:1.5px solid var(--border2);border-radius:var(--r);font-size:13px;background:var(--bg);color:var(--text);font-family:'Manrope',sans-serif;transition:all 0.15s}
+.fi:focus{outline:none;border-color:var(--g400);box-shadow:0 0 0 3px rgba(45,170,82,0.12)}
+.fi:disabled{background:var(--disabled-bg);color:var(--disabled-text);border-color:var(--disabled-border);cursor:not-allowed}
+.ftxt{width:100%;padding:10px 12px;border:1.5px solid var(--border2);border-radius:var(--r);font-size:13px;background:var(--bg);color:var(--text);font-family:'Manrope',sans-serif;resize:none;line-height:1.7;transition:all 0.15s}
+.ftxt:focus{outline:none;border-color:var(--g400);box-shadow:0 0 0 3px rgba(45,170,82,0.12)}
+.fsel{width:100%;padding:9px 12px;border:1.5px solid var(--border2);border-radius:var(--r);font-size:13px;background:var(--bg);color:var(--text);font-family:'Manrope',sans-serif;cursor:pointer;transition:all 0.15s}
+.fsel:disabled{background:var(--disabled-bg);color:var(--disabled-text);border-color:var(--disabled-border);cursor:not-allowed}
+.frow{margin-bottom:14px}
+.frow:last-child{margin-bottom:0}
+
+/* RADIO GROUPS */
+.radio-group{display:flex;gap:8px}
+.radio-opt{flex:1;display:flex;align-items:center;gap:8px;padding:10px 13px;border-radius:var(--r);border:1.5px solid var(--border2);cursor:pointer;font-size:12.5px;font-weight:600;color:var(--text2);transition:all 0.15s}
+.radio-opt:hover:not(.disabled){border-color:var(--g300);background:var(--g50)}
+.radio-opt.selected{border-color:var(--g400);background:var(--g50);color:var(--g600)}
+.radio-opt.disabled{opacity:0.35;cursor:not-allowed;pointer-events:none;border-color:var(--disabled-border);background:var(--disabled-bg);color:var(--disabled-text)}
+.radio-circle{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--border3);flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:all 0.15s}
+.radio-opt.selected .radio-circle{border-color:var(--g500);background:var(--g500)}
+.radio-dot{width:5px;height:5px;border-radius:50%;background:#fff}
+
+/* BADGES */
+.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:0.3px}
+.bg{background:var(--g50);color:var(--g600);border:1px solid var(--g100)}
+.ba{background:var(--amber-bg);color:var(--amber)}
+.br{background:var(--red-bg);color:var(--red)}
+.bb{background:var(--blue-bg);color:var(--blue)}
+.bgr{background:var(--bg3);color:var(--text3)}
+.bg-done{background:var(--g50);color:var(--g500);border:1px solid var(--g100)}
+
+/* CHECKBOXES */
+.chk{display:flex;align-items:flex-start;gap:10px;padding:11px 13px;border-radius:var(--r);border:1.5px solid var(--border);margin-bottom:8px;cursor:pointer;transition:all 0.15s}
+.chk:hover{border-color:var(--border2);background:var(--bg2)}
+.chk.on{border-color:var(--g300);background:var(--g50)}
+.chk-box{width:16px;height:16px;border-radius:4px;border:1.5px solid var(--border3);flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center;background:var(--bg);transition:all 0.12s}
+.chk-box.on{background:var(--g500);border-color:var(--g500)}
+.chk-t{font-size:12.5px;font-weight:700;color:var(--text)}
+.chk-d{font-size:11px;color:var(--text3);margin-top:2px;line-height:1.5;font-weight:500}
+
+/* MODEL CARDS */
+.model-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:6px}
+.mc{border:1.5px solid var(--border);border-radius:var(--r);padding:14px;cursor:pointer;transition:all 0.15s;background:var(--bg)}
+.mc:hover{border-color:var(--border2);transform:translateY(-1px)}
+.mc.on{border-color:var(--g400);background:var(--g50);box-shadow:0 0 0 3px rgba(45,170,82,0.1)}
+.mc-name{font-size:12.5px;font-weight:700;color:var(--text);margin-bottom:5px}
+.mc.on .mc-name{color:var(--g600)}
+.mc-desc{font-size:10.5px;color:var(--text3);line-height:1.5;font-weight:500}
+
+/* UPLOAD ZONE */
+.upzone{border:2px dashed var(--border2);border-radius:var(--rl);padding:20px;text-align:center;cursor:pointer;transition:all 0.18s;background:var(--bg)}
+.upzone:hover{border-color:var(--g300);background:var(--g50)}
+.upzone.done{border-color:var(--g200);background:var(--g50);border-style:solid}
+
+/* MULTI-UPLOAD */
+.upload-list{display:flex;flex-direction:column;gap:8px}
+.upload-item{display:flex;align-items:center;gap:10px;padding:10px 13px;border-radius:var(--r);border:1px solid var(--g100);background:var(--g50)}
+.upload-item-name{font-size:12.5px;font-weight:700;color:var(--g600);flex:1}
+.upload-item-info{font-size:11px;color:var(--text3);font-family:'JetBrains Mono',monospace}
+.upload-item-rm{width:22px;height:22px;border-radius:50%;border:none;background:rgba(185,28,28,0.1);color:var(--red);cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;font-weight:700}
+.add-upload-btn{display:flex;align-items:center;gap:7px;padding:9px 14px;border-radius:var(--r);border:1.5px dashed var(--border2);background:transparent;color:var(--text3);cursor:pointer;font-size:12px;font-weight:600;font-family:'Manrope',sans-serif;width:100%;justify-content:center;transition:all 0.15s}
+.add-upload-btn:hover{border-color:var(--g300);color:var(--g500);background:var(--g50)}
+
+/* COLUMN MAP */
+.colmap-grid{display:flex;flex-direction:column;gap:7px}
+.colmap-row{display:grid;grid-template-columns:1fr 22px 1fr;gap:8px;align-items:center}
+.cpill{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:7px 11px;font-size:11px;color:var(--text3);font-family:'JetBrains Mono',monospace;font-weight:500}
+.csel{border:1.5px solid var(--g300);border-radius:var(--r);padding:7px 11px;font-size:11px;background:var(--g50);color:var(--g600);font-family:'Manrope',sans-serif;font-weight:700;cursor:pointer}
+
+/* STAT ROWS */
+.srow{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)}
+.srow:last-child{border:none}
+.sk{font-size:11.5px;color:var(--text3);font-weight:500}
+.sv{font-size:12px;font-weight:700;color:var(--text);font-family:'JetBrains Mono',monospace}
+
+/* CONFIG ROWS */
+.crow{display:flex;justify-content:space-between;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border)}
+.crow:last-child{border:none}
+.ck{font-size:11.5px;color:var(--text3);font-weight:500}
+.cv{font-size:12px;font-weight:700;color:var(--text);text-align:right;max-width:55%}
+
+/* AURORA PANEL */
+.a-panel{width:278px;flex-shrink:0;background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.a-hdr{padding:15px 17px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
+.a-title{display:flex;align-items:center;gap:9px;font-family:'Roboto',sans-serif;font-size:15px;font-weight:600;color:var(--text);}
+.a-gem{width:22px;height:22px;border-radius:50%;background:var(--g50);border:2px solid var(--g300);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.a-sub{font-size:10px;color:var(--text4);margin-top:3px;font-weight:600;letter-spacing:0.3px;text-transform:uppercase}
+.a-body{flex:1;padding:15px 17px;overflow-y:auto}
+.a-body::-webkit-scrollbar{width:3px}
+.a-body::-webkit-scrollbar-thumb{background:var(--g100)}
+.amsg{font-size:12px;color:var(--text2);line-height:1.75;margin-bottom:12px;font-weight:500}
+.ahi{background:var(--g50);border-left:2.5px solid var(--g400);border-radius:0 var(--r) var(--r) 0;padding:9px 12px;font-size:11.5px;color:var(--text2);margin-bottom:11px;line-height:1.6;font-weight:500}
+
+/* SPLIT */
+.split{display:flex;flex:1;overflow:hidden}
+.split-l{flex:1;overflow-y:auto;padding:20px 26px}
+.split-l::-webkit-scrollbar{width:3px}
+.split-l::-webkit-scrollbar-thumb{background:var(--border2)}
+
+/* VIS TABS */
+.vis-bar{display:flex;gap:5px;flex-wrap:wrap}
+.vt{padding:6px 15px;border-radius:var(--r);font-size:11.5px;cursor:pointer;font-weight:700;border:1.5px solid var(--border);color:var(--text3);transition:all 0.15s}
+.vt:hover{background:var(--bg2);border-color:var(--border2)}
+.vt.on{background:var(--g500);color:#fff;border-color:var(--g500)}
+
+/* MAP */
+.mapbox{background:var(--bg3);border-radius:var(--r);overflow:hidden;border:1px solid var(--border);position:relative}
+
+/* EXPORT CARDS */
+.ex-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px}
+.ec{border:1.5px solid var(--border);border-radius:var(--rl);padding:15px;cursor:pointer;transition:all 0.15s;background:var(--bg)}
+.ec:hover{border-color:var(--border2);transform:translateY(-2px);box-shadow:var(--shadow-md)}
+.ec.on{border-color:var(--g400);background:var(--g50)}
+
+/* PIPELINE — VISUAL CARDS */
+.pipe-wrap{display:flex;flex-direction:column;gap:12px}
+.pipe-card{border-radius:var(--rl);border:1.5px solid var(--border);background:var(--bg);overflow:hidden;transition:all 0.4s}
+.pipe-card.done{border-color:var(--g200);background:var(--g25)}
+.pipe-card.running{border-color:var(--g400);background:var(--bg);box-shadow:0 0 0 3px rgba(45,170,82,0.1)}
+.pipe-card.pending{opacity:0.4}
+.pipe-card-inner{display:flex;align-items:center;gap:14px;padding:16px 18px}
+.pipe-icon-wrap{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:20px;transition:all 0.4s}
+.done .pipe-icon-wrap{background:var(--g100)}
+.running .pipe-icon-wrap{background:rgba(45,170,82,0.12);animation:iconpulse 1.6s ease-in-out infinite}
+.pending .pipe-icon-wrap{background:var(--bg3)}
+@keyframes iconpulse{0%,100%{box-shadow:0 0 0 0 rgba(45,170,82,0.3)}50%{box-shadow:0 0 0 6px rgba(45,170,82,0)}}
+.pipe-text{flex:1}
+.pipe-name{font-size:13px;font-weight:700;color:var(--text);margin-bottom:3px}
+.done .pipe-name{color:var(--g700)}
+.running .pipe-name{color:var(--g600)}
+.pipe-detail{font-size:11.5px;color:var(--text3);font-weight:500;line-height:1.45}
+.pipe-status{flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.prog-bar{width:90px;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+.prog-fill{height:100%;border-radius:2px;background:var(--g400);transition:width 0.5s ease}
+.pipe-check{width:28px;height:28px;border-radius:50%;background:var(--g100);display:flex;align-items:center;justify-content:center;color:var(--g600);font-size:14px}
+.pipe-spinner{width:28px;height:28px;border-radius:50%;border:3px solid var(--g100);border-top-color:var(--g400);animation:dotspin 0.8s linear infinite}
+.pipe-pending-dot{width:28px;height:28px;border-radius:50%;background:var(--bg3);display:flex;align-items:center;justify-content:center}
+.pipe-pending-inner{width:8px;height:8px;border-radius:50%;background:var(--bg4)}
+@keyframes dotspin{to{transform:rotate(360deg)}}
+
+/* PROCESSING COMPLETE CTA */
+.complete-cta{background:var(--g500);border-radius:var(--rl);padding:22px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:16px;animation:fadeUp 0.4s ease}
+.cta-text .cta-t{font-size:14px;font-weight:700;color:#fff;margin-bottom:4px}
+.cta-text .cta-d{font-size:12px;color:rgba(255,255,255,0.75);font-weight:500}
+.btn-white{background:#fff;color:var(--g600);border:none}
+.btn-white:hover{background:var(--g50);transform:translateY(-1px)}
+
+/* MAP PREVIEW (Preview screen) */
+.map-preview-wrap{border-radius:var(--rl);overflow:hidden;border:1px solid var(--border);background:var(--bg3);position:relative}
+.map-attribution{position:absolute;bottom:6px;right:8px;font-size:9px;color:rgba(0,0,0,0.45);font-family:'Manrope',sans-serif;font-weight:600;background:rgba(255,255,255,0.8);padding:2px 5px;border-radius:3px}
+.map-legend{position:absolute;top:10px;right:10px;background:rgba(255,255,255,0.9);border-radius:var(--r);padding:8px 10px;font-size:10px;font-weight:700;color:var(--text);border:1px solid var(--border)}
+.map-color-picker{position:absolute;bottom:10px;left:10px;z-index:5;background:rgba(255,255,255,0.95);border:1px solid var(--border);border-radius:8px;padding:7px 10px}
+.mcp-label{font-size:9px;font-weight:700;letter-spacing:0.8px;color:var(--text4);text-transform:uppercase;margin-bottom:6px}
+.mcp-swatches{display:flex;gap:5px}
+.mcp-swatch{width:16px;height:16px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:all 0.1s}
+.mcp-swatch.active,.mcp-swatch:hover{border-color:#333;transform:scale(1.2)}
+[data-theme="dark"] .map-color-picker{background:rgba(20,30,20,0.95)}
+.map-fs-btn{position:absolute;top:10px;left:10px;z-index:5;width:28px;height:28px;border-radius:6px;background:rgba(255,255,255,0.9);border:1px solid var(--border);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;color:var(--text)}
+.map-fs-btn:hover{background:#fff;box-shadow:var(--shadow)}
+[data-theme="dark"] .map-fs-btn{background:rgba(30,40,30,0.9);color:var(--text)}
+
+/* PREVIEW LOADING OVERLAY */
+.pv-loading{position:absolute;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:20;border-radius:var(--rl)}
+.pv-loading-label{font-size:12px;color:var(--text3);font-weight:600;letter-spacing:0.3px}
+.map-legend-item{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.map-legend-item:last-child{margin-bottom:0}
+.leg-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+/* SEP */
+.sep{font-size:9.5px;font-weight:700;letter-spacing:1.5px;color:var(--text4);margin:20px 0 12px;padding-bottom:5px;border-bottom:1px solid var(--border);text-transform:uppercase}
+.sep.first{margin-top:0}
+
+/* GRIDS */
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+
+/* NAV FOOTER */
+.nfoot{padding:16px 0 0;display:flex;justify-content:flex-end;gap:10px;flex-shrink:0}
+
+/* STATUS BAR */
+.statusbar{height:30px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 18px;flex-shrink:0;background:var(--bg2)}
+.sdots{display:flex;gap:5px}
+.sdot{width:6px;height:6px;border-radius:3px;background:var(--bg4);transition:all 0.3s}
+.sdot.active{width:20px;background:var(--g400)}
+.sdot.done{background:var(--g300)}
+
+/* HOME */
+.home-scroll{flex:1;overflow-y:auto;background:var(--bg)}
+.home-scroll::-webkit-scrollbar{width:3px}
+.home-scroll::-webkit-scrollbar-thumb{background:var(--border2)}
+.hero{padding:70px 56px 56px;text-align:center;border-bottom:1px solid var(--border);position:relative;overflow:hidden}
+.hero-grid-bg{position:absolute;inset:0;opacity:0.035;background:repeating-linear-gradient(0deg,transparent,transparent 28px,var(--g400) 28px,var(--g400) 29px),repeating-linear-gradient(90deg,transparent,transparent 28px,var(--g400) 28px,var(--g400) 29px);pointer-events:none}
+.hero-name{font-family:'Roboto',sans-serif;font-size:72px;font-weight:700;letter-spacing:14px;color:var(--text);line-height:1;margin-bottom:10px;}
+.hero-name span{color:var(--g500)}
+.hero-sub{font-size:12px;font-weight:700;letter-spacing:3px;color:var(--text3);margin-bottom:24px;text-transform:uppercase}
+.hero-desc{font-size:14px;color:var(--text3);max-width:460px;margin:0 auto 28px;font-weight:500;line-height:1.75}
+.hero-btns{display:flex;gap:10px;justify-content:center}
+.hsec{padding:44px 56px;border-bottom:1px solid var(--border)}
+.hsec:last-child{border:none}
+.hslabel{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--text4);text-transform:uppercase;margin-bottom:7px}
+.hstitle{font-family:'Roboto',sans-serif;font-size:24px;font-weight:600;color:var(--text);margin-bottom:16px;}
+.cap-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:13px}
+.cap-card{padding:17px;border:1px solid var(--border);border-radius:var(--rl);background:var(--bg);transition:all 0.15s}
+.cap-card:hover{border-color:var(--g200);box-shadow:var(--shadow-md);transform:translateY(-2px)}
+.cap-ic{font-size:20px;margin-bottom:9px;display:block}
+.cap-t{font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px}
+.cap-d{font-size:11.5px;color:var(--text3);line-height:1.55;font-weight:500}
+.out-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.out-t{font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:9px;padding-bottom:5px;border-bottom:1px solid var(--border)}
+.tag{display:inline-flex;padding:4px 11px;border-radius:20px;font-size:11px;font-weight:700;border:1px solid var(--border);color:var(--text2);margin:3px;background:var(--bg2);transition:all 0.15s}
+.tag:hover{border-color:var(--g200);background:var(--g50);color:var(--g600)}
+.about-grid{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:center}
+.astat{text-align:center;padding:18px}
+.astat-n{font-family:'Roboto',sans-serif;font-size:38px;font-weight:700;color:var(--g500);line-height:1}
+.astat-l{font-size:10px;font-weight:700;color:var(--text3);margin-top:4px;letter-spacing:1px;text-transform:uppercase}
+
+/* STEP INDICATOR */
+.stepbar{display:flex;align-items:center;gap:8px;margin-bottom:20px}
+.si{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--text4)}
+.si.active{color:var(--g500)}
+.si.done{color:var(--g400)}
+.snum{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;background:var(--bg3);color:var(--text4);flex-shrink:0}
+.snum.active{background:var(--g500);color:#fff}
+.snum.done{background:var(--g100);color:var(--g600)}
+.sarr{color:var(--text4);font-size:12px}
+
+/* EXPORT PROGRESS */
+.eprow{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)}
+.eprow:last-child{border:none}
+.epname{font-size:11.5px;font-weight:700;color:var(--text);width:70px;flex-shrink:0}
+.epbar{flex:1;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+.epfill{height:100%;border-radius:2px;transition:width 0.4s ease}
+.epsize{font-size:10.5px;color:var(--text3);width:50px;text-align:right;font-family:'JetBrains Mono',monospace}
+
+/* ---- DARK MODE OVERRIDES ---- */
+[data-theme="dark"] .hero-grid-bg{opacity:0.06}
+[data-theme="dark"] .pipe-card.done{border-color:var(--g200);background:var(--bg2)}
+[data-theme="dark"] .pipe-card.running{box-shadow:0 0 0 3px rgba(61,203,104,0.15)}
+[data-theme="dark"] .pipe-check{background:rgba(61,203,104,0.15);color:var(--g300)}
+[data-theme="dark"] .complete-cta{background:var(--g600)}
+[data-theme="dark"] .card{background:var(--bg2)}
+[data-theme="dark"] .card.card-g{background:var(--bg3);border-color:var(--g200)}
+[data-theme="dark"] .upload-item{background:var(--bg3);border-color:var(--g200)}
+[data-theme="dark"] .mc{background:var(--bg2)}
+[data-theme="dark"] .mc.on{background:var(--bg3)}
+[data-theme="dark"] .radio-opt{background:var(--bg2)}
+[data-theme="dark"] .radio-opt.selected{background:var(--bg3)}
+[data-theme="dark"] .chk{background:transparent}
+[data-theme="dark"] .chk.on{background:var(--bg3)}
+[data-theme="dark"] .chk-box{background:var(--bg3)}
+[data-theme="dark"] .chk-box.on{background:var(--g500);border-color:var(--g500)}
+[data-theme="dark"] .a-panel{background:var(--bg2)}
+[data-theme="dark"] .a-hdr{background:var(--bg2)}
+[data-theme="dark"] .ahi{background:var(--bg3);border-left-color:var(--g400)}
+[data-theme="dark"] .cap-card{background:var(--bg2)}
+[data-theme="dark"] .cap-card:hover{background:var(--bg3)}
+[data-theme="dark"] .ec{background:var(--bg2)}
+[data-theme="dark"] .ec.on{background:var(--bg3)}
+[data-theme="dark"] .mapbox{background:var(--bg3)}
+[data-theme="dark"] .map-preview-wrap{background:var(--bg3)}
+[data-theme="dark"] .home-scroll{background:var(--bg)}
+[data-theme="dark"] .hero{background:var(--bg)}
+[data-theme="dark"] .hsec{background:var(--bg)}
+[data-theme="dark"] .tag{background:var(--bg3);border-color:var(--border2);color:var(--text2)}
+[data-theme="dark"] .tag:hover{background:var(--bg4);color:var(--g300)}
+[data-theme="dark"] .upzone{background:var(--bg2);border-color:var(--border2)}
+[data-theme="dark"] .upzone:hover{background:var(--bg3);border-color:var(--g400)}
+[data-theme="dark"] .statusbar{background:var(--bg2)}
+[data-theme="dark"] .out-t{color:var(--text3)}
+[data-theme="dark"] .map-legend{background:rgba(15,21,16,0.92);color:var(--text2);border-color:var(--border2)}
+[data-theme="dark"] .map-attribution{background:rgba(15,21,16,0.75);color:rgba(168,212,176,0.6)}
+[data-theme="dark"] .btn-white{background:var(--bg3);color:var(--g300)}
+[data-theme="dark"] .btn-white:hover{background:var(--bg4)}
+[data-theme="dark"] .aurora-sb:hover{background:var(--bg3)}
+[data-theme="dark"] .ctx-pill{background:var(--bg3);border-color:var(--border2);color:var(--g300)}
+[data-theme="dark"] .ibtn{background:var(--bg2);border-color:var(--border2);color:var(--text2)}
+[data-theme="dark"] .ibtn:hover{background:var(--bg3)}
+[data-theme="dark"] .pipe-card{background:var(--bg2)}
+[data-theme="dark"] .pipe-spinner{border-color:rgba(61,203,104,0.2);border-top-color:var(--g400)}
+[data-theme="dark"] .vis-side{background:var(--bg2)}
+[data-theme="dark"] .scroll-area{background:var(--bg)}
+[data-theme="dark"] [style*="background:var(--g500)"][style*="border-radius:var(--r)"][style*="36px"]{background:var(--g600) !important}
+/* GAIA MODAL */
+.gaia-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9100;display:flex;align-items:center;justify-content:center}
+.gaia-modal{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:26px 28px;min-width:320px;max-width:440px;box-shadow:0 12px 40px rgba(0,0,0,0.25)}
+.gaia-modal-title{font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px;font-family:'Roboto',sans-serif}
+.gaia-modal-msg{font-size:13px;color:var(--text2);line-height:1.7;font-weight:500;margin-bottom:20px}
+.gaia-modal-actions{display:flex;gap:10px;justify-content:flex-end}
+.btn-danger{background:var(--red-bg);color:var(--red);border:1px solid var(--red)}
+.btn-danger:hover{background:var(--red);color:#fff}
+</style>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+<div id="shell">
+  <!-- TOP NAV -->
+  <nav class="topnav">
+    <a class="logo" onclick="goHome()">
+      <img src="/frontend/logo-dark.png" alt="GAIA Magnetics" style="width:24px;height:24px;border-radius:6px;object-fit:cover">
+      <span class="logo-g">GAIA</span>
+      <div class="logo-sep"></div>
+      <span class="logo-tag">Magnetics</span>
+    </a>
+    <div class="nav-links" id="navLinks">
+      <div class="nlnk active" data-s="home" onclick="go(this)">Home</div>
+      <div class="nlnk" data-s="setup" onclick="go(this)">Project Setup</div>
+      <div class="nlnk" data-s="analysis" onclick="go(this)">Analysis</div>
+      <div class="nlnk" data-s="preview" onclick="go(this)">Preview</div>
+      <div class="nlnk" data-s="processing" onclick="go(this)">Processing</div>
+      <div class="nlnk" data-s="visualisation" onclick="go(this)">Visualisation</div>
+      <div class="nlnk" data-s="export" onclick="go(this)">Export</div>
+    </div>
+    <div class="nav-right">
+      <div class="ctx-pill" id="ctxBadge" style="display:none"><div class="ctx-pulse"></div><span id="ctxTxt">New project</span></div>
+      <button class="ibtn" onclick="toggleDark()" id="dmBtn">☀</button>
+      <button class="ibtn" onclick="toggleFS()" id="fsBtn">⛶</button>
+    </div>
+  </nav>
+
+  <div class="body">
+    <!-- SIDEBAR -->
+    <div class="sidebar off" id="sidebar">
+      <div class="sbs" id="sb-projects">
+        <div class="sbh">Projects</div>
+        <div id="sb-project-list"></div>
+        <div class="sbi" style="color:var(--g500)" id="sb-new-project"><div class="sdot d-new"></div>New project…</div>
+      </div>
+    </div>
+
+    <!-- SCREENS -->
+    <div class="main" id="mainArea">
+
+      <!-- ═══ HOME ═══ -->
+      <div class="screen active" id="screen-home">
+        <div class="home-scroll">
+          <!-- HERO -->
+          <div class="hero">
+            <div class="hero-grid-bg"></div>
+            <div class="hero-name">G<span>AI</span>A</div>
+            <div class="hero-sub">Magnetic Data Processing Platform</div>
+            <div class="hero-desc">From raw survey CSV to publication-ready interpretation — corrections, modelling, AI analysis, and multi-format export in a single workflow.</div>
+            <div class="hero-btns">
+              <button class="btn btn-g" style="padding:12px 28px;font-size:13px" onclick="startProject()">Start project →</button>
+              <button class="btn btn-out" style="padding:12px 22px;font-size:13px" onclick="startProject()">Open project</button>
+            </div>
+          </div>
+
+          <!-- CAPABILITIES -->
+          <div class="hsec">
+            <div class="hslabel">Platform</div>
+            <div class="hstitle">Core capabilities</div>
+            <div class="cap-grid">
+              <div class="cap-card"><div class="cap-t">Aurora AI</div><div class="cap-d">Get plain-language insights about your survey — anomaly descriptions, geological context, and recommendations, automatically.</div></div>
+              <div class="cap-card"><div class="cap-t">Corrections</div><div class="cap-d">Apply diurnal, IGRF, filtering, lag, and heading corrections to clean your data before modelling.</div></div>
+              <div class="cap-card"><div class="cap-t">Spatial modelling</div><div class="cap-d">Fill gaps across your survey area using three modelling approaches — choose the one that fits your data.</div></div>
+              <div class="cap-card"><div class="cap-t">Interactive visualisation</div><div class="cap-d">View your results as heatmaps, contour overlays, or 3D surface plots on an interactive map.</div></div>
+              <div class="cap-card"><div class="cap-t">Multi-format export</div><div class="cap-d">Download your processed results as PDF, GeoJSON, KML, Shapefile, CSV, or a ready-to-present report.</div></div>
+              <div class="cap-card"><div class="cap-t">End-to-end workflow</div><div class="cap-d">From raw survey CSV to final deliverable — everything happens in one place, no specialist software needed.</div></div>
+            </div>
+          </div>
+
+          <!-- ABOUT -->
+          <div class="hsec">
+            <div class="hslabel">Company</div>
+            <div class="hstitle">GAIA — Geospatial Automation and Inference Analysis</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:32px;margin-top:4px">
+              <div style="font-size:13px;color:var(--text2);line-height:1.9;font-weight:500;text-align:justify">GAIA combines proven geostatistical methods with modern machine learning to deliver complete survey coverage from partial field data. Professional-grade accuracy without surveying every point.</div>
+              <div style="font-size:13px;color:var(--text2);line-height:1.9;font-weight:500;text-align:justify">Traditional magnetic surveys require dense, uniform coverage — time-consuming, expensive, and often impractical in difficult terrain. GAIA changes this. By treating your collected stations as a training dataset, the platform learns the spatial structure of your magnetic field and predicts values across unmeasured locations with quantified uncertainty. The result is a complete, high-resolution survey product generated from a fraction of the fieldwork.</div>
+              <div style="font-size:13px;color:var(--text2);line-height:1.9;font-weight:500;text-align:justify">Built by Terracode Analytics, GAIA is designed for exploration geophysicists, engineering firms, and research teams who need reliable outputs under real-world constraints — limited budgets, difficult access, or tight timelines. The platform handles corrections, modelling, AI-assisted interpretation, and professional export in a single end-to-end workflow, without requiring specialist software or manual scripting.</div>
+            </div>
+          </div>
+
+          <!-- CTA -->
+          <div class="hsec" style="text-align:center">
+            <div class="hstitle" style="margin-bottom:8px">Ready to process your survey?</div>
+            <div style="font-size:13px;color:var(--text3);margin-bottom:22px;font-weight:500">Create a project, define context, upload your CSV, and run the full pipeline.</div>
+            <button class="btn btn-g" style="padding:12px 30px;font-size:13px" onclick="startProject()">Start project →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ PROJECT OVERVIEW ═══ -->
+      <div class="screen" id="screen-project">
+        <div class="shdr" style="display:flex;align-items:center;gap:10px">
+          <div style="flex:1">
+            <div class="stitle" id="proj-title">Project</div>
+            <div class="ssub" id="proj-sub"></div>
+          </div>
+          <button class="btn btn-out btn-sm" onclick="window.beginNewTaskFlow?.();window.go?.(document.querySelector('[data-s=setup]'))">+ New task</button>
+          <button class="btn btn-out btn-sm" style="color:var(--red);border-color:var(--red-bg)" id="projDeleteBtn">⊗ Delete project</button>
+          <button class="btn btn-g btn-sm" onclick="window.go?.(document.querySelector('[data-s=analysis]'))">Open analysis →</button>
+        </div>
+        <div class="scroll" id="proj-scroll">
+          <!-- Context card -->
+          <div class="card" style="margin-bottom:20px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+              <div style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--text3);text-transform:uppercase">Project context</div>
+              <button class="btn btn-out btn-xs" id="projEditContextBtn">✎ Edit</button>
+            </div>
+            <div style="font-size:13px;color:var(--text2);line-height:1.8;font-weight:500" id="proj-context"></div>
+          </div>
+          <!-- Tasks -->
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--text3);text-transform:uppercase">Tasks</div>
+            <span class="badge bg" id="proj-task-count"></span>
+          </div>
+          <div id="proj-task-list"></div>
+        </div>
+      </div>
+
+      <!-- ═══ PROJECT SETUP ═══ -->
+      <div class="screen" id="screen-setup">
+        <div class="shdr">
+          <div class="stitle">Project Setup</div>
+          <div class="ssub">Define project context, configure survey and upload basemap</div>
+        </div>
+        <div class="scroll" id="setupScroll">
+          <div class="stepbar">
+            <div class="si active" id="setupStepProject"><div class="snum active">1</div>Project details</div>
+            <div class="sarr">›</div>
+            <div class="si" id="setupStepTask"><div class="snum">2</div>Task setup</div>
+          </div>
+          <div id="setupFlash" style="display:none;margin-bottom:14px;padding:11px 13px;border-radius:var(--r);font-size:12px;font-weight:600"></div>
+
+          <!-- ── PANE 1: PROJECT DETAILS ── -->
+          <div id="setupProjectPane">
+            <div class="sep first">Project</div>
+            <div class="card" style="margin-bottom:14px">
+              <div class="frow"><label class="fl">Project name</label><input class="fi" id="projectNameInput" placeholder="Enter project name…"></div>
+              <div class="frow" style="margin-bottom:0"><label class="fl">Project context</label>
+                <textarea class="ftxt" id="projectContextInput" rows="4" placeholder="Describe the geology, survey area, previous work, and what you expect to find…"></textarea>
+              </div>
+            </div>
+
+            <div class="sep">Reference files (optional)</div>
+            <div class="card" style="margin-bottom:14px">
+              <div style="font-size:12px;color:var(--text2);font-weight:500;margin-bottom:12px">Upload relevant project documents — previous reports, field notes, PDFs, spatial reference data, or any supporting materials for this survey.</div>
+              <div id="basemapZone" class="upzone" style="padding:16px;cursor:pointer">
+                <div style="font-size:12.5px;font-weight:700;color:var(--text2)">Upload reference file</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:3px">PDF, DOCX, TXT, KMZ, KML, Shapefile (.zip), GeoJSON · max 100 MB</div>
+              </div>
+              <div id="basemapDone" style="display:none;margin-top:10px"></div>
+            </div>
+
+            <div class="sep">Survey configuration</div>
+            <div class="card" style="margin-bottom:14px">
+              <div class="frow">
+                <label class="fl">Platform</label>
+                <div class="radio-group">
+                  <div class="radio-opt selected" id="plat-ground" onclick="setPlatform('ground')">
+                    <div class="radio-circle"><div class="radio-dot"></div></div>Ground
+                  </div>
+                  <div class="radio-opt" id="plat-air" onclick="setPlatform('air')">
+                    <div class="radio-circle"></div>Airborne
+                  </div>
+                </div>
+              </div>
+              <div class="frow" style="margin-bottom:0">
+                <label class="fl">Data state</label>
+                <div class="radio-group">
+                  <div class="radio-opt selected" id="state-raw" onclick="setState('raw')">
+                    <div class="radio-circle"><div class="radio-dot"></div></div>Raw data
+                  </div>
+                  <div class="radio-opt" id="state-corr" onclick="setState('corr')">
+                    <div class="radio-circle"></div>Corrected
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="nfoot">
+              <button class="btn btn-g" id="setupToTaskBtn" type="button">Continue to Task setup →</button>
+            </div>
+          </div>
+
+          <!-- ── PANE 2: TASK SETUP ── -->
+          <div id="setupTaskPane" style="display:none">
+            <div class="sep first">Task</div>
+            <div class="card" style="margin-bottom:14px">
+              <div class="frow"><label class="fl">Task name</label><input class="fi" id="taskNameInput" placeholder="Enter task name…"></div>
+              <div class="frow" style="margin-bottom:0"><label class="fl">Description</label>
+                <textarea class="ftxt" id="taskDescInput" rows="2" placeholder="Briefly describe this survey task (min 10 characters)…"></textarea>
+              </div>
+            </div>
+
+            <div class="sep">Processing mode</div>
+            <div class="card" style="margin-bottom:14px">
+              <div class="radio-group" style="margin-bottom:16px">
+                <div class="radio-opt selected" id="mode-single" onclick="setMode('single')">
+                  <div class="radio-circle"><div class="radio-dot"></div></div>Single line
+                </div>
+                <div class="radio-opt" id="mode-multi" onclick="setMode('multi')">
+                  <div class="radio-circle"></div>Multi-line
+                </div>
+              </div>
+              <label class="fl">Survey data files</label>
+              <div id="uploadList" class="upload-list" style="margin-bottom:8px"></div>
+              <div id="surveyUpzone" class="upzone" style="padding:18px;text-align:center;cursor:pointer">
+                <div style="font-size:13px;font-weight:700;color:var(--text2);margin-bottom:4px">Click to upload survey file</div>
+                <div style="font-size:11px;color:var(--text3)">Single survey line · .csv or .xlsx</div>
+              </div>
+              <button class="add-upload-btn" id="addUploadBtn" style="display:none;margin-top:8px" type="button">+ Add another CSV file</button>
+            </div>
+
+            <div class="sep">Column mapping</div>
+            <div class="card" style="margin-bottom:14px">
+              <div id="mappingPlaceholder" style="font-size:12px;color:var(--text3);font-weight:500;padding:4px 0">Upload a survey file above to map its columns.</div>
+              <div id="mappingSelects" style="display:none">
+                <div class="colmap-grid">
+                  <div class="colmap-row">
+                    <div class="cpill">Latitude / Y</div>
+                    <div style="text-align:center;color:var(--text4)">→</div>
+                    <select class="csel" id="latSelect"><option value="">Select column</option></select>
+                  </div>
+                  <div class="colmap-row">
+                    <div class="cpill">Longitude / X</div>
+                    <div style="text-align:center;color:var(--text4)">→</div>
+                    <select class="csel" id="lonSelect"><option value="">Select column</option></select>
+                  </div>
+                  <div class="colmap-row">
+                    <div class="cpill">Magnetic field</div>
+                    <div style="text-align:center;color:var(--text4)">→</div>
+                    <select class="csel" id="magSelect"><option value="">Select column</option></select>
+                  </div>
+                </div>
+                <!-- Coordinate system -->
+                <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+                  <label class="fl">Coordinate system</label>
+                  <div class="radio-group">
+                    <div class="radio-opt selected" id="cs-wgs84" onclick="setCoordSystem('wgs84')">
+                      <div class="radio-circle"><div class="radio-dot"></div></div>
+                      <div><div style="font-size:12.5px;font-weight:700">WGS84</div><div style="font-size:10.5px;color:var(--text3);font-weight:500">Decimal degrees (standard GPS)</div></div>
+                    </div>
+                    <div class="radio-opt" id="cs-utm" onclick="setCoordSystem('utm')">
+                      <div class="radio-circle"></div>
+                      <div><div style="font-size:12.5px;font-weight:700">UTM</div><div style="font-size:10.5px;color:var(--text3);font-weight:500">Metres — easting / northing</div></div>
+                    </div>
+                  </div>
+                  <div id="utm-zone-row" style="display:none;margin-top:10px">
+                    <div class="g2">
+                      <div>
+                        <label class="fl">UTM zone number</label>
+                        <input class="fi" id="utmZoneInput" type="number" min="1" max="60" placeholder="e.g. 32">
+                      </div>
+                      <div>
+                        <label class="fl">Hemisphere</label>
+                        <select class="fsel" id="utmHemisphere">
+                          <option value="N">Northern</option>
+                          <option value="S">Southern</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Time column mapping — shown only for Raw data -->
+            <div id="rawDataSection" style="display:none">
+              <div class="sep">Time columns</div>
+              <div class="card" style="margin-bottom:14px">
+                <div style="font-size:12px;color:var(--text2);font-weight:500;margin-bottom:12px">Map the hour, minutes, and seconds columns — needed for diurnal correction.</div>
+                <div id="timeMappingPlaceholder" style="font-size:12px;color:var(--text3);font-weight:500;padding:4px 0">Upload a file above to map time columns.</div>
+                <div id="timeMappingSelects" style="display:none">
+                  <div class="colmap-grid">
+                    <div class="colmap-row">
+                      <div class="cpill">Hour</div>
+                      <div style="text-align:center;color:var(--text4)">→</div>
+                      <select class="csel" id="hourSelect"><option value="">Select column</option></select>
+                    </div>
+                    <div class="colmap-row">
+                      <div class="cpill">Minutes</div>
+                      <div style="text-align:center;color:var(--text4)">→</div>
+                      <select class="csel" id="minuteSelect"><option value="">Select column</option></select>
+                    </div>
+                    <div class="colmap-row">
+                      <div class="cpill">Seconds</div>
+                      <div style="text-align:center;color:var(--text4)">→</div>
+                      <select class="csel" id="secondSelect"><option value="">Select column</option></select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="sep">Base station readings</div>
+              <div class="card" style="margin-bottom:14px">
+                <div style="font-size:12px;color:var(--text2);font-weight:500;line-height:1.7">Base station rows are detected automatically. Any coordinates that appear more than once in your file (the magnetometer returning to the reference point) are treated as base station readings and used for diurnal correction.</div>
+              </div>
+            </div>
+
+            <div class="sep">Scenario</div>
+            <div class="card" style="margin-bottom:14px">
+              <div class="radio-group">
+                <div class="radio-opt selected" id="sc-explicit" onclick="setScenario('explicit')">
+                  <div class="radio-circle"><div class="radio-dot"></div></div>
+                  <div><div style="font-size:12.5px;font-weight:700">Explicit</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">train.csv / predict.csv split — known &amp; unknown points</div></div>
+                </div>
+                <div class="radio-opt" id="sc-sparse" onclick="setScenario('sparse')">
+                  <div class="radio-circle"></div>
+                  <div><div style="font-size:12.5px;font-weight:700">Sparse</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">Full dataset as training — auto-generate grid from spacing</div></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="sep">Station spacing</div>
+            <div class="card" style="margin-bottom:14px">
+              <div class="frow" style="margin-bottom:0">
+                <label class="fl" id="spacingLabel">Distance between stations</label>
+                <div class="g2">
+                  <input class="fi" id="spacingInput" value="20">
+                  <select class="fsel" id="spacingUnit"><option>Metres</option><option>Kilometres</option><option>Feet</option></select>
+                </div>
+                <div style="font-size:10.5px;color:var(--text4);margin-top:6px;font-weight:500" id="spacingHint"></div>
+              </div>
+            </div>
+
+            <div class="nfoot">
+              <button class="btn btn-out" id="setupBackBtn" type="button">← Back</button>
+              <button class="btn btn-g" id="setupSaveBtn" type="button">Save and continue to Analysis →</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+
+      <!-- ═══ ANALYSIS ═══ -->
+      <div class="screen" id="screen-analysis">
+        <div class="shdr">
+          <div class="stitle">Analysis Configuration</div>
+          <div class="ssub">Three independent panels — configure what applies, skip what doesn't</div>
+        </div>
+        <div class="scroll">
+          <div class="sep first">A — Corrections</div>
+          <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">Diurnal correction</div><div class="chk-d">Remove daily geomagnetic variation using base station reference data</div></div></div>
+          <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">IGRF removal</div><div class="chk-d">Subtract International Geomagnetic Reference Field at survey date and location</div></div></div>
+          <div class="chk" id="chk-filtering" onclick="toggleFiltering(this)">
+            <div class="chk-box"></div>
+            <div style="flex:1">
+              <div class="chk-t">Filtering</div>
+              <div class="chk-d">Spectral filtering — remove regional field or high-frequency noise</div>
+              <div id="filter-opts" style="display:none;margin-top:10px">
+                <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:8px">Filter type</div>
+                <div style="display:flex;gap:8px">
+                  <div class="radio-opt" id="filt-low" onclick="event.stopPropagation();setFilter('low')">
+                    <div class="radio-circle"></div>
+                    <div><div style="font-size:12px;font-weight:700">Low-pass</div><div style="font-size:10.5px;color:var(--text3);font-weight:500">Remove high-frequency noise, preserve long-wavelength signal</div></div>
+                  </div>
+                  <div class="radio-opt" id="filt-high" onclick="event.stopPropagation();setFilter('high')">
+                    <div class="radio-circle"></div>
+                    <div><div style="font-size:12px;font-weight:700">High-pass</div><div style="font-size:10.5px;color:var(--text3);font-weight:500">Remove regional field, isolate shallow residual anomalies</div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Lag correction</div><div class="chk-d">Sensor–GPS timing offset compensation — critical for vehicle-mounted sensors</div></div></div>
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Heading correction</div><div class="chk-d">Remove directional bias between opposing survey line traverses</div></div></div>
+
+          <div class="sep" style="display:flex;align-items:center;justify-content:space-between">
+            <span>B — Prediction modelling</span>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;font-weight:700;color:var(--text3)">
+              <input type="checkbox" id="predModelToggle" checked style="width:14px;height:14px;accent-color:var(--g500)">
+              Enabled
+            </label>
+          </div>
+          <div id="predModelSection">
+          <div class="model-grid">
+            <div class="mc" onclick="pickModel(this)"><div class="mc-name">Kriging</div><div class="mc-desc">Geostatistical interpolation with spherical variogram — produces prediction variance map</div></div>
+            <div class="mc on" onclick="pickModel(this)" id="mc-ml"><div class="mc-name">Machine learning</div><div class="mc-desc">XGBoost on corrected TMF. Explicit: train/predict split. Sparse: full dataset + auto-grid</div></div>
+            <div class="mc" onclick="pickModel(this)"><div class="mc-name">Hybrid</div><div class="mc-desc">Kriging interpolation with ML residual correction — best spatial accuracy</div></div>
+          </div>
+          </div>
+
+          <div class="sep">C — Processing add-ons</div>
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Reduction to Pole (RTP)</div><div class="chk-d">Declination and inclination from reference model — makes anomalies symmetric over vertical sources</div></div></div>
+          <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">Analytic signal</div><div class="chk-d">Source body edge detection — maxima delineate geological contacts independent of inclination</div></div></div>
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">EMAG2 comparison</div><div class="chk-d">Compare against EMAG2 global 2-arc-minute model at survey extent</div></div></div>
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Uncertainty quantification</div><div class="chk-d">Propagate data quality through pipeline — output confidence raster alongside predictions</div></div></div>
+
+          <div class="nfoot">
+            <button class="btn btn-out" onclick="go(document.querySelector('[data-s=setup]'))">← Back</button>
+            <button class="btn btn-g" onclick="window.saveAndPreview?.()">Preview →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ PREVIEW ═══ -->
+      <div class="screen" id="screen-preview" style="flex-direction:row;position:relative">
+        <!-- Loading overlay — shown while fetchPreview runs -->
+        <div class="pv-loading" id="pvLoadingOverlay" style="display:none">
+          <div class="pipe-spinner" style="width:32px;height:32px"></div>
+          <div class="pv-loading-label" id="pvLoadingLabel">Loading preview...</div>
+        </div>
+        <div class="split-l">
+          <div class="sep first">Configuration summary</div>
+          <div class="card" style="margin-bottom:12px">
+            <div class="sep first">Project &amp; task</div>
+            <div class="crow"><span class="ck">Project</span><span class="cv" id="pv-project">—</span></div>
+            <div class="crow"><span class="ck">Task</span><span class="cv" id="pv-task">—</span></div>
+            <div class="crow"><span class="ck">Points</span><span class="cv" id="pv-points">—</span></div>
+  <div class="crow"><span class="ck">Survey traverses</span><span class="cv" id="pv-traverses">—</span></div>
+  <div class="crow"><span class="ck">Predicted traverses</span><span class="cv" id="pv-pred-traverses">—</span></div>
+            <div class="crow"><span class="ck">Platform</span><span class="cv" id="pv-platform">—</span></div>
+            <div class="crow"><span class="ck">Scenario</span><span class="cv" id="pv-scenario">—</span></div>
+            <div class="crow"><span class="ck">Mode</span><span class="cv" id="pv-mode">—</span></div>
+            <div class="crow"><span class="ck">Reference files</span><span class="cv" id="pv-basemap">—</span></div>
+          </div>
+          <div class="card" style="margin-bottom:12px">
+            <div class="sep first">Analysis</div>
+            <div class="crow"><span class="ck">Corrections</span><span class="cv" id="pv-corrections">—</span></div>
+            <div class="crow"><span class="ck">Model</span><span class="cv" id="pv-model">—</span></div>
+            <div class="crow"><span class="ck">Add-ons</span><span class="cv" id="pv-addons">—</span></div>
+            <div class="crow"><span class="ck">Est. runtime</span><span class="cv" id="pv-runtime" style="color:var(--g500)">—</span></div>
+          </div>
+
+          <!-- STATION MAP PREVIEW -->
+          <div class="sep">Station preview</div>
+          <div class="map-preview-wrap" style="height:300px;margin-bottom:16px">
+            <svg width="100%" height="100%" viewBox="0 0 520 300" id="previewMap"></svg>
+            <button class="map-fs-btn" id="previewMapFsBtn" title="Full screen" onclick="(function(){const w=document.getElementById('previewMapFsCanvas')||document.getElementById('previewMapCanvas')||document.getElementById('previewMap');if(w){if(document.fullscreenElement){document.exitFullscreen();}else{w.requestFullscreen?.();}}})()">⛶</button>
+            <div class="map-color-picker" id="mapColorPicker" style="display:none">
+              <div class="mcp-label">Station colour</div>
+              <div class="mcp-swatches">
+                <div class="mcp-swatch active" data-color="#2daa52" style="background:#2daa52" onclick="window.setMapColor?.('#2daa52',this)"></div>
+                <div class="mcp-swatch" data-color="#e05c2e" style="background:#e05c2e" onclick="window.setMapColor?.('#e05c2e',this)"></div>
+                <div class="mcp-swatch" data-color="#5ba8d4" style="background:#5ba8d4" onclick="window.setMapColor?.('#5ba8d4',this)"></div>
+                <div class="mcp-swatch" data-color="#f5c842" style="background:#f5c842" onclick="window.setMapColor?.('#f5c842',this)"></div>
+                <div class="mcp-swatch" data-color="#9b5de5" style="background:#9b5de5" onclick="window.setMapColor?.('#9b5de5',this)"></div>
+                <div class="mcp-swatch" data-color="#f72585" style="background:#f72585" onclick="window.setMapColor?.('#f72585',this)"></div>
+              </div>
+            </div>
+            <div class="map-legend" id="mapLegend">
+              <div class="map-legend-item"><div class="leg-dot" style="background:#2daa52"></div>Existing stations</div>
+              <div class="map-legend-item" id="leg-pred" style="display:none"><div class="leg-dot" style="background:#5ba8d4;border:1px solid #1a5f8c"></div>Predicted stations</div>
+              <div class="map-legend-item" id="leg-base" style="display:none"><div class="leg-dot" style="background:rgba(168,94,14,0.6);border-radius:0"></div>Basemap overlay</div>
+            </div>
+            <div class="map-attribution">© Terracode Analytics · Google Maps</div>
+          </div>
+
+          <div style="display:flex;gap:10px;justify-content:flex-end">
+            <button class="btn btn-out" onclick="go(document.querySelector('[data-s=analysis]'))">Edit configuration</button>
+            <button class="btn btn-g" onclick="go(document.querySelector('[data-s=processing]'));startProc()">Execute →</button>
+          </div>
+        </div>
+        <div class="a-panel">
+          <div class="a-hdr">
+            <div class="a-title"><div class="a-gem"><div class="a-core" style="width:9px;height:9px;border-radius:50%;background:var(--g400)"></div></div>Aurora<span class="badge bg" style="margin-left:auto;font-size:9.5px">AI</span></div>
+            <div class="a-sub">Pre-run validation</div>
+          </div>
+          <div class="a-body">
+            <div class="amsg">I've reviewed your project context and configuration. Here is what to expect.</div>
+            <div class="ahi">Complete your project setup and analysis configuration — Aurora will generate a detailed pre-run assessment based on your specific inputs.</div>
+            <div class="amsg">Aurora reviews your station spacing, selected corrections, modelling approach, and project context to flag potential issues and outline expected outputs before you commit to processing.</div>
+            <div class="ahi">If a basemap has been uploaded, Aurora will also confirm how it will appear as an overlay layer in Visualisations.</div>
+            <div class="amsg">Once your configuration is complete, return to this screen to review Aurora's full pre-run analysis before executing.</div>
+            <div style="margin-top:14px;display:flex;flex-direction:column;gap:7px">
+              <button class="btn btn-ghost btn-xs" style="width:100%;justify-content:center">What changes with hybrid model? ↗</button>
+              <button class="btn btn-ghost btn-xs" style="width:100%;justify-content:center">Explain explicit vs sparse ↗</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ PROCESSING ═══ -->
+      <div class="screen" id="screen-processing" style="flex-direction:row">
+        <div style="flex:1;overflow-y:auto;padding:20px 26px;position:relative">
+          <div class="sep first">Pipeline execution</div>
+          <div class="pipe-wrap" id="pipeWrap">
+            <div class="pipe-card done" id="pc1">
+              <div class="pipe-card-inner">
+                <div class="pipe-icon-wrap" style="font-size:12px;font-weight:700;font-family:'Roboto',sans-serif;color:var(--g600)">01</div>
+                <div class="pipe-text">
+                  <div class="pipe-name">Data cleaning &amp; validation</div>
+                  <div class="pipe-detail">Dataset validated · schema confirmed · no null values detected</div>
+                </div>
+                <div class="pipe-status"><div class="pipe-check">✓</div></div>
+              </div>
+            </div>
+            <div class="pipe-card done" id="pc2">
+              <div class="pipe-card-inner">
+                <div class="pipe-icon-wrap" style="font-size:12px;font-weight:700;font-family:'Roboto',sans-serif;color:var(--g600)">02</div>
+                <div class="pipe-text">
+                  <div class="pipe-name">Corrections applied</div>
+                  <div class="pipe-detail">Corrections applied successfully</div>
+                </div>
+                <div class="pipe-status"><div class="pipe-check">✓</div></div>
+              </div>
+            </div>
+            <div class="pipe-card done" id="pc3">
+              <div class="pipe-card-inner">
+                <div class="pipe-icon-wrap" style="font-size:12px;font-weight:700;font-family:'Roboto',sans-serif;color:var(--g600)">03</div>
+                <div class="pipe-text">
+                  <div class="pipe-name">Train / predict split</div>
+                  <div class="pipe-detail">Dataset split complete</div>
+                </div>
+                <div class="pipe-status"><div class="pipe-check">✓</div></div>
+              </div>
+            </div>
+            <div class="pipe-card running" id="pc4">
+              <div class="pipe-card-inner">
+                <div class="pipe-icon-wrap" style="font-size:12px;font-weight:700;font-family:'Roboto',sans-serif;color:var(--g600)">04</div>
+                <div class="pipe-text">
+                  <div class="pipe-name">ML modelling</div>
+                  <div class="pipe-detail" id="pc4d">Model training in progress</div>
+                  <div class="prog-bar" style="margin-top:10px;width:100%;max-width:220px">
+                    <div class="prog-fill" id="mlprog" style="width:64%"></div>
+                  </div>
+                </div>
+                <div class="pipe-status"><div class="pipe-spinner" id="pc4spin"></div></div>
+              </div>
+            </div>
+            <div class="pipe-card pending" id="pc5">
+              <div class="pipe-card-inner">
+                <div class="pipe-icon-wrap" style="font-size:12px;font-weight:700;font-family:'Roboto',sans-serif;color:var(--g600)">05</div>
+                <div class="pipe-text">
+                  <div class="pipe-name">Analytic signal</div>
+                  <div class="pipe-detail">FFT-based horizontal and vertical derivatives · edge delineation</div>
+                </div>
+                <div class="pipe-status"><div class="pipe-pending-dot"><div class="pipe-pending-inner"></div></div></div>
+              </div>
+            </div>
+            <div class="pipe-card pending" id="pc6">
+              <div class="pipe-card-inner">
+                <div class="pipe-icon-wrap" style="font-size:12px;font-weight:700;font-family:'Roboto',sans-serif;color:var(--g600)">06</div>
+                <div class="pipe-text">
+                  <div class="pipe-name">Output generation</div>
+                  <div class="pipe-detail">Grid assembly · GeoJSON · statistics · Aurora analysis</div>
+                </div>
+                <div class="pipe-status"><div class="pipe-pending-dot"><div class="pipe-pending-inner"></div></div></div>
+              </div>
+            </div>
+            <div class="pipe-card pending" id="pc7">
+              <div class="pipe-card-inner">
+                <div class="pipe-icon-wrap" style="font-size:12px;font-weight:700;font-family:'Roboto',sans-serif;color:var(--g600)">07</div>
+                <div class="pipe-text">
+                  <div class="pipe-name">Persist results</div>
+                  <div class="pipe-detail">Store outputs · update metadata · write audit log</div>
+                </div>
+                <div class="pipe-status"><div class="pipe-pending-dot"><div class="pipe-pending-inner"></div></div></div>
+              </div>
+            </div>
+          </div>
+          <div id="completeCTA" style="display:none">
+            <div class="complete-cta">
+              <div class="cta-text">
+                <div class="cta-t">Processing complete ✓</div>
+                <div class="cta-d">Processing complete · predictions generated · analytic signal ready</div>
+              </div>
+              <button class="btn btn-white" style="flex-shrink:0" onclick="go(document.querySelector('[data-s=visualisation]'))">View visualisations →</button>
+            </div>
+          </div>
+          <div style="margin-top:12px;font-size:11.5px;color:var(--text3);font-weight:500" id="procEta">Processing in progress…</div>
+        </div>
+        <!-- Side map -->
+        <div style="width:254px;flex-shrink:0;border-left:1px solid var(--border);padding:17px 15px;overflow-y:auto">
+          <div class="sep first">Station preview</div>
+          <div class="mapbox" style="height:200px;padding:0;overflow:hidden"><div id="procMapHost" style="width:100%;height:200px"></div></div>
+          <div style="margin-top:13px">
+            <div class="srow"><span class="sk">Survey lines</span><span class="sv">—</span></div>
+            <div class="srow"><span class="sk">Total points</span><span class="sv">—</span></div>
+            <div class="srow"><span class="sk">Coverage</span><span class="sv">—</span></div>
+            <div class="srow"><span class="sk">Min TMF</span><span class="sv">—</span></div>
+            <div class="srow"><span class="sk">Max TMF</span><span class="sv">—</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ VISUALISATION ═══ -->
+      <div class="screen" id="screen-visualisation">
+        <div style="padding:13px 20px 11px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap">
+          <div class="vis-bar">
+            <div class="vt on" onclick="pickVis(this,'Heatmap')">Heatmap</div>
+            <div class="vt" onclick="pickVis(this,'Contour')">Contour</div>
+            <div class="vt" onclick="pickVis(this,'3D')">3D surface</div>
+            <div class="vt" onclick="pickVis(this,'Map')">Map overlay</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:7px;margin-left:auto">
+            <span class="badge bgr">Awaiting results</span>
+            <span class="badge" style="background:var(--amber-bg);color:var(--amber)">Analytic signal</span>
+            <button class="btn btn-sm btn-out" onclick="go(document.querySelector('[data-s=export]'))">Export ↗</button>
+          </div>
+        </div>
+        <div style="flex:1;display:flex;overflow:hidden">
+          <div style="flex:1;display:flex;flex-direction:column;padding:13px 17px;overflow:hidden">
+            <div class="mapbox" style="flex:1;min-height:0">
+              <svg width="100%" height="100%" viewBox="0 0 600 340" id="visSvg" style="display:block"></svg>
+            </div>
+            <div style="margin-top:9px;display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+              <span style="font-size:10px;font-weight:700;color:var(--text4);letter-spacing:1px">LAYERS</span>
+              <span class="badge bg">TMF grid</span><span class="badge ba">23 anomalies</span><span class="badge bb">15 lineaments</span><span class="badge bg">3 circular</span><span class="badge" style="background:var(--amber-bg);color:var(--amber)">Basemap</span>
+              <span style="font-size:10px;color:var(--text4);margin-left:auto">Google Maps · IGRS 84</span>
+            </div>
+          </div>
+          <div style="width:270px;flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid var(--border);overflow:hidden">
+            <div style="padding:13px 15px;border-bottom:1px solid var(--border)">
+              <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:10px">Statistics</div>
+              <div class="srow"><span class="sk">Mean TMF</span><span class="sv">—</span></div>
+              <div class="srow"><span class="sk">Std dev</span><span class="sv">—</span></div>
+              <div class="srow"><span class="sk">Anomalies</span><span class="sv" style="color:var(--amber)">—</span></div>
+              <div class="srow"><span class="sk">Lineaments</span><span class="sv" style="color:var(--blue)">—</span></div>
+              <div class="srow"><span class="sk">Circular</span><span class="sv" style="color:var(--g500)">—</span></div>
+            </div>
+            <div style="padding:10px 15px;border-bottom:1px solid var(--border)">
+              <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--text4);text-transform:uppercase;margin-bottom:7px">Value scale</div>
+              <div style="height:10px;border-radius:5px;background:linear-gradient(90deg,var(--g700),var(--g500),var(--g300),var(--g100));margin-bottom:5px"></div>
+              <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace">
+                <span>Min</span><span>Mean</span><span>Max</span>
+              </div>
+            </div>
+            <div class="a-panel" style="width:100%;border:none;border-left:none;flex:1">
+              <div class="a-hdr">
+                <div class="a-title"><div class="a-gem"><div class="a-core" style="width:9px;height:9px;border-radius:50%;background:var(--g400)"></div></div>Aurora</div>
+                <div class="a-sub">Structural interpretation</div>
+              </div>
+              <div class="a-body">
+                <div class="amsg">Processing complete. Results are available for review.</div>
+                <div class="ahi">Aurora will generate a full structural interpretation once you select specific anomalies or layers of interest.</div>
+                <div class="amsg">Use the layer toggles above the map to isolate anomalies, lineaments, or circular features for targeted analysis.</div>
+                <button class="btn btn-ghost btn-xs" style="width:100%;justify-content:center;margin-top:6px">Ask Aurora about this survey ↗</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ EXPORT ═══ -->
+      <div class="screen" id="screen-export" style="flex-direction:row">
+        <div class="split-l">
+          <div class="sep first">Select formats</div>
+          <div class="ex-grid">
+            <div class="ec on" id="ec-pdf" onclick="toggleEx(this)">
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">PDF report</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Full survey report with maps, stats, Aurora interpretation</div></div>
+              <div style="display:flex;gap:6px;margin-top:8px"></div>
+            </div>
+            <div class="ec on" id="ec-pptx" onclick="toggleEx(this)">
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">AI Presentation</div><div style="font-size:11px;color:var(--text3);margin-top:2px">PowerPoint auto-generated by Aurora</div></div>
+              <div style="display:flex;gap:6px;margin-top:8px"><span class="badge ba">Aurora AI</span></div>
+            </div>
+            <div class="ec" id="ec-word" onclick="toggleEx(this)">
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">Word report</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Editable .docx with Aurora commentary</div></div>
+              <div style="display:flex;gap:6px;margin-top:8px"></div>
+            </div>
+            <div class="ec" id="ec-geojson" onclick="toggleEx(this)">
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">GeoJSON</div><div style="font-size:11px;color:var(--text3);margin-top:2px">TMF values, anomaly flags, ML scores — QGIS / ArcGIS</div></div>
+              <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bg">GIS ready</span></div>
+            </div>
+            <div class="ec" id="ec-kml" onclick="toggleEx(this)">
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">KML / KMZ</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Google Earth — anomaly placemarks, lineaments</div></div>
+              <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bg">Google Earth</span></div>
+            </div>
+            <div class="ec" id="ec-csv" onclick="toggleEx(this)">
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">CSV + XYZ grid</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Corrected TMF, anomaly scores, uncertainty — Petrel / Montaj</div></div>
+              <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bgr">Geosoft / Petrel</span></div>
+            </div>
+            <div class="ec" id="ec-gdb" onclick="toggleEx(this)">
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">File GDB</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Esri feature classes — full ArcGIS schema</div></div>
+              <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bb">ArcGIS</span></div>
+            </div>
+            <div class="ec" id="ec-png" onclick="toggleEx(this)">
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">PNG / JPG maps</div><div style="font-size:11px;color:var(--text3);margin-top:2px">High-resolution raster exports at 300 DPI</div></div>
+              <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bgr">300 DPI</span></div>
+            </div>
+          </div>
+
+          <div class="sep">Aurora AI report options</div>
+          <div class="card card-g" style="margin-bottom:14px">
+            <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:11px">Customise AI report content</div>
+            <div class="g2" style="gap:8px">
+              <div class="chk on" style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)"><div class="chk-box on">✓</div><span class="chk-t" style="font-size:12px">Anomaly catalogue</span></div>
+              <div class="chk on" style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)"><div class="chk-box on">✓</div><span class="chk-t" style="font-size:12px">Drilling recommendations</span></div>
+              <div class="chk on" style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)"><div class="chk-box on">✓</div><span class="chk-t" style="font-size:12px">Structural interpretation</span></div>
+              <div class="chk" style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)"><div class="chk-box"></div><span class="chk-t" style="font-size:12px">Coverage gap analysis</span></div>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:12px">
+            <button class="btn btn-g" onclick="runExport()">Generate selected exports →</button>
+            <span id="exCnt" style="font-size:12px;color:var(--text3);font-weight:600">2 formats selected</span>
+          </div>
+
+          <div id="exportProg" style="display:none;margin-top:18px">
+            <div class="sep">Progress</div>
+            <div class="card card-sm">
+              <div class="eprow"><div class="epname">PDF</div><div class="epbar"><div class="epfill" id="e-pdf" style="width:0%;background:var(--red)"></div></div><div class="epsize">—</div><span class="badge bgr" id="e-pdf-s">Queued</span></div>
+              <div class="eprow"><div class="epname">PPTX</div><div class="epbar"><div class="epfill" id="e-pptx" style="width:0%;background:var(--amber)"></div></div><div class="epsize">—</div><span class="badge bgr" id="e-pptx-s">Queued</span></div>
+            </div>
+          </div>
+          <div id="exportDone" style="display:none;margin-top:14px">
+            <div class="sep">Download links</div>
+            <div class="card card-g">
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <div style="font-size:11px;color:var(--text3)">Completed exports will appear here with live file sizes and download links.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="a-panel">
+          <div class="a-hdr">
+            <div class="a-title"><div class="a-gem"><div class="a-core" style="width:9px;height:9px;border-radius:50%;background:var(--g400)"></div></div>Aurora<span class="badge bg" style="margin-left:auto;font-size:9.5px">AI</span></div>
+            <div class="a-sub">Export recommendations</div>
+          </div>
+          <div class="a-body">
+            <div class="amsg">Select the formats that match your delivery requirements. Aurora can guide you on what each format contains and which best fits your workflow.</div>
+            <div class="ahi">For client handoff: PDF Report and AI Presentation together give a complete deliverable — Aurora writes the interpretation section automatically from your project context and results.</div>
+            <div class="amsg">For GIS integration: GeoJSON includes all processed attributes as feature properties, ready to load directly into QGIS or ArcGIS without post-processing.</div>
+            <div class="ahi">For specialist software: the CSV + XYZ Grid export is compatible with Oasis Montaj, Geosoft, and Petrel. KML / KMZ is suited for Google Earth delivery.</div>
+            <div style="margin-top:12px;display:flex;flex-direction:column;gap:7px">
+              <button class="btn btn-ghost btn-xs" style="width:100%;justify-content:center">What goes in the AI Presentation? ↗</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /main -->
+  </div><!-- /body -->
+
+  <div class="statusbar">
+    <div style="display:flex;gap:14px;align-items:center">
+      <span style="font-size:10px;font-weight:700;color:var(--text4)">GAIA v2.0 · Terracode Analytics</span>
+      <span id="statTxt" style="font-size:10.5px;color:var(--text3);font-weight:600">Ready</span>
+    </div>
+    <div class="sdots" id="sdots">
+      <div class="sdot"></div><div class="sdot"></div><div class="sdot"></div>
+      <div class="sdot"></div><div class="sdot"></div><div class="sdot"></div><div class="sdot"></div>
+    </div>
+    <div style="font-size:10px;font-weight:700;color:var(--text4)">Serverless · Scale-to-zero · Terracode Cloud</div>
+  </div>
+</div>
+
+<script>
+var cur='home',procStarted=false;
+
+function goProjectScreen(){
+  document.querySelectorAll('.screen').forEach(function(x){x.classList.remove('active')});
+  document.getElementById('screen-project').classList.add('active');
+  document.querySelectorAll('.nlnk').forEach(function(t){t.classList.remove('active')});
+  document.getElementById('sidebar').classList.remove('off');
+  document.getElementById('ctxBadge').style.display='flex';
+  cur='project';
+}
+var state={platform:'ground',scenario:'explicit',mode:'single',model:'ml',basemap:false,files:1};
+var smap={home:'Ready',setup:'Project setup',analysis:'Configuring analysis pipeline',preview:'Review configuration',processing:'Pipeline executing…',visualisation:'Results ready',export:'Export centre'};
+var sorder=['home','setup','analysis','preview','processing','visualisation','export'];
+
+function goHome(){
+  document.querySelectorAll('.screen').forEach(function(s){s.classList.remove('active')});
+  document.getElementById('screen-home').classList.add('active');
+  document.querySelectorAll('.nlnk').forEach(function(t){t.classList.remove('active')});
+  document.querySelector('[data-s=home]').classList.add('active');
+  document.getElementById('sidebar').classList.add('off');
+  document.getElementById('ctxBadge').style.display='none';
+  setStatus('Ready',-1);cur='home';
+}
+
+function startProject(){
+  document.getElementById('sidebar').classList.remove('off');
+  document.getElementById('ctxBadge').style.display='flex';
+  go(document.querySelector('[data-s=setup]'));
+}
+
+function go(el){
+  if(!el)return;
+  var s=el.dataset?el.dataset.s:null;
+  if(!s)return;
+  document.querySelectorAll('.screen').forEach(function(x){x.classList.remove('active')});
+  var sc=document.getElementById('screen-'+s);
+  if(sc)sc.classList.add('active');
+  document.querySelectorAll('.nlnk').forEach(function(t){t.classList.remove('active')});
+  var tab=document.querySelector('[data-s='+s+']');
+  if(tab)tab.classList.add('active');
+  if(s!=='home'){document.getElementById('sidebar').classList.remove('off');document.getElementById('ctxBadge').style.display='flex';}
+  cur=s;
+  setStatus(smap[s]||'Ready',sorder.indexOf(s)-1);
+  if(s==='processing'){renderProcMap();if(!procStarted)startProc();}
+  if(s==='visualisation')drawVis('Heatmap');
+  if(s==='preview')drawPreviewMap();
+}
+
+function setStatus(txt,idx){
+  document.getElementById('statTxt').textContent=txt;
+  var dots=document.querySelectorAll('.sdot');
+  dots.forEach(function(d,i){d.classList.remove('active','done');if(i<idx)d.classList.add('done');else if(i===idx)d.classList.add('active');});
+}
+
+function toggleDark(){
+  var dark=document.documentElement.getAttribute('data-theme')==='dark';
+  document.documentElement.setAttribute('data-theme',dark?'light':'dark');
+  document.getElementById('dmBtn').textContent=dark?'☀':'☾';
+  if(cur==='visualisation')drawVis(document.querySelector('.vt.on')?.textContent||'Heatmap');
+  if(cur==='preview')drawPreviewMap();
+}
+
+function toggleFS(){
+  if(!document.fullscreenElement){document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen();document.getElementById('fsBtn').textContent='⊠';}
+  else{document.exitFullscreen&&document.exitFullscreen();document.getElementById('fsBtn').textContent='⛶';}
+}
+document.addEventListener('fullscreenchange',function(){if(!document.fullscreenElement)document.getElementById('fsBtn').textContent='⛶';});
+
+/* ---- RADIO HANDLERS ---- */
+function setPlatform(p){
+  state.platform=p;
+  var g=document.getElementById('plat-ground');
+  var a=document.getElementById('plat-air');
+  if(p==='ground'){
+    g.classList.add('selected');g.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
+    a.classList.remove('selected','disabled');a.querySelector('.radio-circle').innerHTML='';
+  }else{
+    a.classList.add('selected');a.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
+    g.classList.remove('selected','disabled');g.querySelector('.radio-circle').innerHTML='';
+  }
+}
+
+function setScenario(sc){
+  state.scenario=sc;
+  var ex=document.getElementById('sc-explicit');
+  var sp=document.getElementById('sc-sparse');
+  var si=document.getElementById('spacingInput');
+  var su=document.getElementById('spacingUnit');
+  var sl=document.getElementById('spacingLabel');
+  var sh=document.getElementById('spacingHint');
+  if(sc==='explicit'){
+    ex.classList.add('selected');ex.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
+    sp.classList.remove('selected');sp.querySelector('.radio-circle').innerHTML='';
+    si.disabled=true;su.disabled=true;
+    sl.style.color='var(--disabled-text)';
+    sh.textContent='Station spacing is not used in Explicit mode — the predict.csv defines locations.';
+  }else{
+    sp.classList.add('selected');sp.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
+    ex.classList.remove('selected');ex.querySelector('.radio-circle').innerHTML='';
+    si.disabled=false;su.disabled=false;
+    sl.style.color='';
+    sh.textContent='';
+  }
+}
+
+function setState(s){
+  var r=document.getElementById('state-raw');
+  var c=document.getElementById('state-corr');
+  if(s==='raw'){r.classList.add('selected');r.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';c.classList.remove('selected');c.querySelector('.radio-circle').innerHTML='';}
+  else{c.classList.add('selected');c.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';r.classList.remove('selected');r.querySelector('.radio-circle').innerHTML='';}
+}
+
+function setMode(m){
+  state.mode=m;
+  var s=document.getElementById('mode-single');
+  var ml=document.getElementById('mode-multi');
+  var addBtn=document.getElementById('addUploadBtn');
+  if(m==='single'){
+    s.classList.add('selected');s.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
+    ml.classList.remove('selected');ml.querySelector('.radio-circle').innerHTML='';
+    addBtn.style.display='none';
+  }else{
+    ml.classList.add('selected');ml.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
+    s.classList.remove('selected');s.querySelector('.radio-circle').innerHTML='';
+    addBtn.style.display='flex';
+  }
+}
+
+var fileCount=2;
+function addFile(){
+  fileCount++;
+  var ul=document.getElementById('uploadList');
+  var div=document.createElement('div');
+  div.className='upload-item';
+  div.innerHTML='<div style="width:8px;height:8px;border-radius:50%;background:var(--bg4);flex-shrink:0"></div><div style="flex:1"><div class="upload-item-name" style="color:var(--text3)">No file selected</div><div class="upload-item-info">Click to browse</div></div><button class="upload-item-rm" onclick="this.closest(\'.upload-item\').remove()">×</button>';
+  ul.appendChild(div);
+}
+
+function addBasemap(){
+  document.getElementById('basemapZone').style.display='none';
+  document.getElementById('basemapDone').style.display='block';
+  state.basemap=true;
+}
+function removeBasemap(){
+  document.getElementById('basemapDone').style.display='none';
+  document.getElementById('basemapZone').style.display='block';
+  state.basemap=false;
+}
+
+/* ---- CHECKS / MODELS ---- */
+function toggleChk(el){
+  var b=el.querySelector('.chk-box');
+  var on=b.classList.contains('on');
+  if(on){b.classList.remove('on');b.textContent='';el.classList.remove('on');}
+  else{b.classList.add('on');b.textContent='✓';el.classList.add('on');}
+}
+function pickModel(el){
+  document.querySelectorAll('.mc').forEach(function(c){c.classList.remove('on');c.querySelector('.mc-name').style.color='';});
+  el.classList.add('on');el.querySelector('.mc-name').style.color='var(--g600)';
+  state.model=el===document.getElementById('mc-ml')?'ml':'other';
+}
+
+/* ---- EXPORT ---- */
+function toggleEx(el){
+  el.classList.toggle('on');
+  var c=document.querySelectorAll('.ec.on').length;
+  document.getElementById('exCnt').textContent=c+' format'+(c!==1?'s':'')+' selected';
+}
+function runExport(){
+  var ep=document.getElementById('exportProg'),ed=document.getElementById('exportDone');
+  ep.style.display='block';ed.style.display='none';
+  var pairs=[];
+  [['pdf','e-pdf','e-pdf-s','var(--red)'],['pptx','e-pptx','e-pptx-s','var(--amber)']].forEach(function(p){
+    var f=document.getElementById(p[1]),s=document.getElementById(p[2]);
+    if(f&&s)pairs.push({f:f,s:s,c:p[3]});
+  });
+  pairs.forEach(function(pr,i){
+    setTimeout(function(){
+      pr.s.textContent='Running';pr.s.className='badge bg-run';pr.f.style.background=pr.c;
+      var w=0,t=setInterval(function(){
+        w+=Math.random()*7+4;
+        if(w>=100){w=100;clearInterval(t);pr.s.textContent='Done';pr.s.className='badge bg-done';if(i===pairs.length-1)setTimeout(function(){ed.style.display='block';},400);}
+        pr.f.style.width=w.toFixed(0)+'%';
+      },180);
+    },i*900);
+  });
+}
+
+/* ---- PREVIEW MAP ---- */
+function drawPreviewMap(){
+  var svg=document.getElementById('previewMap');
+  if(!svg)return;
+  var W=520,H=300;
+  var isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  var bgColor=isDark?'#0d1f10':'#e8ede9';
+  var roadColor=isDark?'rgba(255,255,255,0.08)':'rgba(0,0,0,0.08)';
+  
+  var bg='<rect width="'+W+'" height="'+H+'" fill="'+bgColor+'"/>';
+  // Grid lines to simulate a map
+  var grid='';
+  for(var i=0;i<W;i+=40)grid+='<line x1="'+i+'" y1="0" x2="'+i+'" y2="'+H+'" stroke="'+roadColor+'" stroke-width="0.5"/>';
+  for(var j=0;j<H;j+=40)grid+='<line x1="0" y1="'+j+'" x2="'+W+'" y2="'+j+'" stroke="'+roadColor+'" stroke-width="0.5"/>';
+  
+  // Basemap polygons if uploaded
+  var basemap='';
+  if(state.basemap){
+    basemap='<polygon points="80,60 200,40 280,90 260,160 140,180 70,130" fill="rgba(168,94,14,0.12)" stroke="rgba(168,94,14,0.4)" stroke-width="1.5"/>';
+    basemap+='<polygon points="280,90 380,70 440,120 420,200 320,210 260,160" fill="rgba(26,95,140,0.1)" stroke="rgba(26,95,140,0.35)" stroke-width="1.5"/>';
+    document.getElementById('leg-base').style.display='flex';
+  }else{
+    document.getElementById('leg-base').style.display='none';
+  }
+  
+  // Survey lines (existing stations)
+  var stations='';
+  var lineColors=['rgba(45,170,82,0.8)','rgba(45,170,82,0.7)','rgba(45,170,82,0.75)'];
+  var lines=[
+    [[80,220],[100,170],[115,120],[130,75],[140,45]],
+    [[140,225],[160,175],[175,125],[185,80],[195,50]],
+    [[200,230],[220,180],[235,130],[248,85],[255,55]],
+    [[260,235],[280,185],[295,138],[308,90],[315,60]],
+    [[320,238],[340,190],[355,142],[368,95],[375,65]],
+    [[380,240],[400,192],[415,145],[428,98],[432,70]],
+  ];
+  lines.forEach(function(pts,li){
+    var lc=lineColors[li%lineColors.length];
+    // draw line
+    var d='M'+pts.map(function(p){return p[0]+','+p[1]}).join('L');
+    stations+='<path d="'+d+'" stroke="'+lc+'" stroke-width="0.8" fill="none" opacity="0.5"/>';
+    pts.forEach(function(pt){
+      stations+='<circle cx="'+pt[0]+'" cy="'+pt[1]+'" r="3" fill="'+lc+'"/>';
+    });
+  });
+  
+  // Predicted stations (if model selected)
+  var predicted='';
+  if(state.model==='ml'||true){
+    document.getElementById('leg-pred').style.display='flex';
+    // Scatter predicted points in gaps
+    var predPts=[[170,200],[190,155],[210,110],[225,65],[115,210],[155,155],[175,105],[300,220],[280,165],[265,115],[340,215],[360,168],[375,118],[400,160]];
+    predPts.forEach(function(pt){
+      predicted+='<circle cx="'+pt[0]+'" cy="'+pt[1]+'" r="3.5" fill="rgba(91,168,212,0.3)" stroke="#1a5f8c" stroke-width="1.2"/>';
+    });
+  }
+  
+  svg.innerHTML=bg+grid+basemap+predicted+stations;
+}
+
+/* ---- PROCESSING MAP ---- */
+function renderProcMap(){
+  var g=document.getElementById('procDotG');
+  if(!g||g.children.length>0)return;
+  var html='';
+  for(var i=0;i<360;i++){
+    var x=6+Math.random()*222,y=6+Math.random()*178,v=Math.random();
+    var c=v>0.88?'rgba(168,94,14,0.75)':v<0.1?'rgba(45,170,82,0.9)':'rgba(45,170,82,0.5)';
+    html+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="1.7" fill="'+c+'"/>';
+  }
+  g.innerHTML=html;
+}
+
+/* ---- VIS ---- */
+function pickVis(el,mode){
+  document.querySelectorAll('.vt').forEach(function(t){t.classList.remove('on')});
+  el.classList.add('on');drawVis(mode);
+}
+function drawVis(mode){
+  var svg=document.getElementById('visSvg');if(!svg)return;
+  var W=600,H=340,rows=15,cols=24;
+  var cells='';
+  for(var r=0;r<rows;r++){
+    for(var c=0;c<cols;c++){
+      var n=(Math.sin(r*0.7+c*0.4)*0.5+Math.cos(r*0.28-c*0.2)*0.4+Math.sin(r*0.12+c*0.65)*0.15+0.5)/1.05;
+      n=Math.max(0,Math.min(1,n));
+      var x=c/cols*W,y=r/rows*H,w=W/cols+1,h=H/rows+1;
+      var fill;
+      if(mode==='Contour'){var g2=35+Math.floor(n*8)*20;fill='rgb(7,'+g2+',18)';}
+      else if(mode==='3D'){var r2=Math.round(7+n*190),g3=Math.round(26+n*175),b3=Math.round(11+n*50);fill='rgb('+r2+','+g3+','+b3+')';}
+      else if(mode==='Map'){fill='rgba(34,128,60,'+(0.18+n*0.65)+')';}
+      else{var r3=Math.round(7+n*210),g4=Math.round(26+n*168),b4=Math.round(11+n*58);fill='rgb('+r3+','+g4+','+b4+')';}
+      cells+='<rect x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+(w+0.5).toFixed(1)+'" height="'+(h+0.5).toFixed(1)+'" fill="'+fill+'" opacity="0.82"/>';
+    }
+  }
+  var isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  var as=isDark?'rgba(232,144,64,0.9)':'rgba(168,94,14,0.9)';
+  var ls=isDark?'rgba(91,168,212,0.7)':'rgba(26,95,140,0.7)';
+  var an='<circle cx="210" cy="188" r="15" fill="none" stroke="'+as+'" stroke-width="1.5"/><circle cx="380" cy="100" r="22" fill="none" stroke="'+as+'" stroke-width="1.5"/><circle cx="105" cy="248" r="11" fill="none" stroke="'+as+'" stroke-width="1.5"/>';
+  var ln='<line x1="48" y1="310" x2="340" y2="40" stroke="'+ls+'" stroke-width="1.2" stroke-dasharray="5 3"/><line x1="138" y1="320" x2="458" y2="26" stroke="'+ls+'" stroke-width="1.2" stroke-dasharray="5 3"/><line x1="228" y1="328" x2="578" y2="54" stroke="'+ls+'" stroke-width="1" stroke-dasharray="5 3"/>';
+  var lbl='<text x="12" y="18" font-size="10.5" fill="rgba(255,255,255,0.5)" font-family="Manrope,sans-serif" font-weight="700">'+mode.toUpperCase()+' · Your Survey</text>';
+  svg.innerHTML=cells+an+ln+lbl;
+}
+
+/* ---- PROCESSING ANIMATION ---- */
+function startProc(){
+  if(procStarted)return;procStarted=true;
+  var p=document.getElementById('mlprog');if(!p)return;
+  var w=64;
+  var t=setInterval(function(){
+    w+=Math.random()*3+1.5;
+    if(w>=100){w=100;clearInterval(t);setTimeout(finishStep4,600);}
+    if(p)p.style.width=w.toFixed(0)+'%';
+  },320);
+}
+
+function finishStep(id,detail,delay,onDone){
+  setTimeout(function(){
+    var c=document.getElementById(id);if(!c)return;
+    c.classList.remove('running','pending');c.classList.add('done');
+    var sp=c.querySelector('.pipe-spinner');if(sp)sp.outerHTML='<div class="pipe-check">✓</div>';
+    var pp=c.querySelector('.pipe-pending-dot');if(pp)pp.outerHTML='<div class="pipe-check">✓</div>';
+    var pd=c.querySelector('.pipe-detail');if(pd&&detail)pd.textContent=detail;
+    var pb=c.querySelector('.prog-bar');if(pb)pb.style.display='none';
+    if(onDone)onDone();
+  },delay);
+}
+
+function makeRunning(id){
+  var c=document.getElementById(id);if(!c)return;
+  c.classList.remove('pending');c.classList.add('running');
+  var pp=c.querySelector('.pipe-pending-dot');if(pp)pp.outerHTML='<div class="pipe-spinner"></div>';
+}
+
+function finishStep4(){
+  finishStep('pc4','ML prediction complete',0,function(){
+    makeRunning('pc5');
+    finishStep('pc5','Edge detection complete · FFT derivatives · 14 s',1400,function(){
+      makeRunning('pc6');
+      finishStep('pc6','Grid assembled · statistics generated · Aurora analysis done',1200,function(){
+        makeRunning('pc7');
+        finishStep('pc7','Outputs stored · metadata updated · audit log written',1100,function(){
+          document.getElementById('procEta').style.display='none';
+          document.getElementById('completeCTA').style.display='block';
+        });
+      });
+    });
+  });
+}
+
+// initialise scenario state (explicit = spacing greyed out)
+function toggleFiltering(el){
+  var b=el.querySelector('.chk-box');
+  var on=b.classList.contains('on');
+  var opts=document.getElementById('filter-opts');
+  if(on){
+    b.classList.remove('on');b.textContent='';el.classList.remove('on');
+    if(opts)opts.style.display='none';
+  }else{
+    b.classList.add('on');b.textContent='✓';el.classList.add('on');
+    if(opts)opts.style.display='block';
+  }
+}
+function setFilter(type){
+  var low=document.getElementById('filt-low');
+  var high=document.getElementById('filt-high');
+  if(type==='low'){
+    low.classList.add('selected');low.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
+    high.classList.remove('selected');high.querySelector('.radio-circle').innerHTML='';
+  }else{
+    high.classList.add('selected');high.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
+    low.classList.remove('selected');low.querySelector('.radio-circle').innerHTML='';
+  }
+}
+
+window.addEventListener('DOMContentLoaded',function(){
+  setScenario('explicit');
+  setPlatform('ground');
+  drawPreviewMap();
+  renderProcMap();
+  drawVis('Heatmap');
+});
+</script>
+<script type="module" src="/frontend/js/app.js"></script>
+</body>
+</html>
