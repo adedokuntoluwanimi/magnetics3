@@ -506,9 +506,15 @@ class ProcessingService:
         selected = set(add_ons)
         detail_items = []
 
-        analytic = np.sqrt(sum(component ** 2 for component in np.gradient(surface)))
+        # np.gradient requires ≥ 2 elements per dimension; guard for sparse along-line grids
+        if surface.ndim == 2 and surface.shape[0] > 1 and surface.shape[1] > 1:
+            analytic = np.sqrt(sum(c ** 2 for c in np.gradient(surface)))
+        else:
+            analytic = np.zeros_like(surface)
         filtered_surface = surface
-        emag2_residual = surface - gaussian_filter(surface, sigma=5.0)
+        # gaussian_filter sigma must not exceed array size; clamp it
+        sigma = min(5.0, max(surface.shape) / 4.0) if surface.size > 1 else 0.0
+        emag2_residual = surface - gaussian_filter(surface, sigma=sigma) if sigma > 0 else np.zeros_like(surface)
         rtp_surface = surface - np.nanmean(surface)
         if "analytic_signal" in selected:
             detail_items.append("analytic signal")
@@ -629,11 +635,17 @@ class ProcessingService:
         return output.getvalue()
 
     def _render_contour_png(self, surface) -> bytes:
+        import numpy as np
         from matplotlib import pyplot as plt
 
         figure, axis = plt.subplots(figsize=(6, 4))
-        contour = axis.contourf(surface, levels=16, cmap="viridis")
-        figure.colorbar(contour, ax=axis, fraction=0.046, pad=0.04)
+        if surface.ndim == 2 and surface.shape[0] > 1 and surface.shape[1] > 1:
+            contour = axis.contourf(surface, levels=16, cmap="viridis")
+            figure.colorbar(contour, ax=axis, fraction=0.046, pad=0.04)
+        else:
+            # Along-line surface: fall back to line plot
+            axis.plot(surface.ravel(), color="teal")
+            axis.set_ylabel("nT")
         axis.set_title("Magnetic Contours")
         output = io.BytesIO()
         figure.tight_layout()
@@ -646,11 +658,16 @@ class ProcessingService:
         from matplotlib import pyplot as plt
 
         figure = plt.figure(figsize=(6, 4))
-        axis = figure.add_subplot(111, projection="3d")
-        x = np.arange(surface.shape[1])
-        y = np.arange(surface.shape[0])
-        grid_x, grid_y = np.meshgrid(x, y)
-        axis.plot_surface(grid_x, grid_y, surface, cmap="viridis", linewidth=0, antialiased=True)
+        if surface.ndim == 2 and surface.shape[0] > 1 and surface.shape[1] > 1:
+            axis = figure.add_subplot(111, projection="3d")
+            x = np.arange(surface.shape[1])
+            y = np.arange(surface.shape[0])
+            grid_x, grid_y = np.meshgrid(x, y)
+            axis.plot_surface(grid_x, grid_y, surface, cmap="viridis", linewidth=0, antialiased=True)
+        else:
+            axis = figure.add_subplot(111)
+            axis.plot(surface.ravel(), color="teal")
+            axis.set_ylabel("nT")
         axis.set_title("3D Magnetic Surface")
         output = io.BytesIO()
         figure.tight_layout()

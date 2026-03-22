@@ -212,15 +212,18 @@ async function renderMapOverlay(results) {
 }
 
 export async function loadVisualisation() {
+  const host = ensureHost();
   if (!appState.project || !appState.task) {
-    throw new Error("Run a task before opening Visualisation.");
+    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">Create and run a task to see visualisations here.</div>`;
+    return;
   }
   const task = await fetchTask(appState.project.id, appState.task.id);
   setTask(task);
   renderWorkflowProgress();
   const results = getResults();
   if (!results) {
-    throw new Error("Processing results are not available yet.");
+    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">Processing results are not available yet — run the task to generate them.</div>`;
+    return;
   }
   renderStats(results);
   renderLayerBar(results);

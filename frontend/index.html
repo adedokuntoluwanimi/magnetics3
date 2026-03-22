@@ -1456,29 +1456,8 @@ function pickVis(el,mode){
   el.classList.add('on');drawVis(mode);
 }
 function drawVis(mode){
-  var svg=document.getElementById('visSvg');if(!svg)return;
-  var W=600,H=340,rows=15,cols=24;
-  var cells='';
-  for(var r=0;r<rows;r++){
-    for(var c=0;c<cols;c++){
-      var n=(Math.sin(r*0.7+c*0.4)*0.5+Math.cos(r*0.28-c*0.2)*0.4+Math.sin(r*0.12+c*0.65)*0.15+0.5)/1.05;
-      n=Math.max(0,Math.min(1,n));
-      var x=c/cols*W,y=r/rows*H,w=W/cols+1,h=H/rows+1;
-      var fill;
-      if(mode==='Contour'){var g2=35+Math.floor(n*8)*20;fill='rgb(7,'+g2+',18)';}
-      else if(mode==='3D'){var r2=Math.round(7+n*190),g3=Math.round(26+n*175),b3=Math.round(11+n*50);fill='rgb('+r2+','+g3+','+b3+')';}
-      else if(mode==='Map'){fill='rgba(34,128,60,'+(0.18+n*0.65)+')';}
-      else{var r3=Math.round(7+n*210),g4=Math.round(26+n*168),b4=Math.round(11+n*58);fill='rgb('+r3+','+g4+','+b4+')';}
-      cells+='<rect x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+(w+0.5).toFixed(1)+'" height="'+(h+0.5).toFixed(1)+'" fill="'+fill+'" opacity="0.82"/>';
-    }
-  }
-  var isDark=document.documentElement.getAttribute('data-theme')==='dark';
-  var as=isDark?'rgba(232,144,64,0.9)':'rgba(168,94,14,0.9)';
-  var ls=isDark?'rgba(91,168,212,0.7)':'rgba(26,95,140,0.7)';
-  var an='<circle cx="210" cy="188" r="15" fill="none" stroke="'+as+'" stroke-width="1.5"/><circle cx="380" cy="100" r="22" fill="none" stroke="'+as+'" stroke-width="1.5"/><circle cx="105" cy="248" r="11" fill="none" stroke="'+as+'" stroke-width="1.5"/>';
-  var ln='<line x1="48" y1="310" x2="340" y2="40" stroke="'+ls+'" stroke-width="1.2" stroke-dasharray="5 3"/><line x1="138" y1="320" x2="458" y2="26" stroke="'+ls+'" stroke-width="1.2" stroke-dasharray="5 3"/><line x1="228" y1="328" x2="578" y2="54" stroke="'+ls+'" stroke-width="1" stroke-dasharray="5 3"/>';
-  var lbl='<text x="12" y="18" font-size="10.5" fill="rgba(255,255,255,0.5)" font-family="Manrope,sans-serif" font-weight="700">'+mode.toUpperCase()+' · Your Survey</text>';
-  svg.innerHTML=cells+an+ln+lbl;
+  // Placeholder — real implementation is provided by the ES module (visualisation.js).
+  // The module overrides window.drawVis at DOMContentLoaded.
 }
 
 /* ---- PROCESSING ANIMATION ---- */
