@@ -8,6 +8,33 @@ let _surveyMarkers = [];
 let _predictedMarkers = [];
 let _infoWindow = null;
 
+const MAP_STYLES = {
+  light: [
+    {elementType: "geometry", stylers: [{color: "#f5f7f6"}]},
+    {elementType: "labels.text.stroke", stylers: [{color: "#ffffff"}]},
+    {elementType: "labels.text.fill", stylers: [{color: "#54636b"}]},
+    {featureType: "road", elementType: "geometry", stylers: [{color: "#ffffff"}]},
+    {featureType: "water", elementType: "geometry", stylers: [{color: "#cfe5ee"}]},
+    {featureType: "poi", elementType: "geometry", stylers: [{color: "#e9f2ea"}]},
+  ],
+  muted: [
+    {elementType: "geometry", stylers: [{color: "#eef1ef"}]},
+    {elementType: "labels.text.stroke", stylers: [{color: "#f7f7f7"}]},
+    {elementType: "labels.text.fill", stylers: [{color: "#6c7b70"}]},
+    {featureType: "road", elementType: "geometry", stylers: [{color: "#dfe6e1"}]},
+    {featureType: "water", elementType: "geometry", stylers: [{color: "#b8d6e2"}]},
+    {featureType: "poi", elementType: "labels.text.fill", stylers: [{color: "#7b8a7f"}]},
+  ],
+  dark: [
+    {elementType: "geometry", stylers: [{color: "#1d2320"}]},
+    {elementType: "labels.text.stroke", stylers: [{color: "#1f2a24"}]},
+    {elementType: "labels.text.fill", stylers: [{color: "#9ab3a1"}]},
+    {featureType: "road", elementType: "geometry", stylers: [{color: "#2a322d"}]},
+    {featureType: "water", elementType: "geometry", stylers: [{color: "#182028"}]},
+    {featureType: "poi", elementType: "geometry", stylers: [{color: "#242b26"}]},
+  ],
+};
+
 export function recolorSurveyMarkers(color) {
   _surveyMarkers.forEach((m) => {
     const icon = m.getIcon();
@@ -26,6 +53,26 @@ function getBounds(points) {
   const bounds = new google.maps.LatLngBounds();
   points.forEach((point) => bounds.extend({lat: Number(point.latitude), lng: Number(point.longitude)}));
   return bounds;
+}
+
+function filterPredictedPoints(predictedPoints, measuredPoints) {
+  if (!predictedPoints?.length || !measuredPoints?.length) return predictedPoints || [];
+  const lats = measuredPoints.map((p) => Number(p.latitude)).filter((v) => Number.isFinite(v));
+  const lons = measuredPoints.map((p) => Number(p.longitude)).filter((v) => Number.isFinite(v));
+  if (!lats.length || !lons.length) return predictedPoints || [];
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLon = Math.min(...lons);
+  const maxLon = Math.max(...lons);
+  const latPad = Math.max((maxLat - minLat) * 0.05, 0.002);
+  const lonPad = Math.max((maxLon - minLon) * 0.05, 0.002);
+  return (predictedPoints || []).filter((p) => {
+    const lat = Number(p.latitude);
+    const lon = Number(p.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return false;
+    return lat >= minLat - latPad && lat <= maxLat + latPad && lon >= minLon - lonPad && lon <= maxLon + lonPad;
+  });
 }
 
 export async function ensureGoogleMaps() {
@@ -70,11 +117,25 @@ export async function renderStationMap(container, points, {weighted = false, zoo
     mapTypeId: "roadmap",
     streetViewControl: false,
     fullscreenControl: false,
-    mapTypeControl: true,
+    mapTypeControl: false,
     gestureHandling: "greedy",
     center,
     zoom,
   });
+  const mapTypeSelect = document.getElementById("mapTypeSelect");
+  if (mapTypeSelect) {
+    mapTypeSelect.value = map.getMapTypeId() || "roadmap";
+    mapTypeSelect.onchange = () => {
+      const choice = mapTypeSelect.value;
+      if (MAP_STYLES[choice]) {
+        map.setMapTypeId("roadmap");
+        map.setOptions({styles: MAP_STYLES[choice]});
+      } else {
+        map.setOptions({styles: null});
+        map.setMapTypeId(choice);
+      }
+    };
+  }
   _currentMap = map;
   _surveyMarkers = [];
   _predictedMarkers = [];
@@ -124,7 +185,8 @@ export async function renderStationMap(container, points, {weighted = false, zoo
     _surveyMarkers.push(marker);
   });
 
-  (predictedPoints || []).slice(0, 600).forEach((point) => {
+  const safePredicted = filterPredictedPoints(predictedPoints, validPoints);
+  safePredicted.slice(0, 600).forEach((point, idx) => {
     const marker = new maps.Marker({
       map,
       position: {lat: Number(point.latitude), lng: Number(point.longitude)},
@@ -137,6 +199,19 @@ export async function renderStationMap(container, points, {weighted = false, zoo
         strokeWeight: 2,
       },
       title: "Predicted station",
+    });
+    marker.addListener("click", () => {
+      const magneticVal = Number(point.magnetic);
+      const hasMag = Number.isFinite(magneticVal);
+      _infoWindow.setContent(`
+        <div style="font-family:'Manrope',sans-serif;font-size:12px;min-width:140px">
+          <div style="font-weight:700;margin-bottom:6px;color:#071a0b">Predicted station #${idx + 1}</div>
+          <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:3px"><span style="color:#5a8264">Latitude</span><span style="font-family:'JetBrains Mono',monospace;font-weight:600">${Number(point.latitude).toFixed(6)}</span></div>
+          <div style="display:flex;justify-content:space-between;gap:12px"><span style="color:#5a8264">Longitude</span><span style="font-family:'JetBrains Mono',monospace;font-weight:600">${Number(point.longitude).toFixed(6)}</span></div>
+          ${hasMag ? `<div style="display:flex;justify-content:space-between;gap:12px;border-top:1px solid #e0e0e0;padding-top:5px;margin-top:5px"><span style="color:#5a8264">Magnetic</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:#1a5f8c">${magneticVal.toFixed(2)} nT</span></div>` : ""}
+        </div>
+      `);
+      _infoWindow.open(map, marker);
     });
     _predictedMarkers.push(marker);
   });

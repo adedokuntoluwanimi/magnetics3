@@ -44,17 +44,6 @@ function ensurePreviewMapHost() {
   return host;
 }
 
-function renderAurora(aurora) {
-  const body = document.querySelector("#screen-preview .a-body");
-  if (!body) return;
-  const highlights = (aurora.highlights || [])
-    .map((item) => `<div class="ahi">${item}</div>`)
-    .join("");
-  body.innerHTML = `
-    <div class="amsg">${aurora.summary || "Aurora response unavailable."}</div>
-    ${highlights}
-  `;
-}
 
 function renderPreview(payload) {
   const project = payload.project;
@@ -73,6 +62,16 @@ function renderPreview(payload) {
   setVal("pv-pred-traverses", payload.predicted_traverse_count ? String(payload.predicted_traverse_count) : "—");
   setVal("pv-platform", task.platform ? titleCase(task.platform) : "—");
   setVal("pv-scenario", task.scenario ? titleCase(task.scenario) : "—");
+  const lineMode = task.line_interpolation === false ? "grid" : (window.state?.lineMode || "line");
+  const gridRows = window.state?.gridRows || "—";
+  const gridCols = window.state?.gridCols || "—";
+  if (task.scenario === "sparse") {
+    setVal("pv-interp", lineMode === "grid" ? "Full grid" : "Along lines");
+    setVal("pv-grid", lineMode === "grid" ? `${gridRows} × ${gridCols}` : "—");
+  } else {
+    setVal("pv-interp", "—");
+    setVal("pv-grid", "—");
+  }
   setVal("pv-mode", task.processing_mode ? titleCase(task.processing_mode) : "—");
   setVal("pv-basemap", task.basemap_file?.file_name || "None");
 
@@ -92,8 +91,6 @@ function renderPreview(payload) {
   setVal("pv-model", model);
   setVal("pv-addons", addOns);
   setVal("pv-runtime", estRuntime);
-
-  renderAurora(payload.aurora || {});
 
   const legendBase = document.getElementById("leg-base");
   if (legendBase) legendBase.style.display = task.basemap_file ? "flex" : "none";
@@ -147,11 +144,18 @@ export async function loadPreview() {
       recolorSurveyMarkers(color);
       document.querySelectorAll(".mcp-swatch-survey").forEach((s) => s.classList.remove("active"));
       swatchEl?.classList.add("active");
+      const legDot = document.getElementById("leg-measured-dot");
+      if (legDot) legDot.style.background = color;
     };
     window.setPredictedColor = (color, swatchEl) => {
       recolorPredictedMarkers(color);
       document.querySelectorAll(".mcp-swatch-pred").forEach((s) => s.classList.remove("active"));
       swatchEl?.classList.add("active");
+      const legDot = document.getElementById("leg-pred-dot");
+      if (legDot) {
+        legDot.style.background = color;
+        legDot.style.border = color === "#ffffff" ? "1px solid #1a5f8c" : "1px solid rgba(0,0,0,0.2)";
+      }
     };
 
     const attribution = document.querySelector("#screen-preview .map-attribution");

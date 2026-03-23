@@ -7,7 +7,7 @@
 - Cloud Run service:
   `gaia-magnetics`
 - Current revision:
-  `gaia-magnetics-00028-mqk`
+  `gaia-magnetics-00043-fkg`
 - Infra project:
   `app-01-488817`
 - AI project:
@@ -125,6 +125,17 @@
 - `gaia-magnetics-processing` Cloud Run Job created (us-central1, 2 vCPU / 2 GiB, 30 min timeout)
 - Processing page SVG map replaced with real Google Maps (`#procMapHost`)
 - Preview page: Survey traverses + Predicted traverses rows added; `preview_service.py` computes them from point groupings
+
+### Processing + preview + basemap cleanup (2026-03-23 to 2026-03-24, rev 00040 to 00043)
+
+- Preview uses backend predicted points only (no synthetic fallback).
+- Processing loads all survey files (multi-line mode) and clamps predicted points to measured bounds.
+- Processing with prediction modelling disabled uses nearest-neighbor interpolation instead of dummy grids/surfaces.
+- Results payload sanitized before Firestore save (NaN/inf -> null) to prevent InvalidArgument errors.
+- Processing page map panel removed.
+- Basemap selector is custom-only; Google map type control disabled.
+- Basemap choices reduced to Terrain, Satellite, Hybrid, Dark.
+- Visualisation modes show clear fallback messages when required data is missing.
 
 ## Main Remaining Gaps
 

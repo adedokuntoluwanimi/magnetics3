@@ -30,7 +30,7 @@ Read these first, in order:
 - AI project:
   `app-01-488817-ai`
 - Current revision:
-  `gaia-magnetics-00028-mqk`
+  `gaia-magnetics-00043-fkg`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
@@ -173,6 +173,17 @@ Read these first, in order:
 - `preview_service.py`: `_count_traverses(points, predicted_points, task)` groups points by the perpendicular axis (latitude for E-W surveys, longitude for N-S surveys) at 3× station-spacing tolerance. Returns `(survey_count, predicted_count)`. Both values included in `build_preview` response.
 - `index.html`: two new rows in preview "Project & task" card — `#pv-traverses` and `#pv-pred-traverses`.
 - `preview.js`: populates both rows from `payload.traverse_count` and `payload.predicted_traverse_count`.
+
+## What Was Done — Session ending 2026-03-24 (revisions 00040 → 00043)
+
+- Preview uses backend predicted points only; synthetic fallback removed.
+- Processing loads all survey files, clamps predicted points to measured bounds.
+- Processing with prediction modelling disabled uses nearest-neighbor interpolation on real data (no dummy grid/surface).
+- Results payload sanitized (NaN/inf -> null) before Firestore save to prevent InvalidArgument errors.
+- Processing page map panel removed.
+- Basemap selector uses custom dropdown only; Google map type control disabled.
+- Basemap choices reduced to Terrain, Satellite, Hybrid, Dark.
+- Visualisation shows fallback messaging when required data is missing.
 
 ---
 

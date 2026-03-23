@@ -108,12 +108,24 @@ class PreviewService:
         if scenario != "sparse":
             return []
 
-        # Reuse the measured points to build the predicted grid extents
         measured = self._extract_preview_points(task)
         if not measured:
             return []
 
-        import numpy as np
+        def _filter_to_bounds(points: list[dict]) -> list[dict]:
+            lats = [p["latitude"] for p in measured]
+            lons = [p["longitude"] for p in measured]
+            lat_min, lat_max = min(lats), max(lats)
+            lon_min, lon_max = min(lons), max(lons)
+            pad_lat = max((lat_max - lat_min) * 0.05, 0.002)
+            pad_lon = max((lon_max - lon_min) * 0.05, 0.002)
+            return [
+                p for p in points
+                if (lat_min - pad_lat) <= p["latitude"] <= (lat_max + pad_lat)
+                and (lon_min - pad_lon) <= p["longitude"] <= (lon_max + pad_lon)
+            ]
+
+        line_interpolation = bool(task.get("line_interpolation", True))
         spacing_value = float(task.get("station_spacing") or 20)
         spacing_unit = (task.get("station_spacing_unit") or "Metres").lower()
         spacing_metres = spacing_value * (1000 if "kilo" in spacing_unit else 0.3048 if "feet" in spacing_unit else 1)
@@ -124,16 +136,59 @@ class PreviewService:
         lat_min, lat_max = min(lats), max(lats)
         lon_min, lon_max = min(lons), max(lons)
 
-        x_pts = min(max(int((lon_max - lon_min) / spacing_deg) + 1, 5), 60)
-        y_pts = min(max(int((lat_max - lat_min) / spacing_deg) + 1, 5), 60)
+        if line_interpolation:
+            lat_range = lat_max - lat_min
+            lon_range = lon_max - lon_min
+            tol = max(spacing_deg * 3, 0.001)
+
+            def _group_key(point: dict) -> int:
+                return round(point["latitude"] / tol) if lon_range >= lat_range else round(point["longitude"] / tol)
+
+            groups: dict[int, list[dict]] = {}
+            for point in measured:
+                groups.setdefault(_group_key(point), []).append(point)
+
+            predicted: list[dict] = []
+            for points in groups.values():
+                if lon_range >= lat_range:
+                    points.sort(key=lambda p: p["longitude"])
+                else:
+                    points.sort(key=lambda p: p["latitude"])
+                for idx in range(len(points) - 1):
+                    a = points[idx]
+                    b = points[idx + 1]
+                    predicted.append({
+                        "latitude": (a["latitude"] + b["latitude"]) / 2,
+                        "longitude": (a["longitude"] + b["longitude"]) / 2,
+                    })
+            return _filter_to_bounds(predicted)[:600]
+
+        import numpy as np
+        grid_rows = int(task.get("grid_rows") or 0)
+        grid_cols = int(task.get("grid_cols") or 0)
+        if grid_rows < 2 or grid_cols < 2:
+            x_pts = min(max(int((lon_max - lon_min) / spacing_deg) + 1, 5), 60)
+            y_pts = min(max(int((lat_max - lat_min) / spacing_deg) + 1, 5), 60)
+        else:
+            x_pts = min(max(grid_cols, 2), 60)
+            y_pts = min(max(grid_rows, 2), 60)
+
+        pad_lat = (lat_max - lat_min) * 0.05
+        pad_lon = (lon_max - lon_min) * 0.05
+        lat_min = lat_min + pad_lat
+        lat_max = lat_max - pad_lat
+        lon_min = lon_min + pad_lon
+        lon_max = lon_max - pad_lon
+
         x_axis = np.linspace(lon_min, lon_max, x_pts)
         y_axis = np.linspace(lat_min, lat_max, y_pts)
         grid_x, grid_y = np.meshgrid(x_axis, y_axis)
 
-        return [
+        predicted = [
             {"latitude": float(lat), "longitude": float(lon)}
             for lat, lon in zip(grid_y.ravel(), grid_x.ravel())
-        ][:600]
+        ]
+        return _filter_to_bounds(predicted)[:600]
 
     def _extract_preview_points(self, task: dict) -> list[dict]:
         """Load up to 500 rows from the first survey CSV for the preview map."""

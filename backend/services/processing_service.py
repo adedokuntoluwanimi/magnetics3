@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -93,11 +94,26 @@ class ProcessingService:
                 self._update_run(run_id, 3, "completed", "Prediction modelling disabled — skipped")
                 self._update_run(run_id, 4, "completed", "Prediction modelling disabled — skipped")
                 self._update_run(run_id, 5, "completed", "No derived layers — modelling was disabled")
-                dummy_grid = np.array([[corrected["longitude"].mean()]])
-                dummy_surface = np.array([[corrected["magnetic"].mean()]])
+                grid_x, grid_y = self._build_grid(task, corrected)
+                surface = self._nearest_surface(
+                    corrected["longitude"].to_numpy(),
+                    corrected["latitude"].to_numpy(),
+                    corrected["magnetic"].to_numpy(),
+                    grid_x,
+                    grid_y,
+                )
+                uncertainty = self._uncertainty_surface(
+                    corrected["longitude"].to_numpy(),
+                    corrected["latitude"].to_numpy(),
+                    grid_x,
+                    grid_y,
+                    np.zeros_like(surface),
+                )
                 results = {
-                    "grid_x": dummy_grid, "grid_y": dummy_grid,
-                    "surface": dummy_surface, "uncertainty": dummy_surface,
+                    "grid_x": grid_x,
+                    "grid_y": grid_y,
+                    "surface": surface,
+                    "uncertainty": uncertainty,
                     "model_used": "none",
                     "points": corrected[["latitude", "longitude", "magnetic"]].to_dict(orient="records"),
                     "stats": {
@@ -107,14 +123,20 @@ class ProcessingService:
                     },
                     "predicted_points": [],
                 }
-                add_on_payload = {"analytic_signal": [], "filtered_surface": [], "emag2_residual": [], "rtp_surface": [],
-                                  "selected_add_ons": [], "detail": "No add-ons — modelling disabled"}
+                add_on_payload = {
+                    "analytic_signal": [],
+                    "filtered_surface": [],
+                    "emag2_residual": [],
+                    "rtp_surface": [],
+                    "selected_add_ons": [],
+                    "detail": "No add-ons — modelling disabled",
+                }
                 prep = {
                     "frame": corrected,
                     "train_frame": corrected,
                     "predict_frame": pd.DataFrame({"latitude": [], "longitude": []}),
-                    "grid_x": dummy_grid,
-                    "grid_y": dummy_grid,
+                    "grid_x": grid_x,
+                    "grid_y": grid_y,
                 }
 
             self._update_run(run_id, 6, "running", "Saving results to your project...")
@@ -161,55 +183,85 @@ class ProcessingService:
         return self._store.get_processing_run(run_id)
 
     def _load_dataframe(self, task: dict) -> pd.DataFrame:
-        artifact = task["survey_files"][0]
-        csv_text = self._storage.download_text(artifact["bucket"], artifact["object_name"])
-        frame = pd.read_csv(io.StringIO(csv_text))
         mapping = task["column_mapping"]
+        frames: list[pd.DataFrame] = []
+        for artifact in task.get("survey_files") or []:
+            csv_text = self._storage.download_text(artifact["bucket"], artifact["object_name"])
+            frame = pd.read_csv(io.StringIO(csv_text))
+            missing_cols = [mapping["latitude"], mapping["longitude"]]
+            if any(col not in frame.columns for col in missing_cols):
+                log_event(
+                    "WARNING",
+                    "Survey file missing coordinate columns",
+                    task_id=task.get("id"),
+                    missing=missing_cols,
+                    file=artifact.get("object_name"),
+                )
+                continue
 
-        frame["_raw_lat"] = pd.to_numeric(frame[mapping["latitude"]], errors="coerce")
-        frame["_raw_lon"] = pd.to_numeric(frame[mapping["longitude"]], errors="coerce")
-        frame["magnetic"] = pd.to_numeric(frame.get(mapping["magnetic_field"], pd.Series(dtype=float)), errors="coerce")
+            frame["_raw_lat"] = pd.to_numeric(frame[mapping["latitude"]], errors="coerce")
+            frame["_raw_lon"] = pd.to_numeric(frame[mapping["longitude"]], errors="coerce")
+            frame["magnetic"] = pd.to_numeric(frame.get(mapping["magnetic_field"], pd.Series(dtype=float)), errors="coerce")
 
-        # Load time columns if present
-        for col_key, dest in [("hour", "_hour"), ("minute", "_minute"), ("second", "_second")]:
-            col_name = mapping.get(col_key)
-            if col_name and col_name in frame.columns:
-                frame[dest] = pd.to_numeric(frame[col_name], errors="coerce")
+            # Load time columns if present
+            for col_key, dest in [("hour", "_hour"), ("minute", "_minute"), ("second", "_second")]:
+                col_name = mapping.get(col_key)
+                if col_name and col_name in frame.columns:
+                    frame[dest] = pd.to_numeric(frame[col_name], errors="coerce")
 
-        # Drop rows with invalid coordinates
-        frame = frame.dropna(subset=["_raw_lat", "_raw_lon"]).copy()
+            # Drop rows with invalid coordinates
+            frame = frame.dropna(subset=["_raw_lat", "_raw_lon"]).copy()
 
-        # UTM conversion if needed
-        coord_sys = (mapping.get("coordinate_system") or "wgs84").lower()
-        if coord_sys == "utm":
-            from pyproj import Proj, transform as proj_transform
-            utm_zone = mapping.get("utm_zone")
-            utm_hemi = mapping.get("utm_hemisphere") or "N"
-            if not utm_zone:
-                first_n = float(frame["_raw_lat"].iloc[0])
-                utm_zone = 32
-                utm_hemi = "N" if first_n < 5_000_000 else "S"
-            south = str(utm_hemi).upper() == "S"
-            utm_proj = Proj(proj="utm", zone=int(utm_zone), ellps="WGS84", south=south)
-            wgs84_proj = Proj(proj="latlong", ellps="WGS84")
-            lats, lons = [], []
-            for _, row in frame.iterrows():
-                try:
-                    lon, lat = proj_transform(utm_proj, wgs84_proj, float(row["_raw_lon"]), float(row["_raw_lat"]))
-                    lats.append(lat); lons.append(lon)
-                except Exception:
-                    lats.append(None); lons.append(None)
-            frame["latitude"] = lats
-            frame["longitude"] = lons
-        else:
-            frame["latitude"] = frame["_raw_lat"]
-            frame["longitude"] = frame["_raw_lon"]
+            # UTM conversion if needed
+            coord_sys = (mapping.get("coordinate_system") or "wgs84").lower()
+            if coord_sys == "utm":
+                from pyproj import Proj, transform as proj_transform
+                utm_zone = mapping.get("utm_zone")
+                utm_hemi = mapping.get("utm_hemisphere") or "N"
+                if not utm_zone:
+                    first_n = float(frame["_raw_lat"].iloc[0])
+                    utm_zone = 32
+                    utm_hemi = "N" if first_n < 5_000_000 else "S"
+                south = str(utm_hemi).upper() == "S"
+                utm_proj = Proj(proj="utm", zone=int(utm_zone), ellps="WGS84", south=south)
+                wgs84_proj = Proj(proj="latlong", ellps="WGS84")
+                lats, lons = [], []
+                for _, row in frame.iterrows():
+                    try:
+                        lon, lat = proj_transform(utm_proj, wgs84_proj, float(row["_raw_lon"]), float(row["_raw_lat"]))
+                        lats.append(lat)
+                        lons.append(lon)
+                    except Exception:
+                        lats.append(None)
+                        lons.append(None)
+                frame["latitude"] = lats
+                frame["longitude"] = lons
+            else:
+                frame["latitude"] = frame["_raw_lat"]
+                frame["longitude"] = frame["_raw_lon"]
 
-        frame = frame.dropna(subset=["latitude", "longitude"])
+            frame = frame.dropna(subset=["latitude", "longitude"])
+            if not frame.empty:
+                frames.append(frame)
 
-        if frame.empty:
-            raise ValueError("No valid coordinate rows found in the survey file.")
-        return frame
+        if not frames:
+            raise ValueError("No valid coordinate rows found in the survey file(s).")
+
+        return pd.concat(frames, ignore_index=True)
+
+    @staticmethod
+    def _filter_predicted_to_bounds(predicted: list[dict], frame: pd.DataFrame) -> list[dict]:
+        if not predicted or frame.empty:
+            return predicted
+        min_lat, max_lat = float(frame["latitude"].min()), float(frame["latitude"].max())
+        min_lon, max_lon = float(frame["longitude"].min()), float(frame["longitude"].max())
+        pad_lat = max((max_lat - min_lat) * 0.05, 0.002)
+        pad_lon = max((max_lon - min_lon) * 0.05, 0.002)
+        return [
+            p for p in predicted
+            if min_lat - pad_lat <= p.get("latitude", 0) <= max_lat + pad_lat
+            and min_lon - pad_lon <= p.get("longitude", 0) <= max_lon + pad_lon
+        ]
 
     def _clean_dataframe(self, frame: pd.DataFrame) -> pd.DataFrame:
         cleaned = frame.copy()
@@ -367,6 +419,7 @@ class ProcessingService:
             result["predicted_points"] = prep["predict_frame"][["latitude", "longitude"]].head(600).to_dict(orient="records")
         else:
             result["predicted_points"] = []
+        result["predicted_points"] = self._filter_predicted_to_bounds(result["predicted_points"], prep["frame"])
         return result
 
     def _build_grid(self, task: dict, frame: pd.DataFrame):
@@ -389,8 +442,14 @@ class ProcessingService:
             line_interp = task.get("line_interpolation", True)
             if not line_interp:
                 # Full 2D grid mode — ignore traverse grouping
-                x_points = min(max(int(((lon_max - lon_min) / spacing_degrees) + 1), 25), 80)
-                y_points = min(max(int(((lat_max - lat_min) / spacing_degrees) + 1), 25), 80)
+                grid_rows = int(task.get("grid_rows") or 0)
+                grid_cols = int(task.get("grid_cols") or 0)
+                if grid_rows >= 2 and grid_cols >= 2:
+                    x_points = min(max(grid_cols, 2), 80)
+                    y_points = min(max(grid_rows, 2), 80)
+                else:
+                    x_points = min(max(int(((lon_max - lon_min) / spacing_degrees) + 1), 25), 80)
+                    y_points = min(max(int(((lat_max - lat_min) / spacing_degrees) + 1), 25), 80)
                 x_axis = np.linspace(lon_min, lon_max, x_points)
                 y_axis = np.linspace(lat_min, lat_max, y_points)
                 return np.meshgrid(x_axis, y_axis)
@@ -486,6 +545,16 @@ class ProcessingService:
         predictions = model.predict(np.column_stack([grid_x.ravel(), grid_y.ravel()]))
         return predictions.reshape(grid_x.shape)
 
+    def _nearest_surface(self, x, y, z, grid_x, grid_y):
+        import numpy as np
+        from scipy.spatial import cKDTree
+
+        if len(z) == 0:
+            return np.zeros_like(grid_x)
+        tree = cKDTree(np.column_stack([x, y]))
+        _, idx = tree.query(np.column_stack([grid_x.ravel(), grid_y.ravel()]), k=1)
+        return z[idx].reshape(grid_x.shape)
+
     def _uncertainty_surface(self, x, y, grid_x, grid_y, variance):
         import numpy as np
         from scipy.spatial import cKDTree
@@ -553,8 +622,10 @@ class ProcessingService:
         }
         if "predicted_points" in results:
             payload["predicted_points"] = results["predicted_points"]
+
+        payload = self._sanitize_payload(payload)
         artifacts = []
-        json_bytes = json.dumps(payload).encode("utf-8")
+        json_bytes = json.dumps(payload, allow_nan=False).encode("utf-8")
         artifacts.append(
             self._storage.upload_result(
                 project_id=task["project_id"],
@@ -618,6 +689,23 @@ class ProcessingService:
                 ).model_dump(mode="json")
             )
         return {"data": payload, "artifacts": artifacts}
+
+    def _sanitize_payload(self, value):
+        if value is None:
+            return None
+        if isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            if math.isnan(value) or math.isinf(value):
+                return None
+            return value
+        if isinstance(value, dict):
+            return {key: self._sanitize_payload(val) for key, val in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._sanitize_payload(val) for val in value]
+        if hasattr(value, "item"):
+            return self._sanitize_payload(value.item())
+        return value
 
     def _render_heatmap_png(self, surface) -> bytes:
         from matplotlib import pyplot as plt

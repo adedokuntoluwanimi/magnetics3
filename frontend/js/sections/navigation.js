@@ -11,6 +11,20 @@ function closeProjsDropdown() {
   document.getElementById("projsDropdown").style.display = "none";
 }
 
+let cachedProjects = null;
+let cachedProjectsAt = 0;
+
+async function getProjectsCached() {
+  const now = Date.now();
+  if (cachedProjects && now - cachedProjectsAt < 15000) {
+    return cachedProjects;
+  }
+  const projects = await listProjects();
+  cachedProjects = projects;
+  cachedProjectsAt = now;
+  return projects;
+}
+
 async function openProjsDropdown() {
   const dropdown = document.getElementById("projsDropdown");
   const list = document.getElementById("projsDropList");
@@ -21,7 +35,7 @@ async function openProjsDropdown() {
   dropdown.style.display = "block";
   list.innerHTML = `<div style="padding:10px 13px;font-size:11px;color:var(--text3)">Loading…</div>`;
   try {
-    const projects = await listProjects();
+    const projects = await getProjectsCached();
     if (!projects.length) {
       list.innerHTML = `<div style="padding:10px 13px;font-size:11px;color:var(--text3)">No projects yet.</div>`;
       return;
@@ -40,6 +54,7 @@ async function openProjsDropdown() {
 
 export function initNavigation() {
   const legacyToggleFS = window.toggleFS.bind(window);
+  getProjectsCached().catch(() => null);
 
   window.goHome = () => window.go(document.querySelector("[data-s=home]"));
   window.startProject = () => {
@@ -69,9 +84,11 @@ export function initNavigation() {
   window.toggleSidebar = () => {
     const sidebar = document.getElementById("sidebar");
     const expandBtn = document.getElementById("sbExpandBtn");
+    const collapseBtn = document.getElementById("sbCollapseBtn");
     if (!sidebar) return;
     const collapsed = sidebar.classList.toggle("collapsed");
     if (expandBtn) expandBtn.style.display = collapsed ? "flex" : "none";
+    if (collapseBtn) collapseBtn.style.display = collapsed ? "none" : "flex";
   };
 
   window.toggleProjectsDropdown = () => {
@@ -95,18 +112,8 @@ export function initNavigation() {
       const projects = await listProjects();
       const project = projects.find((p) => p.id === projectId);
       if (!project) return;
-      setProject(project);
-      clearTask();
-      clearProcessingRun();
-      const tasks = await listTasks(projectId);
-      if (tasks.length) setTask(tasks[0]);
-      const ctxTxt = document.getElementById("ctxTxt");
-      if (ctxTxt) ctxTxt.textContent = project.name;
-      document.getElementById("sidebar")?.classList.remove("off");
-      const {refreshSidebar} = await import("./sidebar.js");
-      await refreshSidebar();
-      // goProjectScreen activates screen-project and deactivates all nav links
-      window.goProjectScreen?.();
+      const {selectProject} = await import("./sidebar.js");
+      await selectProject(project);
     } catch (err) {
       showGlobalNotice(err.message || "Could not load project.");
     }

@@ -5,7 +5,7 @@
 This file captures the working context for the `gaia-magnetics` project.
 `Instructions.txt` in the parent workspace remains the single source of truth for required product behavior, architecture, workflow, and GCP design.
 
-Last updated: `2026-03-22` after revision `gaia-magnetics-00028-mqk`.
+Last updated: `2026-03-24` after revision `gaia-magnetics-00043-fkg`.
 
 ## Workspace And Paths
 
@@ -29,7 +29,7 @@ Last updated: `2026-03-22` after revision `gaia-magnetics-00028-mqk`.
 - AI project:
   `app-01-488817-ai`
 - Latest deployed revision:
-  `gaia-magnetics-00028-mqk`
+  `gaia-magnetics-00043-fkg`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
@@ -160,6 +160,17 @@ frontend/
 - Task 3-dot menu includes "Edit task setup" — calls `window.loadTaskForEdit(task, project)` to pre-fill step 2 form.
 - Preview map: fullscreen button (`.map-fs-btn`), color picker (`.map-color-picker`, 6 swatches). `recolorSurveyMarkers(color)` exported from `maps.js`.
 - Preview map predicted points (sparse): hollow blue circles rendered separately from measured green filled circles.
+- Preview uses backend predicted points only (no synthetic fallback).
+- Preview basemap selector is custom; Google map type control is disabled.
+- Processing page no longer renders a map panel.
+
+## Recent Fixes (2026-03-24)
+
+- Processing results payload is sanitized (NaN/inf -> null) before saving to Firestore to avoid InvalidArgument errors.
+- Multi-line surveys are merged during processing (all survey files are loaded).
+- Predicted points are clamped to measured bounds both in preview and processing outputs.
+- Processing with prediction modelling disabled now uses nearest-neighbor interpolation on real data (no dummy grid/surface).
+- Basemap choices limited to Terrain, Satellite, Hybrid, Dark.
 
 ## Infrastructure And Runtime Configuration
 

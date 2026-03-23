@@ -3,7 +3,6 @@ import {renderWorkflowProgress} from "./progress.js";
 import {appState, setProcessingRun, setTask} from "../state.js";
 import {ensureElement} from "../shared/dom.js";
 import {formatNumber, titleCase} from "../shared/format.js";
-import {renderStationMap} from "./maps.js";
 
 let pollHandle = null;
 let startPromise = null;
@@ -90,20 +89,6 @@ function renderLogs(run) {
   `;
 }
 
-let _procMapRendered = false;
-
-async function renderProcessingMap() {
-  const host = document.getElementById("procMapHost");
-  if (!host) return;
-  const points = appState.task?.dataset_profile?.preview_points || [];
-  // Only render once per task to avoid re-initialising the map on every poll tick
-  if (_procMapRendered && host.dataset.taskId === appState.task?.id) return;
-  _procMapRendered = true;
-  host.dataset.taskId = appState.task?.id || "";
-  if (points.length) {
-    await renderStationMap(host, points, {zoom: 11});
-  }
-}
 
 function renderSideStats(task) {
   const roots = getRoots();
@@ -174,7 +159,6 @@ export async function loadProcessingView() {
   }
   const roots = getRoots();
   renderSideStats(appState.task);
-  await renderProcessingMap();
   if (appState.processingRun?.id) {
     renderPipeline(appState.processingRun);
     renderLogs(appState.processingRun);
@@ -216,7 +200,6 @@ export async function triggerProcessing() {
 }
 
 export function initProcessing() {
-  window.renderProcMap = () => renderProcessingMap();
   window.startProc = triggerProcessing;
   window.triggerProcessing = triggerProcessing;
 }

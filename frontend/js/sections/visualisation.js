@@ -165,9 +165,19 @@ async function renderLineProfiles(results) {
   await Plotly.newPlot(host, traces, commonLayout, {displayModeBar: false, responsive: true});
 }
 
+function hasSurfaceGrid(results) {
+  if (!results?.surface || !results?.grid_x || !results?.grid_y) return false;
+  if (!Array.isArray(results.surface) || !Array.isArray(results.grid_y)) return false;
+  return results.surface.length > 1 && results.grid_y.length > 1;
+}
+
 async function renderPlot(mode, results) {
   const Plotly = await ensurePlotly();
   const host = ensureHost();
+  if (!hasSurfaceGrid(results)) {
+    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">Surface grid is not available for this task. Try Line profiles or Map overlay.</div>`;
+    return;
+  }
   const commonLayout = {
     margin: {t: 20, r: 12, b: 42, l: 48},
     paper_bgcolor: "transparent",
@@ -208,6 +218,10 @@ async function renderPlot(mode, results) {
 
 async function renderMapOverlay(results) {
   const host = ensureHost();
+  if (!results?.points?.length) {
+    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">No point data available for map overlay.</div>`;
+    return;
+  }
   await renderStationMap(host, results.points, {weighted: true});
 }
 

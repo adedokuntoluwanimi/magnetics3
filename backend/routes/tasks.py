@@ -32,6 +32,9 @@ async def create_task(
     processing_mode: str = Form(...),
     station_spacing: float | None = Form(None),
     station_spacing_unit: str | None = Form(None),
+    line_interpolation: str | None = Form(None),
+    grid_rows: int | None = Form(None),
+    grid_cols: int | None = Form(None),
     corrected_corrections: str = Form("[]"),
     column_mapping: str = Form(...),
     metadata: str = Form("{}"),
@@ -40,6 +43,9 @@ async def create_task(
     service=Depends(get_task_service),
 ) -> dict:
     try:
+        line_interp_val = True
+        if line_interpolation is not None:
+            line_interp_val = str(line_interpolation).lower() in {"1", "true", "yes", "y"}
         payload = TaskCreatePayload(
             name=name,
             description=description,
@@ -49,6 +55,9 @@ async def create_task(
             processing_mode=ProcessingMode(processing_mode),
             station_spacing=station_spacing,
             station_spacing_unit=station_spacing_unit,
+            line_interpolation=line_interp_val,
+            grid_rows=grid_rows,
+            grid_cols=grid_cols,
             corrected_corrections=json.loads(corrected_corrections or "[]"),
             column_mapping=ColumnMapping(**json.loads(column_mapping)),
             metadata=json.loads(metadata or "{}"),

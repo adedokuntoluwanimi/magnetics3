@@ -378,6 +378,10 @@ async function submitTaskFlow() {
     const spacingUnit = getEl("spacingUnit")?.value;
     if (spacingUnit) fd.set("station_spacing_unit", spacingUnit);
     fd.set("line_interpolation", String(window.state?.lineMode !== "grid"));
+    if (window.state?.lineMode === "grid") {
+      fd.set("grid_rows", String(window.state?.gridRows || 12));
+      fd.set("grid_cols", String(window.state?.gridCols || 8));
+    }
     appState.surveyFiles.forEach((f) => fd.append("survey_files", f, f.name));
     if (appState.basemapFile) fd.append("basemap_file", appState.basemapFile, appState.basemapFile.name);
 
@@ -482,6 +486,24 @@ export function initSetup() {
   });
   getEl("setupSaveBtn")?.addEventListener("click", submitTaskFlow);
 
+  function clampGrid(val, fallback) {
+    const n = parseInt(val || fallback, 10);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(2, Math.min(40, n));
+  }
+
+  function syncGridState() {
+    if (!window.state) window.state = {};
+    const rowsInput = getEl("gridRowsInput");
+    const colsInput = getEl("gridColsInput");
+    const rows = clampGrid(rowsInput?.value, 12);
+    const cols = clampGrid(colsInput?.value, 8);
+    window.state.gridRows = rows;
+    window.state.gridCols = cols;
+    if (rowsInput) rowsInput.value = rows;
+    if (colsInput) colsInput.value = cols;
+  }
+
   window.setLineMode = (m) => {
     if (!window.state) window.state = {};
     window.state.lineMode = m;
@@ -499,7 +521,19 @@ export function initSetup() {
         circle.innerHTML = "";
       }
     });
+    const gridRow = getEl("gridModeRow");
+    if (gridRow) gridRow.style.display = m === "grid" ? "block" : "none";
+    if (m === "grid") syncGridState();
   };
+
+  getEl("gridRowsInput")?.addEventListener("input", () => {
+    syncGridState();
+    window.drawPreviewMap?.();
+  });
+  getEl("gridColsInput")?.addEventListener("input", () => {
+    syncGridState();
+    window.drawPreviewMap?.();
+  });
 
   // Override legacy inline setState to show/hide raw data section
   const legacySetState = window.setState?.bind(window);
@@ -572,8 +606,18 @@ export function initSetup() {
     document.querySelectorAll(".plt-opt").forEach((el) => el.classList.toggle("selected", el.id === `plt-${platform}`));
     if (window.state) window.state.platform = platform;
     const scenario = task.scenario || "explicit";
-    document.querySelectorAll(".radio-opt[id^='sc-']").forEach((el) => el.classList.toggle("selected", el.id === `sc-${scenario}`));
+    window.setScenario?.(scenario);
     if (window.state) window.state.scenario = scenario;
+    if (scenario === "sparse") {
+      const lineMode = task.line_interpolation === false ? "grid" : "line";
+      window.setLineMode?.(lineMode);
+      const rows = task.grid_rows || task.metadata?.grid_rows;
+      const cols = task.grid_cols || task.metadata?.grid_cols;
+      const rowsInput = getEl("gridRowsInput");
+      const colsInput = getEl("gridColsInput");
+      if (rowsInput && rows) rowsInput.value = rows;
+      if (colsInput && cols) colsInput.value = cols;
+    }
     const dataState = task.data_state || "corrected";
     document.querySelectorAll(".radio-opt[id^='state-']").forEach((el) => el.classList.toggle("selected", el.id === `state-${dataState}`));
     const mapping = task.column_mapping || {};
