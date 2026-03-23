@@ -3,7 +3,7 @@ import {persistAnalysis} from "./analysis.js";
 import {renderWorkflowProgress} from "./progress.js";
 import {appState, setTask} from "../state.js";
 import {titleCase} from "../shared/format.js";
-import {renderStationMap, recolorSurveyMarkers} from "./maps.js";
+import {renderStationMap, recolorSurveyMarkers, recolorPredictedMarkers} from "./maps.js";
 
 // Human-readable labels for normalized backend IDs
 const CORRECTION_LABELS = {
@@ -137,10 +137,20 @@ export async function loadPreview() {
     // Show color picker and wire up setMapColor
     const colorPicker = document.getElementById("mapColorPicker");
     if (colorPicker) colorPicker.style.display = "block";
+    // Show predicted colour row only if there are predicted points
+    const predColorLabel = document.getElementById("predColorLabel");
+    const predColorSwatches = document.getElementById("predColorSwatches");
+    if (predColorLabel) predColorLabel.style.display = predictedPoints.length ? "block" : "none";
+    if (predColorSwatches) predColorSwatches.style.display = predictedPoints.length ? "flex" : "none";
 
     window.setMapColor = (color, swatchEl) => {
       recolorSurveyMarkers(color);
-      document.querySelectorAll(".mcp-swatch").forEach((s) => s.classList.remove("active"));
+      document.querySelectorAll(".mcp-swatch-survey").forEach((s) => s.classList.remove("active"));
+      swatchEl?.classList.add("active");
+    };
+    window.setPredictedColor = (color, swatchEl) => {
+      recolorPredictedMarkers(color);
+      document.querySelectorAll(".mcp-swatch-pred").forEach((s) => s.classList.remove("active"));
       swatchEl?.classList.add("active");
     };
 

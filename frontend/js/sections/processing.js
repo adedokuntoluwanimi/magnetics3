@@ -96,12 +96,13 @@ async function renderProcessingMap() {
   const host = document.getElementById("procMapHost");
   if (!host) return;
   const points = appState.task?.dataset_profile?.preview_points || [];
-  if (!points.length) return;
   // Only render once per task to avoid re-initialising the map on every poll tick
   if (_procMapRendered && host.dataset.taskId === appState.task?.id) return;
   _procMapRendered = true;
   host.dataset.taskId = appState.task?.id || "";
-  await renderStationMap(host, points, {zoom: 11});
+  if (points.length) {
+    await renderStationMap(host, points, {zoom: 11});
+  }
 }
 
 function renderSideStats(task) {

@@ -66,6 +66,14 @@ export function initNavigation() {
   };
   window.toggleFS = () => legacyToggleFS();
 
+  window.toggleSidebar = () => {
+    const sidebar = document.getElementById("sidebar");
+    const expandBtn = document.getElementById("sbExpandBtn");
+    if (!sidebar) return;
+    const collapsed = sidebar.classList.toggle("collapsed");
+    if (expandBtn) expandBtn.style.display = collapsed ? "flex" : "none";
+  };
+
   window.toggleProjectsDropdown = () => {
     const dd = document.getElementById("projsDropdown");
     if (dd.style.display === "none" || !dd.style.display) {
@@ -97,7 +105,8 @@ export function initNavigation() {
       document.getElementById("sidebar")?.classList.remove("off");
       const {refreshSidebar} = await import("./sidebar.js");
       await refreshSidebar();
-      window.go(document.querySelector("[data-s=analysis]"));
+      // goProjectScreen activates screen-project and deactivates all nav links
+      window.goProjectScreen?.();
     } catch (err) {
       showGlobalNotice(err.message || "Could not load project.");
     }

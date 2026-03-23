@@ -37,18 +37,18 @@
   --shadow-md:0 4px 14px rgba(0,0,0,0.55);
   --shadow-lg:0 10px 36px rgba(0,0,0,0.7);
 }
-html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);overflow:hidden;transition:background 0.2s}
+html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background:var(--bg);overflow:hidden;transition:background 0.2s}
 #shell{display:flex;flex-direction:column;height:100vh;background:var(--bg);transition:background 0.2s,color 0.2s}
 
 /* TOP NAV */
-.topnav{height:50px;border-bottom:1px solid var(--border2);display:flex;align-items:center;padding:0 20px;flex-shrink:0;background:var(--bg);z-index:20;transition:background 0.2s,border-color 0.2s}
+.topnav{height:54px;border-bottom:1px solid var(--border2);display:flex;align-items:center;padding:0 22px;flex-shrink:0;background:var(--bg);z-index:20;transition:background 0.2s,border-color 0.2s}
 .logo{display:flex;align-items:center;gap:8px;cursor:pointer;margin-right:24px;text-decoration:none}
 .logo-g{font-family:'Roboto',sans-serif;font-size:21px;font-weight:700;color:var(--g500);letter-spacing:3px;line-height:1}
 .logo-sep{width:1px;height:16px;background:var(--border2)}
 .logo-tag{font-size:9px;font-weight:700;letter-spacing:2px;color:var(--text3);text-transform:uppercase}
 .nav-links{display:flex;height:100%;align-items:center;gap:1px;flex:1;overflow-x:auto}
 .nav-links::-webkit-scrollbar{display:none}
-.nlnk{padding:0 12px;height:34px;display:flex;align-items:center;font-size:11.5px;font-weight:600;color:var(--text3);cursor:pointer;border-radius:var(--r);transition:all 0.15s;white-space:nowrap}
+.nlnk{padding:0 14px;height:38px;display:flex;align-items:center;font-size:14px;font-weight:600;color:var(--text3);cursor:pointer;border-radius:var(--r);transition:all 0.15s;white-space:nowrap}
 .nlnk:hover{color:var(--text2);background:var(--bg3)}
 .nlnk.active{color:var(--g500);background:var(--g50);border-bottom:2px solid var(--g400)}
 .nav-right{display:flex;align-items:center;gap:7px;margin-left:12px;flex-shrink:0}
@@ -62,6 +62,11 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
 .body{display:flex;flex:1;overflow:hidden}
 .sidebar{width:214px;min-width:160px;max-width:480px;border-right:1px solid var(--border);background:var(--bg2);flex-shrink:0;display:flex;flex-direction:column;padding:14px 0;overflow-y:auto;transition:background 0.2s,border-color 0.2s;position:relative}
 .sidebar.off{display:none}
+.sidebar.collapsed{width:0;min-width:0;overflow:hidden;border:none;padding:0}
+.sb-collapse-btn{position:absolute;top:10px;right:8px;width:22px;height:22px;border:1px solid var(--border2);border-radius:4px;background:var(--bg3);color:var(--text3);font-size:16px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:5;transition:all 0.15s;padding:0}
+.sb-collapse-btn:hover{background:var(--bg4);color:var(--text)}
+.sb-expand-btn{width:22px;flex-shrink:0;border-right:1px solid var(--border);border-top:none;border-bottom:none;border-left:none;background:var(--bg2);color:var(--text3);font-size:18px;cursor:pointer;display:flex;align-items:flex-start;justify-content:center;padding-top:12px;transition:all 0.15s}
+.sb-expand-btn:hover{background:var(--bg3);color:var(--text)}
 /* Sidebar 3-dots menu */
 .sb-dots-wrap{display:none;margin-left:auto;flex-shrink:0;position:relative}
 .sbi:hover .sb-dots-wrap{display:flex}
@@ -85,8 +90,8 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
 /* Inline rename input */
 .sb-rename-input{background:var(--bg3);border:1px solid var(--g400);border-radius:4px;font-family:'Manrope',sans-serif;font-size:12px;font-weight:600;color:var(--text);padding:2px 6px;width:100%;outline:none;box-shadow:0 0 0 2px rgba(45,170,82,0.15)}
 .sbs{margin-bottom:18px}
-.sbh{font-size:9px;font-weight:700;letter-spacing:2px;color:var(--text4);padding:0 16px 7px;text-transform:uppercase}
-.sbi{display:flex;align-items:center;gap:9px;padding:7px 16px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text3);border-left:2px solid transparent;transition:all 0.14s}
+.sbh{font-size:11px;font-weight:700;letter-spacing:2px;color:var(--text4);padding:0 16px 8px;text-transform:uppercase}
+.sbi{display:flex;align-items:center;gap:9px;padding:9px 16px;cursor:pointer;font-size:14px;font-weight:600;color:var(--text3);border-left:2px solid transparent;transition:all 0.14s}
 .sbi:hover{color:var(--text2);background:var(--bg3);border-left-color:var(--g200)}
 .sbi.active{color:var(--g600);background:var(--g50);border-left-color:var(--g400)}
 .sdot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
@@ -107,14 +112,14 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
 .screen.active{display:flex}
 @keyframes fadeUp{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
 .shdr{padding:18px 26px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
-.stitle{font-family:'Roboto',sans-serif;font-size:16px;font-weight:600;color:var(--text);}
-.ssub{font-size:11px;color:var(--text3);margin-top:3px;font-weight:500}
+.stitle{font-family:'Roboto',sans-serif;font-size:20px;font-weight:600;color:var(--text);}
+.ssub{font-size:13.5px;color:var(--text3);margin-top:3px;font-weight:500}
 .scroll{flex:1;overflow-y:auto;padding:20px 26px}
 .scroll::-webkit-scrollbar{width:3px}
 .scroll::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
 
 /* BUTTONS */
-.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:var(--r);font-size:12.5px;font-weight:700;cursor:pointer;border:none;font-family:'Manrope',sans-serif;letter-spacing:0.2px;white-space:nowrap;transition:all 0.15s}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:10px 22px;border-radius:var(--r);font-size:14px;font-weight:700;cursor:pointer;border:none;font-family:'Manrope',sans-serif;letter-spacing:0.2px;white-space:nowrap;transition:all 0.15s}
 .btn-g{background:var(--g500);color:#fff}
 .btn-g:hover{background:var(--g600);transform:translateY(-1px);box-shadow:var(--shadow-md)}
 .btn-out{background:transparent;color:var(--text2);border:1.5px solid var(--border3)}
@@ -209,8 +214,8 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
 /* CONFIG ROWS */
 .crow{display:flex;justify-content:space-between;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border)}
 .crow:last-child{border:none}
-.ck{font-size:11.5px;color:var(--text3);font-weight:500}
-.cv{font-size:12px;font-weight:700;color:var(--text);text-align:right;max-width:55%}
+.ck{font-size:12.5px;color:var(--text3);font-weight:500}
+.cv{font-size:13px;font-weight:700;color:var(--text);text-align:right;max-width:55%}
 
 /* AURORA PANEL */
 .a-panel{width:278px;flex-shrink:0;background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
@@ -429,7 +434,6 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
   <!-- TOP NAV -->
   <nav class="topnav">
     <a class="logo" onclick="goHome()">
-      <img src="/frontend/logo-dark.png" alt="GAIA Magnetics" style="width:24px;height:24px;border-radius:6px;object-fit:cover">
       <span class="logo-g">GAIA</span>
       <div class="logo-sep"></div>
       <span class="logo-tag">Magnetics</span>
@@ -446,7 +450,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
     <div class="nav-right">
       <span id="ctxTxt" style="display:none"></span><span id="ctxBadge" style="display:none"></span>
       <div style="position:relative">
-        <button class="ibtn" id="projsDropBtn" onclick="toggleProjectsDropdown()" title="All projects" style="font-size:11px;font-weight:700;padding:0 10px;width:auto;gap:4px">Projects ▾</button>
+        <button class="ibtn" id="projsDropBtn" onclick="toggleProjectsDropdown()" title="All projects" style="font-size:13px;font-weight:700;padding:0 16px;width:auto;height:36px;gap:5px;letter-spacing:0.1px">Projects ▾</button>
         <div id="projsDropdown" style="display:none;position:fixed;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r);box-shadow:var(--shadow-lg);z-index:999;min-width:220px;max-height:320px;overflow-y:auto;padding:4px 0" onclick="event.stopPropagation()">
           <div id="projsDropList" style="display:flex;flex-direction:column"></div>
         </div>
@@ -459,12 +463,16 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
   <div class="body">
     <!-- SIDEBAR -->
     <div class="sidebar off" id="sidebar">
+      <!-- Collapse toggle pinned to top-right of sidebar -->
+      <button class="sb-collapse-btn" id="sbCollapseBtn" onclick="window.toggleSidebar?.()" title="Collapse sidebar">‹</button>
       <div class="sbs" id="sb-projects">
         <div class="sbh">Projects</div>
         <div id="sb-project-list"></div>
         <div class="sbi" style="color:var(--g500)" id="sb-new-project"><div class="sdot d-new"></div>New project…</div>
       </div>
     </div>
+    <!-- Expand button shown when sidebar is collapsed -->
+    <button class="sb-expand-btn" id="sbExpandBtn" style="display:none" onclick="window.toggleSidebar?.()" title="Show projects">›</button>
 
     <!-- SCREENS -->
     <div class="main" id="mainArea">
@@ -495,17 +503,6 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
               <div class="cap-card"><div class="cap-t">Interactive visualisation</div><div class="cap-d">View your results as heatmaps, contour overlays, or 3D surface plots on an interactive map.</div></div>
               <div class="cap-card"><div class="cap-t">Multi-format export</div><div class="cap-d">Download your processed results as PDF, GeoJSON, KML, Shapefile, CSV, or a ready-to-present report.</div></div>
               <div class="cap-card"><div class="cap-t">End-to-end workflow</div><div class="cap-d">From raw survey CSV to final deliverable — everything happens in one place, no specialist software needed.</div></div>
-            </div>
-          </div>
-
-          <!-- ABOUT -->
-          <div class="hsec">
-            <div class="hslabel">Company</div>
-            <div class="hstitle">GAIA — Geospatial Automation and Inference Analysis</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:32px;margin-top:4px">
-              <div style="font-size:13px;color:var(--text2);line-height:1.9;font-weight:500;text-align:justify">GAIA combines proven geostatistical methods with modern machine learning to deliver complete survey coverage from partial field data. Professional-grade accuracy without surveying every point.</div>
-              <div style="font-size:13px;color:var(--text2);line-height:1.9;font-weight:500;text-align:justify">Traditional magnetic surveys require dense, uniform coverage — time-consuming, expensive, and often impractical in difficult terrain. GAIA changes this. By treating your collected stations as a training dataset, the platform learns the spatial structure of your magnetic field and predicts values across unmeasured locations with quantified uncertainty. The result is a complete, high-resolution survey product generated from a fraction of the fieldwork.</div>
-              <div style="font-size:13px;color:var(--text2);line-height:1.9;font-weight:500;text-align:justify">Built by Terracode Analytics, GAIA is designed for exploration geophysicists, engineering firms, and research teams who need reliable outputs under real-world constraints — limited budgets, difficult access, or tight timelines. The platform handles corrections, modelling, AI-assisted interpretation, and professional export in a single end-to-end workflow, without requiring specialist software or manual scripting.</div>
             </div>
           </div>
 
@@ -842,47 +839,74 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
 
       <!-- ═══ PREVIEW ═══ -->
       <div class="screen" id="screen-preview" style="flex-direction:row;position:relative">
-        <!-- Loading overlay — shown while fetchPreview runs -->
+        <!-- Loading overlay -->
         <div class="pv-loading" id="pvLoadingOverlay" style="display:none">
           <div class="pipe-spinner" style="width:32px;height:32px"></div>
           <div class="pv-loading-label" id="pvLoadingLabel">Loading preview...</div>
         </div>
-        <div class="split-l">
-          <div class="sep first">Configuration summary</div>
-          <div class="card" style="margin-bottom:12px">
-            <div class="sep first">Project &amp; task</div>
-            <div class="crow"><span class="ck">Project</span><span class="cv" id="pv-project">—</span></div>
-            <div class="crow"><span class="ck">Task</span><span class="cv" id="pv-task">—</span></div>
-            <div class="crow"><span class="ck">Points</span><span class="cv" id="pv-points">—</span></div>
-  <div class="crow"><span class="ck">Survey traverses</span><span class="cv" id="pv-traverses">—</span></div>
-  <div class="crow"><span class="ck">Predicted traverses</span><span class="cv" id="pv-pred-traverses">—</span></div>
-            <div class="crow"><span class="ck">Platform</span><span class="cv" id="pv-platform">—</span></div>
-            <div class="crow"><span class="ck">Scenario</span><span class="cv" id="pv-scenario">—</span></div>
-            <div class="crow"><span class="ck">Mode</span><span class="cv" id="pv-mode">—</span></div>
-            <div class="crow"><span class="ck">Reference files</span><span class="cv" id="pv-basemap">—</span></div>
-          </div>
-          <div class="card" style="margin-bottom:12px">
-            <div class="sep first">Analysis</div>
-            <div class="crow"><span class="ck">Corrections</span><span class="cv" id="pv-corrections">—</span></div>
-            <div class="crow"><span class="ck">Model</span><span class="cv" id="pv-model">—</span></div>
-            <div class="crow"><span class="ck">Add-ons</span><span class="cv" id="pv-addons">—</span></div>
-            <div class="crow"><span class="ck">Est. runtime</span><span class="cv" id="pv-runtime" style="color:var(--g500)">—</span></div>
-          </div>
 
-          <!-- STATION MAP PREVIEW -->
-          <div class="sep">Station preview</div>
-          <div class="map-preview-wrap" style="height:300px;margin-bottom:16px">
+        <!-- LEFT: narrow config + aurora + execute -->
+        <div style="width:290px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--border);background:var(--bg2);overflow:hidden">
+          <div style="flex:1;overflow-y:auto;padding:16px 16px 0">
+            <div class="sep first" style="margin:0 0 10px;font-size:10px">Configuration summary</div>
+            <div class="card" style="margin-bottom:10px;padding:0">
+              <div class="crow"><span class="ck">Project</span><span class="cv" id="pv-project">—</span></div>
+              <div class="crow"><span class="ck">Task</span><span class="cv" id="pv-task">—</span></div>
+              <div class="crow"><span class="ck">Points</span><span class="cv" id="pv-points">—</span></div>
+              <div class="crow"><span class="ck">Survey traverses</span><span class="cv" id="pv-traverses">—</span></div>
+              <div class="crow"><span class="ck">Predicted traverses</span><span class="cv" id="pv-pred-traverses">—</span></div>
+              <div class="crow"><span class="ck">Platform</span><span class="cv" id="pv-platform">—</span></div>
+              <div class="crow"><span class="ck">Scenario</span><span class="cv" id="pv-scenario">—</span></div>
+              <div class="crow"><span class="ck">Mode</span><span class="cv" id="pv-mode">—</span></div>
+              <div class="crow"><span class="ck">Basemap</span><span class="cv" id="pv-basemap">—</span></div>
+              <div class="crow"><span class="ck">Corrections</span><span class="cv" id="pv-corrections">—</span></div>
+              <div class="crow"><span class="ck">Model</span><span class="cv" id="pv-model">—</span></div>
+              <div class="crow"><span class="ck">Add-ons</span><span class="cv" id="pv-addons">—</span></div>
+              <div class="crow"><span class="ck">Est. runtime</span><span class="cv" id="pv-runtime" style="color:var(--g500)">—</span></div>
+            </div>
+            <!-- Aurora inline -->
+            <div style="margin-bottom:14px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                <div class="a-gem"><div class="a-core" style="width:8px;height:8px;border-radius:50%;background:var(--g400)"></div></div>
+                <span style="font-size:13px;font-weight:700;color:var(--text)">Aurora</span>
+                <span class="badge bg" style="font-size:9px;margin-left:auto">AI</span>
+              </div>
+              <div class="a-body" style="padding:0;max-height:220px;overflow-y:auto">
+                <div class="amsg">I've reviewed your project context and configuration. Here is what to expect.</div>
+                <div class="ahi">Complete your project setup and analysis configuration — Aurora will generate a detailed pre-run assessment based on your specific inputs.</div>
+              </div>
+            </div>
+          </div>
+          <!-- Execute pinned to bottom -->
+          <div style="padding:14px 16px;border-top:1px solid var(--border);flex-shrink:0;display:flex;gap:8px">
+            <button class="btn btn-out btn-sm" style="flex:1" onclick="go(document.querySelector('[data-s=analysis]'))">Edit config</button>
+            <button class="btn btn-g btn-sm" style="flex:1" onclick="go(document.querySelector('[data-s=processing]'));startProc()">Execute →</button>
+          </div>
+        </div>
+
+        <!-- RIGHT: map fills remaining space — absolute so height is always defined -->
+        <div style="flex:1;position:relative;overflow:hidden">
+          <div class="map-preview-wrap" style="position:absolute;top:0;left:0;right:0;bottom:0;margin:0;border-radius:0">
             <svg width="100%" height="100%" viewBox="0 0 520 300" id="previewMap"></svg>
             <button class="map-fs-btn" id="previewMapFsBtn" title="Full screen" onclick="(function(){const w=document.getElementById('previewMapFsCanvas')||document.getElementById('previewMapCanvas')||document.getElementById('previewMap');if(w){if(document.fullscreenElement){document.exitFullscreen();}else{w.requestFullscreen?.();}}})()">⛶</button>
             <div class="map-color-picker" id="mapColorPicker" style="display:none">
-              <div class="mcp-label">Station colour</div>
-              <div class="mcp-swatches">
-                <div class="mcp-swatch active" data-color="#2daa52" style="background:#2daa52" onclick="window.setMapColor?.('#2daa52',this)"></div>
-                <div class="mcp-swatch" data-color="#e05c2e" style="background:#e05c2e" onclick="window.setMapColor?.('#e05c2e',this)"></div>
-                <div class="mcp-swatch" data-color="#5ba8d4" style="background:#5ba8d4" onclick="window.setMapColor?.('#5ba8d4',this)"></div>
-                <div class="mcp-swatch" data-color="#f5c842" style="background:#f5c842" onclick="window.setMapColor?.('#f5c842',this)"></div>
-                <div class="mcp-swatch" data-color="#9b5de5" style="background:#9b5de5" onclick="window.setMapColor?.('#9b5de5',this)"></div>
-                <div class="mcp-swatch" data-color="#f72585" style="background:#f72585" onclick="window.setMapColor?.('#f72585',this)"></div>
+              <div class="mcp-label">Measured colour</div>
+              <div class="mcp-swatches" style="margin-bottom:6px">
+                <div class="mcp-swatch mcp-swatch-survey active" data-color="#2daa52" style="background:#2daa52" onclick="window.setMapColor?.('#2daa52',this)"></div>
+                <div class="mcp-swatch mcp-swatch-survey" data-color="#e05c2e" style="background:#e05c2e" onclick="window.setMapColor?.('#e05c2e',this)"></div>
+                <div class="mcp-swatch mcp-swatch-survey" data-color="#5ba8d4" style="background:#5ba8d4" onclick="window.setMapColor?.('#5ba8d4',this)"></div>
+                <div class="mcp-swatch mcp-swatch-survey" data-color="#f5c842" style="background:#f5c842" onclick="window.setMapColor?.('#f5c842',this)"></div>
+                <div class="mcp-swatch mcp-swatch-survey" data-color="#9b5de5" style="background:#9b5de5" onclick="window.setMapColor?.('#9b5de5',this)"></div>
+                <div class="mcp-swatch mcp-swatch-survey" data-color="#f72585" style="background:#f72585" onclick="window.setMapColor?.('#f72585',this)"></div>
+              </div>
+              <div class="mcp-label" id="predColorLabel" style="display:none">Predicted colour</div>
+              <div class="mcp-swatches" id="predColorSwatches" style="display:none">
+                <div class="mcp-swatch mcp-swatch-pred active" data-color="#5ba8d4" style="background:#5ba8d4" onclick="window.setPredictedColor?.('#5ba8d4',this)"></div>
+                <div class="mcp-swatch mcp-swatch-pred" data-color="#f5c842" style="background:#f5c842" onclick="window.setPredictedColor?.('#f5c842',this)"></div>
+                <div class="mcp-swatch mcp-swatch-pred" data-color="#f72585" style="background:#f72585" onclick="window.setPredictedColor?.('#f72585',this)"></div>
+                <div class="mcp-swatch mcp-swatch-pred" data-color="#9b5de5" style="background:#9b5de5" onclick="window.setPredictedColor?.('#9b5de5',this)"></div>
+                <div class="mcp-swatch mcp-swatch-pred" data-color="#e05c2e" style="background:#e05c2e" onclick="window.setPredictedColor?.('#e05c2e',this)"></div>
+                <div class="mcp-swatch mcp-swatch-pred" data-color="#fff" style="background:#fff;border:1px solid #ccc" onclick="window.setPredictedColor?.('#ffffff',this)"></div>
               </div>
             </div>
             <div class="map-legend" id="mapLegend">
@@ -891,28 +915,6 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
               <div class="map-legend-item" id="leg-base" style="display:none"><div class="leg-dot" style="background:rgba(168,94,14,0.6);border-radius:0"></div>Basemap overlay</div>
             </div>
             <div class="map-attribution">© Terracode Analytics · Google Maps</div>
-          </div>
-
-          <div style="display:flex;gap:10px;justify-content:flex-end">
-            <button class="btn btn-out" onclick="go(document.querySelector('[data-s=analysis]'))">Edit configuration</button>
-            <button class="btn btn-g" onclick="go(document.querySelector('[data-s=processing]'));startProc()">Execute →</button>
-          </div>
-        </div>
-        <div class="a-panel">
-          <div class="a-hdr">
-            <div class="a-title"><div class="a-gem"><div class="a-core" style="width:9px;height:9px;border-radius:50%;background:var(--g400)"></div></div>Aurora<span class="badge bg" style="margin-left:auto;font-size:9.5px">AI</span></div>
-            <div class="a-sub">Pre-run validation</div>
-          </div>
-          <div class="a-body">
-            <div class="amsg">I've reviewed your project context and configuration. Here is what to expect.</div>
-            <div class="ahi">Complete your project setup and analysis configuration — Aurora will generate a detailed pre-run assessment based on your specific inputs.</div>
-            <div class="amsg">Aurora reviews your station spacing, selected corrections, modelling approach, and project context to flag potential issues and outline expected outputs before you commit to processing.</div>
-            <div class="ahi">If a basemap has been uploaded, Aurora will also confirm how it will appear as an overlay layer in Visualisations.</div>
-            <div class="amsg">Once your configuration is complete, return to this screen to review Aurora's full pre-run analysis before executing.</div>
-            <div style="margin-top:14px;display:flex;flex-direction:column;gap:7px">
-              <button class="btn btn-ghost btn-xs" style="width:100%;justify-content:center">What changes with hybrid model? ↗</button>
-              <button class="btn btn-ghost btn-xs" style="width:100%;justify-content:center">Explain explicit vs sparse ↗</button>
-            </div>
           </div>
         </div>
       </div>
@@ -1007,7 +1009,9 @@ html,body{height:100%;font-family:'Manrope',sans-serif;background:var(--bg);over
           </div>
           <div style="margin-top:12px;font-size:11.5px;color:var(--text3);font-weight:500" id="procEta">Processing in progress…</div>
         </div>
-        <div id="procMapHost" style="display:none"></div>
+        <div style="width:420px;flex-shrink:0;position:relative;border-left:1px solid var(--border)">
+          <div id="procMapHost" style="position:absolute;top:0;left:0;right:0;bottom:0"></div>
+        </div>
       </div>
 
       <!-- ═══ VISUALISATION ═══ -->

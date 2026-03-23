@@ -15,6 +15,13 @@ export function recolorSurveyMarkers(color) {
   });
 }
 
+export function recolorPredictedMarkers(color) {
+  _predictedMarkers.forEach((m) => {
+    const icon = m.getIcon();
+    m.setIcon({...icon, strokeColor: color});
+  });
+}
+
 function getBounds(points) {
   const bounds = new google.maps.LatLngBounds();
   points.forEach((point) => bounds.extend({lat: Number(point.latitude), lng: Number(point.longitude)}));
@@ -47,10 +54,12 @@ export async function renderStationMap(container, points, {weighted = false, zoo
   const maps = await ensureGoogleMaps();
   const validPoints = (points || []).filter((point) => Number.isFinite(Number(point.latitude)) && Number.isFinite(Number(point.longitude)));
   // Ensure container has explicit pixel dimensions before creating the map.
-  // Parse inline style first — offsetHeight can be 0 if the screen just became visible.
-  const parentStyleH = parseInt(container.parentElement?.style?.height, 10);
-  const parentH = parentStyleH || container.parentElement?.offsetHeight || 300;
-  container.style.height = parentH + "px";
+  // Use getBoundingClientRect which returns the actual rendered size regardless of
+  // how the height was set (flex, %, inline) — offsetHeight can be 0 on screens
+  // that just became visible.
+  const rect = container.getBoundingClientRect();
+  const h = rect.height > 10 ? rect.height : (container.parentElement?.getBoundingClientRect().height || 400);
+  container.style.height = h + "px";
   container.style.width = "100%";
 
   const center = validPoints[0]
