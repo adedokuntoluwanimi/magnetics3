@@ -72,7 +72,7 @@ export function initNavigation() {
       const active = document.querySelector(".screen.active")?.id;
       if (active === "screen-preview" && appState.project && appState.task) {
         await loadPreview();
-      } else if (active === "screen-visualisation" && appState.task?.results?.data) {
+      } else if (active === "screen-visualisation" && appState.task?.results?.artifacts?.length) {
         await loadVisualisation();
       }
     } catch (error) {
@@ -83,12 +83,12 @@ export function initNavigation() {
 
   window.toggleSidebar = () => {
     const sidebar = document.getElementById("sidebar");
-    const expandBtn = document.getElementById("sbExpandBtn");
-    const collapseBtn = document.getElementById("sbCollapseBtn");
     if (!sidebar) return;
-    const collapsed = sidebar.classList.toggle("collapsed");
-    if (expandBtn) expandBtn.style.display = collapsed ? "flex" : "none";
-    if (collapseBtn) collapseBtn.style.display = collapsed ? "none" : "flex";
+    // Complete collapse — no residual expand button
+    sidebar.classList.toggle("collapsed");
+    // Always hide the expand button (full collapse, no half-visible indicator)
+    document.getElementById("sbExpandBtn")?.style.setProperty("display", "none");
+    document.getElementById("sbCollapseBtn")?.style.setProperty("display", "flex");
   };
 
   window.toggleProjectsDropdown = () => {
@@ -128,7 +128,7 @@ export function initNavigation() {
     document.getElementById(`screen-${target}`)?.classList.add("active");
     document.querySelectorAll(".nlnk").forEach((node) => node.classList.remove("active"));
     document.querySelector(`[data-s=${target}]`)?.classList.add("active");
-    document.getElementById("sidebar")?.classList.toggle("off", target === "home");
+    document.getElementById("sidebar")?.classList.toggle("off", target === "home" || target === "preview");
     const contextBadge = document.getElementById("ctxBadge");
     if (contextBadge) {
       contextBadge.style.display = target !== "home" && appState.project ? "flex" : "none";
@@ -136,6 +136,18 @@ export function initNavigation() {
     window.cur = target;
     if (typeof window.setStatus === "function" && Array.isArray(window.sorder)) {
       window.setStatus(window.smap?.[target] || "Ready", window.sorder.indexOf(target) - 1);
+    }
+    // Guard: all workflow screens require a project to be active
+    const workflowScreens = ["analysis", "preview", "processing", "visualisation", "export", "project"];
+    if (workflowScreens.includes(target) && !appState.project) {
+      // Undo screen change and redirect to setup
+      document.querySelectorAll(".screen").forEach((node) => node.classList.remove("active"));
+      document.getElementById("screen-home")?.classList.add("active");
+      document.querySelectorAll(".nlnk").forEach((node) => node.classList.remove("active"));
+      document.getElementById("sidebar")?.classList.add("off");
+      window.cur = "home";
+      showGlobalNotice("Create a project first to continue.");
+      return null;
     }
     try {
       hideGlobalNotice();

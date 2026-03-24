@@ -77,8 +77,31 @@ class StorageBackend:
         return blob.download_as_bytes()
 
     def _safe_signed_url(self, blob, bucket_name: str, object_name: str) -> str:
+        import datetime
+        import json
+        import urllib.request
+
         try:
-            return blob.generate_signed_url(version="v4", expiration=3600)
+            # On Cloud Run, ADC does not carry SA credentials for signing.
+            # Query the metadata server for the SA email and a fresh access token,
+            # then pass them explicitly so generate_signed_url uses the IAM API.
+            _base = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default"
+            _headers = {"Metadata-Flavor": "Google"}
+
+            def _meta(path: str) -> str:
+                req = urllib.request.Request(f"{_base}/{path}", headers=_headers)
+                return urllib.request.urlopen(req, timeout=3).read().decode().strip()
+
+            sa_email = _meta("email")
+            token_data = json.loads(_meta("token"))
+            access_token = token_data["access_token"]
+
+            return blob.generate_signed_url(
+                version="v4",
+                expiration=datetime.timedelta(hours=1),
+                service_account_email=sa_email,
+                access_token=access_token,
+            )
         except Exception as exc:
             log_event(
                 "WARNING",
@@ -88,4 +111,5 @@ class StorageBackend:
                 object_name=object_name,
                 error=str(exc),
             )
-            return f"https://storage.googleapis.com/{bucket_name}/{object_name}"
+            # Proxy through the API rather than direct GCS (buckets are private)
+            return f"/api/storage/download?bucket={quote(bucket_name)}&object={quote(object_name)}"

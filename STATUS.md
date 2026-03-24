@@ -126,6 +126,13 @@
 - Processing page SVG map replaced with real Google Maps (`#procMapHost`)
 - Preview page: Survey traverses + Predicted traverses rows added; `preview_service.py` computes them from point groupings
 
+### E2E fixes (2026-03-24, rev 00044-55t)
+
+- **pyproj `transform` removed fix**: Both `preview_service.py` and `processing_service.py` used `from pyproj import transform` which was deleted in pyproj 3.0 (installed: 3.7.1). Replaced with `Transformer.from_proj(..., always_xy=True)` in both files. This was crashing all UTM data (preview map empty, processing failed).
+- **Signed URL → download proxy**: `_safe_signed_url` in `storage_backend.py` now tries metadata-server signing (SA email + access token) first. Falls back to `/api/storage/download?bucket=...&object=...` proxy endpoint instead of direct public GCS URL (bucket is private). New `backend/routes/storage.py` added with `GET /api/storage/download` endpoint that streams GCS objects through the API.
+- **PDF export None crash**: `task["description"]` in `_build_pdf` replaced with `task.get("description") or ""` to guard against None.
+- Cloud Run Job `gaia-magnetics-processing` updated to same image so UTM fix applies to job execution too.
+
 ### Processing + preview + basemap cleanup (2026-03-23 to 2026-03-24, rev 00040 to 00043)
 
 - Preview uses backend predicted points only (no synthetic fallback).

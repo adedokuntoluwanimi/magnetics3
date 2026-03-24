@@ -14,6 +14,7 @@ from backend.routes.health import router as health_router
 from backend.routes.maps import router as maps_router
 from backend.routes.processing import router as processing_router
 from backend.routes.projects import router as projects_router
+from backend.routes.storage import router as storage_router
 from backend.routes.tasks import router as tasks_router
 
 settings = get_settings()
@@ -31,6 +32,7 @@ app.include_router(tasks_router)
 app.include_router(processing_router)
 app.include_router(ai_router)
 app.include_router(exports_router)
+app.include_router(storage_router)
 app.include_router(maps_router)
 
 frontend_dir = Path(settings.frontend_dir)

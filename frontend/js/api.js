@@ -69,6 +69,10 @@ export function fetchTask(projectId, taskId) {
   return request(`/api/projects/${projectId}/tasks/${taskId}`);
 }
 
+export function fetchTaskResults(projectId, taskId) {
+  return request(`/api/projects/${projectId}/tasks/${taskId}/results`);
+}
+
 export function startProcessing(taskId) {
   return request(`/api/processing/tasks/${taskId}/runs`, {method: "POST"});
 }

@@ -14,7 +14,6 @@ import {
 } from "../state.js";
 import {clearFlash, setFlash} from "../shared/dom.js";
 
-
 function splitCsvHeader(text) {
   const first = (text || "").split(/\r?\n/, 1)[0] || "";
   return first.split(",").map((v) => v.trim()).filter(Boolean);

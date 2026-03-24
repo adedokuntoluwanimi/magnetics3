@@ -25,6 +25,11 @@ const MAP_STYLES = {
     {featureType: "water", elementType: "geometry", stylers: [{color: "#b8d6e2"}]},
     {featureType: "poi", elementType: "labels.text.fill", stylers: [{color: "#7b8a7f"}]},
   ],
+  greyscale: [
+    {elementType: "all", stylers: [{saturation: -100}]},
+    {featureType: "water", stylers: [{lightness: -10}]},
+    {featureType: "road", elementType: "geometry", stylers: [{lightness: 10}]},
+  ],
   dark: [
     {elementType: "geometry", stylers: [{color: "#1d2320"}]},
     {elementType: "labels.text.stroke", stylers: [{color: "#1f2a24"}]},
@@ -33,6 +38,7 @@ const MAP_STYLES = {
     {featureType: "water", elementType: "geometry", stylers: [{color: "#182028"}]},
     {featureType: "poi", elementType: "geometry", stylers: [{color: "#242b26"}]},
   ],
+  // "roadmap", "terrain", "satellite", "hybrid" use Google's native types (no custom style)
 };
 
 export function recolorSurveyMarkers(color) {
@@ -157,27 +163,57 @@ export async function renderStationMap(container, points, {weighted = false, zoo
     maps.event.trigger(map, "resize");
     if (validPoints.length) map.fitBounds(getBounds(validPoints));
   }, 600);
-  validPoints.slice(0, 600).forEach((point) => {
+  // Draw continuous polylines along survey traverses (group by line_id if available)
+  const lineGroups = new Map();
+  validPoints.forEach((p) => {
+    const key = p.line_id != null ? String(p.line_id) : "all";
+    if (!lineGroups.has(key)) lineGroups.set(key, []);
+    lineGroups.get(key).push(p);
+  });
+  lineGroups.forEach((pts) => {
+    if (pts.length < 2) return;
+    new maps.Polyline({
+      map,
+      path: pts.map((p) => ({lat: Number(p.latitude), lng: Number(p.longitude)})),
+      strokeColor: "#2daa52",
+      strokeOpacity: 0.55,
+      strokeWeight: 1.5,
+    });
+  });
+
+  validPoints.slice(0, 800).forEach((point) => {
+    const isBase = point.is_base_station;
     const marker = new maps.Marker({
       map,
       position: {lat: Number(point.latitude), lng: Number(point.longitude)},
-      icon: {
-        path: maps.SymbolPath.CIRCLE,
-        scale: 4,
-        fillColor: "#2daa52",
-        fillOpacity: 0.8,
-        strokeColor: "#114d23",
-        strokeWeight: 1,
-      },
-      title: `${Number(point.magnetic || 0).toFixed(2)} nT`,
+      icon: isBase
+        ? {
+            path: "M 0,-6 6,6 -6,6 Z", // triangle for base station
+            scale: 1,
+            fillColor: "#e07b14",
+            fillOpacity: 0.9,
+            strokeColor: "#7a3d00",
+            strokeWeight: 1.5,
+          }
+        : {
+            path: maps.SymbolPath.CIRCLE,
+            scale: 4,
+            fillColor: "#2daa52",
+            fillOpacity: 0.8,
+            strokeColor: "#114d23",
+            strokeWeight: 1,
+          },
+      title: isBase ? "Base station" : `${Number(point.magnetic || 0).toFixed(2)} nT`,
     });
     marker.addListener("click", () => {
+      const label = isBase ? "Base station" : "Survey station";
       _infoWindow.setContent(`
         <div style="font-family:'Manrope',sans-serif;font-size:12px;min-width:140px">
-          <div style="font-weight:700;margin-bottom:6px;color:#071a0b">Survey station</div>
+          <div style="font-weight:700;margin-bottom:6px;color:#071a0b">${label}</div>
           <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:3px"><span style="color:#5a8264">Latitude</span><span style="font-family:'JetBrains Mono',monospace;font-weight:600">${Number(point.latitude).toFixed(6)}</span></div>
           <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:3px"><span style="color:#5a8264">Longitude</span><span style="font-family:'JetBrains Mono',monospace;font-weight:600">${Number(point.longitude).toFixed(6)}</span></div>
-          ${point.magnetic != null ? `<div style="display:flex;justify-content:space-between;gap:12px;border-top:1px solid #e0e0e0;padding-top:5px;margin-top:5px"><span style="color:#5a8264">Magnetic</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:#13401d">${Number(point.magnetic).toFixed(2)} nT</span></div>` : ""}
+          ${point.magnetic != null ? `<div style="display:flex;justify-content:space-between;gap:12px;border-top:1px solid #e0e0e0;padding-top:5px;margin-top:5px"><span style="color:#5a8264">Magnetic</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:${isBase ? "#7a3d00" : "#13401d"}">${Number(point.magnetic).toFixed(2)} nT</span></div>` : ""}
+          ${isBase ? `<div style="margin-top:5px;font-size:10px;color:#7a3d00;font-weight:600">Used for diurnal correction</div>` : ""}
         </div>
       `);
       _infoWindow.open(map, marker);

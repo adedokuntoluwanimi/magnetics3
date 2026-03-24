@@ -21,13 +21,28 @@ class ExportService:
         self._storage = storage_backend
         self._ai_service = ai_service
 
+    def _load_full_results(self, task: dict) -> dict:
+        """Load the full results payload (including 2D grids) from GCS results.json."""
+        artifacts = (task.get("results") or {}).get("artifacts") or []
+        results_artifact = next(
+            (a for a in artifacts if a.get("file_name") == "results.json"), None
+        )
+        if not results_artifact:
+            raise ValueError("Results file not found. Run processing first.")
+        data = self._storage.download_bytes(
+            results_artifact["bucket"], results_artifact["object_name"]
+        )
+        return json.loads(data)
+
     def create_export(self, task_id: str, request: ExportRequest) -> dict:
         task = self._store.get_task(task_id)
         if not task:
             raise ValueError("Task not found.")
-        if not task.get("results", {}).get("data"):
+        artifacts = (task.get("results") or {}).get("artifacts") or []
+        if not any(a.get("file_name") == "results.json" for a in artifacts):
             raise ValueError("Run processing before exporting.")
 
+        full_results = self._load_full_results(task)
         project = self._store.get_project(task["project_id"])
         aurora = self._ai_service.generate_response(
             task["project_id"],
@@ -38,11 +53,11 @@ class ExportService:
 
         job = ExportJob(task_id=task_id, formats=request.formats, status="running")
         persisted = self._store.create_export_job(job.model_dump(mode="json"))
-        artifacts = []
+        artifacts_out = []
         for export_format in request.formats:
-            artifact = self._build_artifact(project, task, export_format, aurora)
+            artifact = self._build_artifact(project, task, full_results, export_format, aurora)
             if artifact:
-                artifacts.append(artifact.model_dump(mode="json"))
+                artifacts_out.append(artifact.model_dump(mode="json"))
 
         completed = self._store.update_export_job(
             persisted["id"],
@@ -50,7 +65,7 @@ class ExportService:
                 "status": "completed",
                 "updated_at": utc_now(),
                 "details": {
-                    "artifacts": artifacts,
+                    "artifacts": artifacts_out,
                     "aurora": aurora.model_dump(mode="json"),
                     "sections": request.aurora_sections,
                 },
@@ -68,8 +83,7 @@ class ExportService:
         log_event("INFO", "Export completed", action="export.complete", task_id=task_id, export_job_id=completed["id"])
         return completed
 
-    def _build_artifact(self, project: dict, task: dict, export_format: str, aurora):
-        data = task["results"]["data"]
+    def _build_artifact(self, project: dict, task: dict, data: dict, export_format: str, aurora):
         normalized = export_format.lower()
         if normalized == "csv":
             rows = []
@@ -265,7 +279,7 @@ class ExportService:
         pdf.drawString(48, 800, project["name"])
         pdf.drawString(48, 782, task["name"])
         pdf.drawString(48, 764, f"Generated: {utc_now()}")
-        pdf.drawString(48, 746, task["description"][:96])
+        pdf.drawString(48, 746, (task.get("description") or "")[:96])
         stats = task["results"]["data"]["stats"]
         pdf.drawString(48, 718, f"Mean magnetic field: {stats['mean']:.2f}")
         pdf.drawString(48, 700, f"Std dev: {stats['std']:.2f}")

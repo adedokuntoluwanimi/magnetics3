@@ -63,7 +63,9 @@ class ProcessingService:
         try:
             self._update_run(run_id, 0, "running", "Checking your uploaded survey data...")
             frame = self._load_dataframe(task)
-            self._update_run(run_id, 0, "completed", f"{len(frame)} survey readings loaded successfully")
+            frame, n_removed = self._remove_coordinate_outliers(frame)
+            removed_msg = f" ({n_removed} out-of-area points removed)" if n_removed > 0 else ""
+            self._update_run(run_id, 0, "completed", f"{len(frame)} survey readings loaded{removed_msg}")
 
             self._update_run(run_id, 1, "running", "Removing duplicates and sorting data...")
             cleaned = self._clean_dataframe(frame)
@@ -115,7 +117,10 @@ class ProcessingService:
                     "surface": surface,
                     "uncertainty": uncertainty,
                     "model_used": "none",
-                    "points": corrected[["latitude", "longitude", "magnetic"]].to_dict(orient="records"),
+                    "points": corrected[["latitude", "longitude", "magnetic"]
+                        + (["__is_base_station__"] if "__is_base_station__" in corrected.columns else [])
+                        + (["_line_id"] if "_line_id" in corrected.columns else [])
+                    ].rename(columns={"__is_base_station__": "is_base_station", "_line_id": "line_id"}).to_dict(orient="records"),
                     "stats": {
                         "min": float(corrected["magnetic"].min()), "max": float(corrected["magnetic"].max()),
                         "mean": float(corrected["magnetic"].mean()), "std": float(corrected["magnetic"].std()),
@@ -215,7 +220,7 @@ class ProcessingService:
             # UTM conversion if needed
             coord_sys = (mapping.get("coordinate_system") or "wgs84").lower()
             if coord_sys == "utm":
-                from pyproj import Proj, transform as proj_transform
+                from pyproj import Proj, Transformer
                 utm_zone = mapping.get("utm_zone")
                 utm_hemi = mapping.get("utm_hemisphere") or "N"
                 if not utm_zone:
@@ -225,10 +230,11 @@ class ProcessingService:
                 south = str(utm_hemi).upper() == "S"
                 utm_proj = Proj(proj="utm", zone=int(utm_zone), ellps="WGS84", south=south)
                 wgs84_proj = Proj(proj="latlong", ellps="WGS84")
+                transformer = Transformer.from_proj(utm_proj, wgs84_proj, always_xy=True)
                 lats, lons = [], []
                 for _, row in frame.iterrows():
                     try:
-                        lon, lat = proj_transform(utm_proj, wgs84_proj, float(row["_raw_lon"]), float(row["_raw_lat"]))
+                        lon, lat = transformer.transform(float(row["_raw_lon"]), float(row["_raw_lat"]))
                         lats.append(lat)
                         lons.append(lon)
                     except Exception:
@@ -248,6 +254,23 @@ class ProcessingService:
             raise ValueError("No valid coordinate rows found in the survey file(s).")
 
         return pd.concat(frames, ignore_index=True)
+
+    @staticmethod
+    def _remove_coordinate_outliers(frame: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+        """Remove points whose coordinates are statistical outliers (3×IQR fence)."""
+        original_len = len(frame)
+        for col in ("latitude", "longitude"):
+            if col not in frame.columns or frame.empty:
+                continue
+            q1 = frame[col].quantile(0.25)
+            q3 = frame[col].quantile(0.75)
+            iqr = q3 - q1
+            if iqr == 0:
+                continue
+            lo = q1 - 3 * iqr
+            hi = q3 + 3 * iqr
+            frame = frame[(frame[col] >= lo) & (frame[col] <= hi)]
+        return frame.reset_index(drop=True), original_len - len(frame)
 
     @staticmethod
     def _filter_predicted_to_bounds(predicted: list[dict], frame: pd.DataFrame) -> list[dict]:
@@ -405,7 +428,10 @@ class ProcessingService:
             "surface": surface,
             "uncertainty": uncertainty,
             "model_used": model_used,
-            "points": prep["frame"][["latitude", "longitude", "magnetic"]].to_dict(orient="records"),
+            "points": prep["frame"][["latitude", "longitude", "magnetic"]
+                + (["__is_base_station__"] if "__is_base_station__" in prep["frame"].columns else [])
+                + (["_line_id"] if "_line_id" in prep["frame"].columns else [])
+            ].rename(columns={"__is_base_station__": "is_base_station", "_line_id": "line_id"}).to_dict(orient="records"),
             "stats": {
                 "min": float(np.nanmin(surface)),
                 "max": float(np.nanmax(surface)),
@@ -626,15 +652,14 @@ class ProcessingService:
         payload = self._sanitize_payload(payload)
         artifacts = []
         json_bytes = json.dumps(payload, allow_nan=False).encode("utf-8")
-        artifacts.append(
-            self._storage.upload_result(
-                project_id=task["project_id"],
-                task_id=task["id"],
-                file_name="results.json",
-                content_type="application/json",
-                data=json_bytes,
-            ).model_dump(mode="json")
-        )
+        results_artifact = self._storage.upload_result(
+            project_id=task["project_id"],
+            task_id=task["id"],
+            file_name="results.json",
+            content_type="application/json",
+            data=json_bytes,
+        ).model_dump(mode="json")
+        artifacts.append(results_artifact)
 
         grid_frame = pd.DataFrame(
             {
@@ -688,7 +713,17 @@ class ProcessingService:
                     data=renderer(results["surface"]),
                 ).model_dump(mode="json")
             )
-        return {"data": payload, "artifacts": artifacts}
+        # Firestore rejects list-of-lists (nested arrays). Store only lightweight
+        # scalar/1D data in the task document; full grid data lives in results.json.
+        _2d_keys = {"grid_x", "grid_y", "surface", "uncertainty", "analytic_signal",
+                    "filtered_surface", "emag2_residual", "rtp_surface"}
+        firestore_data = {k: v for k, v in payload.items() if k not in _2d_keys}
+        # Cap points to 500 for Firestore document size limits
+        if "points" in firestore_data:
+            firestore_data["points"] = firestore_data["points"][:500]
+        if "predicted_points" in firestore_data:
+            firestore_data["predicted_points"] = firestore_data["predicted_points"][:500]
+        return {"data": firestore_data, "artifacts": artifacts}
 
     def _sanitize_payload(self, value):
         if value is None:

@@ -16,6 +16,18 @@ const IDLE_STEPS = [
   {name: "Save results", detail: "Queued"},
 ];
 
+// Approximate ETA per step in seconds (shown while queued/running)
+const STEP_ETA = [5, 4, 6, 8, 45, 12, 6];
+
+const CORRECTION_LABELS = {
+  diurnal: "Diurnal correction", igrf: "IGRF removal",
+  filtering: "Filtering", lag: "Lag correction", heading: "Heading correction",
+};
+const ADD_ON_LABELS = {
+  rtp: "RTP", analytic_signal: "Analytic signal", emag2: "EMAG2 comparison", uncertainty: "Uncertainty",
+};
+const MODEL_LABELS = {kriging: "Kriging", ml: "Machine learning", hybrid: "Hybrid", none: "No modelling"};
+
 function getRoots() {
   const screen = document.getElementById("screen-processing");
   const sideRows = screen.querySelectorAll(".srow .sv");
@@ -42,19 +54,36 @@ function statusBadge(status) {
 }
 
 function renderPipeline(run) {
+  const runPrediction = appState.task?.analysis_config?.run_prediction !== false;
   const roots = getRoots();
-  roots.pipeWrap.innerHTML = (run?.steps || []).map((step, index) => `
-    <div class="pipe-card ${step.status === "completed" ? "done" : ""}">
+  const visibleSteps = (run?.steps || [])
+    .map((step, originalIndex) => ({...step, originalIndex}))
+    .filter((step) => runPrediction || step.name?.toLowerCase() !== "modelling");
+  roots.pipeWrap.innerHTML = visibleSteps.map((step, displayIndex) => {
+    const isRunning = step.status === "running";
+    const etaSec = STEP_ETA[step.originalIndex] || 10;
+    const etaLabel = etaSec >= 60 ? `~${Math.round(etaSec / 60)} min` : `~${etaSec}s`;
+    const etaHtml = step.status === "queued"
+      ? `<div style="font-size:10px;color:var(--text4);margin-top:3px">Est. ${etaLabel}</div>`
+      : "";
+    const progressBar = isRunning
+      ? `<div class="prog-bar" style="margin-top:8px;width:100%;max-width:220px"><div class="prog-fill" style="width:60%;animation:progPulse 2s ease-in-out infinite"></div></div>`
+      : "";
+    return `
+    <div class="pipe-card ${step.status === "completed" ? "done" : ""}${isRunning ? " running" : ""}">
       <div class="pipe-card-inner">
-        <div class="pipe-icon-wrap" style="font-size:12px;font-weight:700;font-family:'Roboto',sans-serif;color:var(--g600)">${String(index + 1).padStart(2, "0")}</div>
+        <div class="pipe-icon-wrap" style="font-size:12px;font-weight:700;font-family:'Roboto',sans-serif;color:var(--g600)">${String(displayIndex + 1).padStart(2, "0")}</div>
         <div class="pipe-text">
           <div class="pipe-name">${titleCase(step.name)}</div>
           <div class="pipe-detail">${step.detail || titleCase(step.status)}</div>
+          ${etaHtml}
+          ${progressBar}
         </div>
         <div class="pipe-status">${statusBadge(step.status)}</div>
       </div>
     </div>
-  `).join("");
+  `;
+  }).join("");
 }
 
 function renderIdlePipeline() {
@@ -89,6 +118,49 @@ function renderLogs(run) {
   `;
 }
 
+
+function renderConfigSummary(task) {
+  const screen = document.getElementById("screen-processing");
+  let card = document.getElementById("procConfigCard");
+  if (!card) {
+    card = document.createElement("div");
+    card.id = "procConfigCard";
+    card.style.cssText = "margin-bottom:16px";
+    const pipeWrap = document.getElementById("pipeWrap");
+    pipeWrap?.parentNode?.insertBefore(card, pipeWrap);
+  }
+  const config = task?.analysis_config || {};
+  const corrections = (config.corrections || []).map((c) => CORRECTION_LABELS[c] || c);
+  const addOns = (config.add_ons || []).map((a) => ADD_ON_LABELS[a] || a);
+  const model = MODEL_LABELS[config.model] || config.model || "Machine learning";
+  const scenario = task?.scenario || "sparse";
+  const spacing = task?.station_spacing
+    ? `${task.station_spacing} ${task.station_spacing_unit || "m"}`
+    : null;
+  const runPrediction = config.run_prediction !== false;
+
+  const badge = (text, color) =>
+    `<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10.5px;font-weight:700;background:var(--${color}-bg,var(--bg2));color:var(--${color},var(--text2));margin:2px 3px 2px 0">${text}</span>`;
+
+  const rows = [
+    ["Scenario", badge(titleCase(scenario), "g5")],
+    ...(spacing ? [["Grid spacing", badge(spacing, "blue")]] : []),
+    ["Model", badge(model, runPrediction ? "amber" : "text4")],
+    corrections.length ? ["Corrections", corrections.map((c) => badge(c, "g5")).join("")] : null,
+    addOns.length ? ["Add-ons", addOns.map((a) => badge(a, "blue")).join("")] : null,
+  ].filter(Boolean);
+
+  card.innerHTML = `
+    <div class="sep first">Your configuration</div>
+    <div class="card card-sm" style="padding:10px 14px">
+      ${rows.map(([k, v]) => `
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-bottom:1px solid var(--g100)">
+          <div style="font-size:11px;color:var(--text3);font-weight:500;min-width:100px;padding-top:3px">${k}</div>
+          <div style="flex:1;line-height:1.6">${v}</div>
+        </div>`).join("")}
+    </div>
+  `;
+}
 
 function renderSideStats(task) {
   const roots = getRoots();
@@ -158,6 +230,7 @@ export async function loadProcessingView() {
     throw new Error("Create a task before opening Processing.");
   }
   const roots = getRoots();
+  renderConfigSummary(appState.task);
   renderSideStats(appState.task);
   if (appState.processingRun?.id) {
     renderPipeline(appState.processingRun);

@@ -270,6 +270,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 .pipe-status{flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .prog-bar{width:90px;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
 .prog-fill{height:100%;border-radius:2px;background:var(--g400);transition:width 0.5s ease}
+@keyframes progPulse{0%,100%{opacity:1}50%{opacity:0.45}}
 .pipe-check{width:28px;height:28px;border-radius:50%;background:var(--g100);display:flex;align-items:center;justify-content:center;color:var(--g600);font-size:14px}
 .pipe-spinner{width:28px;height:28px;border-radius:50%;border:3px solid var(--g100);border-top-color:var(--g400);animation:dotspin 0.8s linear infinite}
 .pipe-pending-dot{width:28px;height:28px;border-radius:50%;background:var(--bg3);display:flex;align-items:center;justify-content:center}
@@ -487,6 +488,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
           <div class="hero">
             <div class="hero-grid-bg"></div>
             <div class="hero-name">G<span>AI</span>A</div>
+            <div style="font-size:11px;font-weight:600;color:var(--g500);letter-spacing:2px;margin-bottom:6px;text-transform:uppercase">Geospatial Analysis and Inference Architecture</div>
             <div class="hero-sub">Magnetic Data Processing Platform</div>
             <div class="hero-desc">From raw survey CSV to publication-ready interpretation — corrections, modelling, AI analysis, and multi-format export in a single workflow.</div>
             <div class="hero-btns">
@@ -901,6 +903,10 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
                 <option value="satellite">Satellite</option>
                 <option value="hybrid">Hybrid</option>
                 <option value="dark">Dark</option>
+                <option value="light">Light</option>
+                <option value="muted">Muted green</option>
+                <option value="greyscale">Greyscale</option>
+                <option value="roadmap">Roadmap</option>
               </select>
             </div>
             <div class="map-color-picker" id="mapColorPicker" style="display:none">
@@ -1036,8 +1042,6 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             <div class="vt" onclick="pickVis(this,'Line Profiles')">Line profiles</div>
           </div>
           <div style="display:flex;align-items:center;gap:7px;margin-left:auto">
-            <span class="badge bgr">Awaiting results</span>
-            <span class="badge" style="background:var(--amber-bg);color:var(--amber)">Analytic signal</span>
             <button class="btn btn-sm btn-out" onclick="go(document.querySelector('[data-s=export]'))">Export ↗</button>
           </div>
         </div>
@@ -1048,8 +1052,8 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             </div>
             <div style="margin-top:9px;display:flex;align-items:center;gap:7px;flex-wrap:wrap">
               <span style="font-size:10px;font-weight:700;color:var(--text4);letter-spacing:1px">LAYERS</span>
-              <span class="badge bg">TMF grid</span><span class="badge ba">23 anomalies</span><span class="badge bb">15 lineaments</span><span class="badge bg">3 circular</span><span class="badge" style="background:var(--amber-bg);color:var(--amber)">Basemap</span>
-              <span style="font-size:10px;color:var(--text4);margin-left:auto">Google Maps · IGRS 84</span>
+              <span class="badge bg">TMF grid</span>
+              <span style="font-size:10px;color:var(--text4);margin-left:auto">Google Maps / Plotly</span>
             </div>
           </div>
           <div style="width:270px;flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid var(--border);overflow:hidden">
@@ -1058,8 +1062,8 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
               <div class="srow"><span class="sk">Mean TMF</span><span class="sv">—</span></div>
               <div class="srow"><span class="sk">Std dev</span><span class="sv">—</span></div>
               <div class="srow"><span class="sk">Anomalies</span><span class="sv" style="color:var(--amber)">—</span></div>
-              <div class="srow"><span class="sk">Lineaments</span><span class="sv" style="color:var(--blue)">—</span></div>
-              <div class="srow"><span class="sk">Circular</span><span class="sv" style="color:var(--g500)">—</span></div>
+              <div class="srow"><span class="sk">Min</span><span class="sv" style="color:var(--blue)">—</span></div>
+              <div class="srow"><span class="sk">Max</span><span class="sv" style="color:var(--g500)">—</span></div>
             </div>
             <div style="padding:10px 15px;border-bottom:1px solid var(--border)">
               <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--text4);text-transform:uppercase;margin-bottom:7px">Value scale</div>
@@ -1068,17 +1072,12 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
                 <span>Min</span><span>Mean</span><span>Max</span>
               </div>
             </div>
-            <div class="a-panel" style="width:100%;border:none;border-left:none;flex:1">
-              <div class="a-hdr">
-                <div class="a-title"><div class="a-gem"><div class="a-core" style="width:9px;height:9px;border-radius:50%;background:var(--g400)"></div></div>Aurora</div>
-                <div class="a-sub">Structural interpretation</div>
+            <div style="flex:1;overflow-y:auto;padding:13px 15px">
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text4);text-transform:uppercase;margin-bottom:10px">Results layers</div>
+              <div id="visLayerToggles">
+                <div style="font-size:11px;color:var(--text3)">Run processing to see available layers.</div>
               </div>
-              <div class="a-body">
-                <div class="amsg">Processing complete. Results are available for review.</div>
-                <div class="ahi">Aurora will generate a full structural interpretation once you select specific anomalies or layers of interest.</div>
-                <div class="amsg">Use the layer toggles above the map to isolate anomalies, lineaments, or circular features for targeted analysis.</div>
-                <button class="btn btn-ghost btn-xs" style="width:100%;justify-content:center;margin-top:6px">Ask Aurora about this survey ↗</button>
-              </div>
+              <div id="visInterpretation" style="margin-top:14px"></div>
             </div>
           </div>
         </div>
@@ -1177,14 +1176,13 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 
   <div class="statusbar">
     <div style="display:flex;gap:14px;align-items:center">
-      <span style="font-size:10px;font-weight:700;color:var(--text4)">GAIA v2.0 · Terracode Analytics</span>
       <span id="statTxt" style="font-size:10.5px;color:var(--text3);font-weight:600">Ready</span>
     </div>
     <div class="sdots" id="sdots">
       <div class="sdot"></div><div class="sdot"></div><div class="sdot"></div>
       <div class="sdot"></div><div class="sdot"></div><div class="sdot"></div><div class="sdot"></div>
     </div>
-    <div style="font-size:10px;font-weight:700;color:var(--text4)">Serverless · Scale-to-zero · Terracode Cloud</div>
+    <div></div>
   </div>
 </div>
 

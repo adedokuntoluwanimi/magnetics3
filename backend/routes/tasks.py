@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from backend.models import AnalysisConfig, ColumnMapping, TaskCreatePayload
 from backend.models.common import DataState, Platform, ProcessingMode, Scenario
-from backend.services.container import get_analysis_service, get_preview_service, get_task_service
+from backend.services.container import get_analysis_service, get_preview_service, get_task_service, get_storage_backend
 
 
 class TaskRename(BaseModel):
@@ -130,3 +130,23 @@ def get_preview(project_id: str, task_id: str, service=Depends(get_preview_servi
         return service.build_preview(project_id, task_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{task_id}/results")
+def get_task_results(
+    project_id: str,
+    task_id: str,
+    service=Depends(get_task_service),
+    storage=Depends(get_storage_backend),
+) -> dict:
+    task = service.get_task(task_id)
+    if not task or task["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    artifacts = (task.get("results") or {}).get("artifacts") or []
+    results_artifact = next(
+        (a for a in artifacts if a.get("file_name") == "results.json"), None
+    )
+    if not results_artifact:
+        raise HTTPException(status_code=404, detail="Results not available yet. Run processing first.")
+    data = storage.download_bytes(results_artifact["bucket"], results_artifact["object_name"])
+    return json.loads(data)

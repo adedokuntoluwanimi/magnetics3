@@ -67,8 +67,30 @@ export async function persistAnalysis() {
 /**
  * Restore the analysis UI from a previously saved analysis_config on a task.
  */
+function applyDataStateRestrictions(task) {
+  const isCorrected = task?.data_state === "corrected";
+  document.querySelectorAll("#screen-analysis .chk").forEach((el) => {
+    const label = el.querySelector(".chk-t")?.textContent.trim();
+    if (label === "Diurnal correction") {
+      if (isCorrected) {
+        el.style.opacity = "0.4";
+        el.style.pointerEvents = "none";
+        el.classList.remove("on");
+        const box = el.querySelector(".chk-box");
+        if (box) { box.classList.remove("on"); box.textContent = ""; }
+      } else {
+        el.style.opacity = "";
+        el.style.pointerEvents = "";
+      }
+    }
+  });
+}
+
 export function loadAnalysis(task) {
-  if (!task?.analysis_config) return;
+  if (!task?.analysis_config) {
+    applyDataStateRestrictions(task);
+    return;
+  }
   const config = task.analysis_config;
   const savedCorrections = new Set(config.corrections || []);
   const savedAddOns = new Set(config.add_ons || []);
@@ -147,6 +169,8 @@ export function loadAnalysis(task) {
       if (nameEl) nameEl.style.color = isMatch ? "var(--g600)" : "";
     });
   }
+
+  applyDataStateRestrictions(task);
 }
 
 export function initAnalysis() {

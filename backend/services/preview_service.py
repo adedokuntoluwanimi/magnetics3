@@ -9,11 +9,12 @@ from backend.logging_utils import log_event
 
 def _utm_to_wgs84(easting: float, northing: float, zone: int, hemisphere: str) -> tuple[float, float]:
     """Convert UTM easting/northing to WGS84 (lat, lon) using pyproj."""
-    from pyproj import Proj, transform as proj_transform  # type: ignore
+    from pyproj import Proj, Transformer
     south = hemisphere.upper() == "S"
-    utm_proj = Proj(proj="utm", zone=zone, ellps="WGS84", south=south)
+    utm_proj = Proj(proj="utm", zone=int(zone), ellps="WGS84", south=south)
     wgs84_proj = Proj(proj="latlong", ellps="WGS84")
-    lon, lat = proj_transform(utm_proj, wgs84_proj, easting, northing)
+    transformer = Transformer.from_proj(utm_proj, wgs84_proj, always_xy=True)
+    lon, lat = transformer.transform(easting, northing)
     return lat, lon
 
 
@@ -252,7 +253,18 @@ class PreviewService:
                 frame["longitude"] = frame["_raw_lon"]
 
             frame = frame.dropna(subset=["latitude", "longitude"])
-            return frame[["latitude", "longitude", "magnetic"]].to_dict(orient="records")
+
+            # Detect base stations: explicit column or duplicate (lat, lon) pairs
+            bs_col = mapping.get("base_station_column")
+            bs_val = str(mapping.get("base_station_value") or "1")
+            if bs_col and bs_col in frame.columns:
+                frame["is_base_station"] = (frame[bs_col].astype(str).str.strip() == bs_val).astype(int)
+            else:
+                # Duplicate coordinate detection — same (lat, lon) appears more than once
+                dup_mask = frame.duplicated(subset=["latitude", "longitude"], keep=False)
+                frame["is_base_station"] = dup_mask.astype(int)
+
+            return frame[["latitude", "longitude", "magnetic", "is_base_station"]].to_dict(orient="records")
         except Exception as exc:
             log_event("WARNING", "Preview point extraction failed", error=str(exc), task_id=task.get("id"))
             return []
