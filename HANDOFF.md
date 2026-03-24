@@ -30,7 +30,9 @@ Read these first, in order:
 - AI project:
   `app-01-488817-ai`
 - Current revision:
-  `gaia-magnetics-00043-fkg`
+  `gaia-magnetics-00046-xlp` (deployed 2026-03-24)
+- Git commit:
+  `7305d04` on `github.com:adedokuntoluwanimi/magnetics3` branch `main`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
@@ -210,15 +212,56 @@ Key items:
 
 ---
 
+## What Was Done — Session ending 2026-03-24 (revisions 00045 → 00046)
+
+### Firestore crash fix + GCS results architecture (rev 00045-z85)
+
+**Root cause**: `_persist_outputs` stored 2D numpy arrays as list-of-lists in Firestore. Firestore rejects nested arrays (`InvalidArgument: 400 Property results contains invalid nested entity`).
+
+**Fix**:
+- Strip `_2d_keys = {"grid_x", "grid_y", "surface", "uncertainty", "analytic_signal", "filtered_surface", "emag2_residual", "rtp_surface"}` from Firestore payload.
+- Full results stored only in GCS `results.json`.
+- New endpoint `GET /api/projects/{id}/tasks/{id}/results` in `backend/routes/tasks.py` — downloads and returns full `results.json` from GCS.
+- `frontend/js/api.js` — added `fetchTaskResults(projectId, taskId)`.
+- `visualisation.js` — `loadVisualisation` now calls `fetchTaskResults()` instead of reading Firestore data. Fixes blank visualisation screen after processing completes.
+- `export_service.py` — `_load_full_results(task)` reads from GCS artifacts; `create_export` no longer reads from `task["results"]["data"]`.
+- `backend/routes/storage.py` (new) — `GET /api/storage/download` proxy for GCS objects when signed URL signing fails.
+
+### UI/UX + base stations + layer toggles (rev 00046-xlp)
+
+**Files changed:** `frontend/index.html`, `frontend/js/sections/navigation.js`, `frontend/js/sections/analysis.js`, `frontend/js/sections/setup.js`, `frontend/js/sections/processing.js`, `frontend/js/sections/visualisation.js`, `frontend/js/sections/maps.js`, `frontend/js/api.js`, `backend/services/preview_service.py`, `backend/services/processing_service.py`
+
+- Home page: GAIA full name added; footer text (GAIA v2.0 / Terracode Cloud) removed.
+- Nav guard: workflow screens block without active project (shows notice, stays on home).
+- Sidebar: complete collapse, no residual button. Hidden on preview and home screens.
+- Analysis: diurnal checkbox disabled (opacity 0.4, pointer-events none, auto-unchecked) when `data_state === "corrected"`.
+- Setup: spacing suggestion entirely removed.
+- Processing: Modelling step filtered out of pipeline cards when `run_prediction === false`. Per-step ETA labels. Config summary card renders actual user choices.
+- Maps: survey traverse polylines via `maps.Polyline` per `line_id`. Base stations = orange triangles (`"M 0,-6 6,6 -6,6 Z"`), popup shows "Used for diurnal correction". `MAP_STYLES` extended with Light, Muted green, Greyscale, Dark.
+- Preview service: `is_base_station` flag added to preview points — explicit column match or duplicate (lat,lon) detection.
+- Processing service: `is_base_station` + `line_id` in `points` output for both prediction and non-prediction branches.
+- Visualisation: Aurora panel → Results layers toggle panel (`#visLayerToggles` + `#visInterpretation`). `renderAurora` and `askAurora` import removed. Layer toggles call `window.switchVisLayer(layerId)`. Stats use real min/max. Map overlay passes `predictedPoints` to `renderStationMap`.
+
 ## If The User Asks To Continue Building
 
-Key remaining gaps:
+### Must fix next deploy (in priority order)
 
-- Export generation still runs inside the API service — `gaia-magnetics-export` Cloud Run Job not yet created (see `CONTEXT.md` for the create command)
-- Validate the full live browser workflow end-to-end: project → upload → analysis → preview → processing → visualisation → export
-- True Esri File GDB export (current output is a pseudo-zip bundle)
-- Verify diurnal correction, explicit scenario, and sparse spacing validation with real survey data
-- Confirm `vet-dev-backend` service account has `roles/run.developer` so the API can dispatch the processing job
+1. **Heatmap/Contour/3D without prediction** (`processing_service.py`): when `run_prediction=false`, generate a scipy griddata surface from corrected points so all vis modes work.
+2. **Predicted point magnetic values** (`processing_service.py`): `predicted_points` only has lat/lon; add the predicted magnetic value so map click shows a reading.
+3. **Predicted marker fill color** (`maps.js`): hollow blue ring is invisible on light basemaps; add semi-transparent fill.
+4. **Value scale gradient** (`index.html`): green CSS vars don't match Viridis; change to `#440154 → #31688e → #35b779 → #fde725`.
+5. **"Open Projects" home button** (`navigation.js`): wire to open sidebar projects dropdown.
+6. **Nav guard → redirect to setup** (`navigation.js`): instead of notice, call `window.beginNewProjectFlow?.(); window.startProject?.()` to land on project creation page.
+7. **Map ↔ Line Profiles switching bug** (`visualisation.js`): call `Plotly.purge(host)` before switching to Map; track and destroy Google Maps instance before switching to Plotly.
+8. **Basemap toggle on visualisation** (`index.html`, `visualisation.js`): add `mapTypeSelect` dropdown to visualisation map overlay toolbar; wire to active map instance.
+9. **Remove Light/Muted green/Greyscale from mapTypeSelect** (`index.html`): keep Satellite, Hybrid, Terrain, Roadmap, Dark only.
+10. **Verify processing auto-start**: confirm processing only triggers on Execute click, not on screen navigation.
+
+### Lower priority
+- Export generation still runs inside the API service — `gaia-magnetics-export` Cloud Run Job not yet created (see `CONTEXT.md`)
+- True Esri File GDB export not implemented
+- Verify diurnal, explicit scenario, sparse spacing with real survey data
+- Confirm `vet-dev-backend` SA has `roles/run.developer` for job dispatch
 
 ## If The User Asks About Credentials Or GCP Setup
 

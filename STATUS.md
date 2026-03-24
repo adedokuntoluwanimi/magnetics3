@@ -144,10 +144,47 @@
 - Basemap choices reduced to Terrain, Satellite, Hybrid, Dark.
 - Visualisation modes show clear fallback messages when required data is missing.
 
-## Main Remaining Gaps
+### Firestore crash + GCS results endpoint + export fix (2026-03-24, rev 00045-z85)
 
+- **Firestore InvalidArgument crash**: `_persist_outputs` was storing 2D numpy arrays (grid_x, grid_y, surface, uncertainty, analytic_signal, filtered_surface, emag2_residual, rtp_surface) as list-of-lists in the Firestore task document. Firestore rejects nested arrays. Fix: strip all 2D-array keys from Firestore payload; store full data only in GCS `results.json`; Firestore holds lightweight version (points[:500], predicted_points[:500], stats, artifacts list).
+- **New endpoint**: `GET /api/projects/{id}/tasks/{id}/results` — downloads and returns full `results.json` from GCS. Used by visualisation and export.
+- **Export service**: `export_service.py` added `_load_full_results(task)` — reads from GCS artifacts. `create_export` now checks for artifacts rather than `task["results"]["data"]`. `_build_artifact` takes `data` as explicit parameter.
+- **Visualisation fix**: `loadVisualisation` now calls `fetchTaskResults()` to get full results from GCS instead of reading the lightweight Firestore data. This fixed the blank visualisation screen after successful processing.
+- **Storage proxy**: `backend/routes/storage.py` — `GET /api/storage/download?bucket=&object=` streams GCS object through the API as a signed-URL fallback.
+
+### UI/UX batch + base station markers + layer toggles (2026-03-24, rev 00046-xlp)
+
+**Files changed:** `frontend/index.html`, `frontend/js/sections/navigation.js`, `frontend/js/sections/analysis.js`, `frontend/js/sections/setup.js`, `frontend/js/sections/processing.js`, `frontend/js/sections/visualisation.js`, `frontend/js/sections/maps.js`, `frontend/js/api.js`, `backend/services/preview_service.py`, `backend/services/processing_service.py`
+
+- **Home page**: GAIA full name "Geospatial Analysis and Inference Architecture" added. Footer text removed (was: GAIA v2.0 · Terracode Analytics · Serverless · Scale-to-zero · Terracode Cloud).
+- **Nav guard**: clicking any workflow screen nav button without an active project redirects to home and shows a notice.
+- **Sidebar**: complete collapse — no residual expand button (`sidebar.collapsed` → `width:0;min-width:0;overflow:hidden`). Sidebar hidden on preview screen.
+- **Analysis**: diurnal correction checkbox greyed out, unchecked, and pointer-events blocked when `task.data_state === "corrected"`.
+- **Setup**: spacing suggestion code removed (`_suggestedSpacingM`, `computeSuggestedSpacing`, `setScenario` override). User enters spacing manually.
+- **Processing**: Modelling step hidden in pipeline cards when `analysis_config.run_prediction === false`. Per-step ETAs added. Config summary card shows user's actual choices (scenario, spacing, model, corrections, add-ons).
+- **Maps**: survey traverse polylines (`maps.Polyline`) connecting stations on same `line_id`. Base stations rendered as orange triangles with "Used for diurnal correction" popup. New basemap styles: Light, Muted green, Greyscale, Dark added to `MAP_STYLES`.
+- **Basemap dropdown** (`mapTypeSelect`): expanded to include Satellite, Hybrid, Terrain, Roadmap, Dark, Light, Muted green, Greyscale.
+- **Preview service**: `_extract_preview_points` now returns `is_base_station` flag — detected from explicit `base_station_column` in mapping or duplicate (lat, lon) coordinate pairs.
+- **Processing service**: `is_base_station` and `line_id` flags included in `points` output for both prediction and non-prediction branches.
+- **Visualisation**: Aurora panel replaced with "Results layers" toggle panel (`#visLayerToggles`). Layer toggles show Map/Line Profiles always; Heatmap/Contour/Surface only when `hasSurfaceGrid()` returns true. `window.switchVisLayer(layerId)` wired. `renderAurora` and `askAurora` import removed. Stats panel shows real min/max/mean/std/anomaly_count. Map overlay now passes `predictedPoints` to `renderStationMap`. `fetchTaskResults` from GCS.
+- **Processing ETA + loading bars**: queued steps show estimated time; running step shows animated progress bar (`@keyframes progPulse`).
+
+## Main Remaining Gaps (as of rev 00046-xlp, 2026-03-24)
+
+### Must fix next deploy
+1. **Heatmap/Contour/3D Surface without prediction model**: when `run_prediction=false`, no surface grid is generated so those tabs are hidden. Fix: always generate a scipy-interpolated grid from corrected survey points regardless of prediction choice. (`processing_service.py`)
+2. **Predicted station magnetic values**: `predicted_points` output only has lat/lon — predicted magnetic values are stripped before saving. Fix: include magnetic value in `predicted_points`. (`processing_service.py`)
+3. **Predicted station marker color**: hollow circle with thin blue stroke is barely visible on light basemaps. Fix: give predicted markers a semi-transparent fill. (`maps.js`)
+4. **Value scale gradient**: the scale bar uses green CSS vars (`--g700 → --g100`) — does not match Viridis colorscale used in Plotly. Fix: change gradient to Viridis colours. (`index.html`)
+5. **"Open Projects" button on home page**: currently not wired. Fix: open sidebar projects dropdown or a projects list view. (`navigation.js` / `index.html`)
+6. **Nav guard → proper redirect**: no-project nav currently shows a notice and stays on home. User wants redirect to new project creation page (setup screen). (`navigation.js`)
+7. **Map overlay ↔ Line profiles switching bug**: switching between Map (Google Maps) and Line Profiles (Plotly) blanks the view because `ensureHost()` reuses the same div without clearing the previous renderer. Fix: call `Plotly.purge(host)` before switching to Map; destroy Google Maps instance before switching to Plotly. (`visualisation.js`)
+8. **Satellite/basemap toggle on visualisation map overlay**: no map type control on the visualisation screen's Map overlay view. Fix: add `mapTypeSelect` dropdown to the visualisation map toolbar. (`index.html`, `visualisation.js`)
+9. **Remove extra basemaps from dropdown**: user asked to remove Light/Muted green/Greyscale from `mapTypeSelect` — keep only Satellite, Hybrid, Terrain, Roadmap, Dark. (`index.html`)
+10. **Processing auto-start**: verify processing does not start when navigating to the processing screen; only on clicking Execute.
+
+### Lower priority
 - Export generation still runs inside the API service — `gaia-magnetics-export` Cloud Run Job not yet created
-- Full end-to-end live browser path not yet conclusively verified
 - True Esri File GDB export not implemented (current output is a zip bundle)
 - Verify diurnal correction, explicit scenario, and sparse spacing with real survey data
 - Confirm `vet-dev-backend` service account has `roles/run.developer` for job dispatch
