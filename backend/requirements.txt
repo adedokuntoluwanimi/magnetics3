@@ -21,3 +21,4 @@ google-cloud-logging==3.12.1
 google-cloud-run==0.15.0
 google-cloud-secret-manager==2.23.2
 anthropic[vertex]==0.61.0
+pyIGRF==12.0
