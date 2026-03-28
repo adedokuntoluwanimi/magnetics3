@@ -9,7 +9,7 @@ Last updated: `2026-03-28`
 - Cloud Run service:
   `gaia-magnetics`
 - Latest ready revision:
-  `gaia-magnetics-00056-xbp`
+  `gaia-magnetics-00060-rtr`
 - Region:
   `us-central1`
 - Infra project:
@@ -19,7 +19,7 @@ Last updated: `2026-03-28`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
-> **Pending deploy** — significant AI and chat changes made locally. Deploy required to reflect on live.
+> Deployed to revision `gaia-magnetics-00060-rtr`. Health endpoint verified ok.
 
 ## Current Product State
 
@@ -129,5 +129,5 @@ Last updated: `2026-03-28`
   `ai_service.py`, `export_service.py`, `container.py`
 - JS brace balance checks passed:
   `ai_chat.js`, `preview.js`, `visualisation.js`, `export.js`
-- Not yet deployed to Cloud Run.
-- Live revision still `gaia-magnetics-00056-xbp` (pre-AI-chat changes).
+- Deployed to Cloud Run revision `gaia-magnetics-00060-rtr`.
+- Live health endpoint: `{"status":"ok"}`

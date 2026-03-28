@@ -23,7 +23,7 @@ This file captures the current working context for `gaia-magnetics`.
 - Cloud Run service:
   `gaia-magnetics`
 - Latest ready revision:
-  `gaia-magnetics-00056-xbp` (AI/chat changes not yet deployed)
+  `gaia-magnetics-00060-rtr` 
 - Region:
   `us-central1`
 - Infra project:

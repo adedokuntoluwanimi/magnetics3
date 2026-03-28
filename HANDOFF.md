@@ -21,12 +21,11 @@ Read these first:
 - AI project:
   `app-01-488817-ai`
 - Latest ready revision:
-  `gaia-magnetics-00056-xbp`
+  `gaia-magnetics-00060-rtr`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
-> The most recent code changes (AI wiring, chat panels, export improvements) are **not yet deployed**.
-> The live revision is still `00056-xbp`. Deploy before verifying any AI features on live.
+> All changes deployed to revision `gaia-magnetics-00060-rtr`. Health verified ok.
 
 ## What Changed Most Recently
 
