@@ -1,6 +1,9 @@
 ﻿import {fetchTask, fetchTaskResults} from "../api.js";
 import {renderWorkflowProgress} from "./progress.js";
 import {appState, setActiveResultLayer, setActiveVisualisation, setStackProfiles, setTask} from "../state.js";
+import {initAIChat} from "../shared/ai_chat.js";
+
+let _visChat = null;
 import {formatNumber, titleCase} from "../shared/format.js";
 import {loadScript} from "../shared/loaders.js";
 import {renderStationMap} from "./maps.js";
@@ -557,7 +560,24 @@ function renderLayerControls(layers, activeLayer, mode) {
 function renderInterpretation(layer, stats, displayData) {
   const roots = getRoots();
   if (!roots.interpretation) return;
-  roots.interpretation.innerHTML = `
+
+  // Ensure persistent sub-containers exist. Only the layer card is replaced on each call;
+  // the AI chat body persists across layer/vis mode changes.
+  let layerCard = document.getElementById("visLayerCard");
+  let aiBody = document.getElementById("visAIBody");
+  if (!layerCard) {
+    layerCard = document.createElement("div");
+    layerCard.id = "visLayerCard";
+    roots.interpretation.appendChild(layerCard);
+  }
+  if (!aiBody) {
+    aiBody = document.createElement("div");
+    aiBody.id = "visAIBody";
+    aiBody.style.marginTop = "10px";
+    roots.interpretation.appendChild(aiBody);
+  }
+
+  layerCard.innerHTML = `
     <div style="font-size:10px;font-weight:700;color:var(--text3);letter-spacing:0.6px;text-transform:uppercase;margin-bottom:8px">Current layer</div>
     <div class="card card-sm" style="padding:12px">
       <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">${layer.label}</div>
@@ -570,6 +590,16 @@ function renderInterpretation(layer, stats, displayData) {
       </div>
     </div>
   `;
+
+  // Fire layer-specific AI interpretation (non-blocking)
+  if (_visChat) {
+    const q = `The user is viewing the ${layer.label} (${layer.shortLabel}) layer. `
+      + `Mean: ${formatNumber(stats.mean)} ${layer.unit}, range: ${formatNumber(stats.range)} ${layer.unit}, `
+      + `anomaly count: ${stats.anomaly_count ?? 0}. `
+      + "Briefly interpret this layer — what patterns or anomalies should the user focus on, "
+      + "and what do they indicate geologically?";
+    _visChat.autoLoad(q);
+  }
 }
 
 async function renderLineProfiles(results, layer, stats) {
@@ -789,6 +819,25 @@ export async function loadVisualisation() {
 }
 
 export function initVisualisation() {
+  // Initialise the vis AI chat once. visAIBody is created lazily by renderInterpretation
+  // so we defer wiring until the DOM is ready.
+  const _wireVisChat = () => {
+    const inputEl = document.getElementById("visAIInput");
+    const sendEl = document.getElementById("visAISend");
+    const bodyEl = document.getElementById("visAIBody");
+    if (inputEl && sendEl && bodyEl && !_visChat) {
+      _visChat = initAIChat(bodyEl, inputEl, sendEl, {location: "visualisation"});
+    }
+  };
+  // Wire immediately if DOM is ready, otherwise retry after first render
+  _wireVisChat();
+  const _origObserver = new MutationObserver(() => {
+    if (!_visChat) _wireVisChat();
+    if (_visChat) _origObserver.disconnect();
+  });
+  const interpEl = document.getElementById("visInterpretation");
+  if (interpEl) _origObserver.observe(interpEl, {childList: true});
+
   window._setVisLayerPalCold = (layerId, color) => {
     const cur = _customPalettes[layerId] || [];
     const hot = cur[cur.length - 1] || (LAYER_META[layerId]?.palette || ["#c0392b"]).at(-1);

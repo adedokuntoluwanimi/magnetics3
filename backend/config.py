@@ -36,7 +36,7 @@ class Settings:
     export_job: str = env_value("GAIA_EXPORT_JOB", default="gaia-magnetics-export")
     maps_api_key_secret: str = env_value("GAIA_MAPS_API_KEY_SECRET", default="gaia-google-maps-api-key")
     maps_api_key: str = env_value("GAIA_MAPS_API_KEY", "GOOGLE_MAPS_API_KEY")
-    aurora_model: str = env_value("GAIA_AURORA_MODEL", "CLAUDE_MODEL")
+    aurora_model: str = env_value("GAIA_AURORA_MODEL", "CLAUDE_MODEL", default="claude-sonnet-4-6")
     service_name: str = env_value("GAIA_SERVICE_NAME", "K_SERVICE", default="gaia-magnetics")
     base_dir: Path = Path(__file__).resolve().parents[1]
     frontend_dir: Path = Path(__file__).resolve().parents[1] / "frontend"

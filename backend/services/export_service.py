@@ -44,11 +44,22 @@ class ExportService:
 
         full_results = self._load_full_results(task)
         project = self._store.get_project(task["project_id"])
+
+        # Pass the full GCS results (stats + points sample) so the AI has richer context
+        # than the lightweight Firestore copy. Strip large grids — only metadata is needed.
+        results_for_ai = {
+            "stats": full_results.get("stats"),
+            "model_used": full_results.get("model_used"),
+            "points": full_results.get("points", [])[:50],
+            "predicted_points": full_results.get("predicted_points", [])[:20],
+            "selected_add_ons": full_results.get("selected_add_ons", []),
+        }
         aurora = self._ai_service.generate_response(
             task["project_id"],
             task_id,
             location="export",
-            question="Prepare concise export-ready interpretation and delivery guidance.",
+            question="Prepare a professional geophysical interpretation for the export deliverables.",
+            extra_results=results_for_ai,
         )
 
         job = ExportJob(task_id=task_id, formats=request.formats, status="running")
@@ -271,66 +282,198 @@ class ExportService:
 
     def _build_pdf(self, project: dict, task: dict, aurora) -> bytes:
         from reportlab.lib.pagesizes import A4
-        from reportlab.pdfgen import canvas
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib import colors
 
         buffer = io.BytesIO()
-        pdf = canvas.Canvas(buffer, pagesize=A4)
-        pdf.setTitle("GAIA Magnetics Report")
-        pdf.drawString(48, 800, project["name"])
-        pdf.drawString(48, 782, task["name"])
-        pdf.drawString(48, 764, f"Generated: {utc_now()}")
-        pdf.drawString(48, 746, (task.get("description") or "")[:96])
-        stats = task["results"]["data"]["stats"]
-        pdf.drawString(48, 718, f"Mean magnetic field: {stats['mean']:.2f}")
-        pdf.drawString(48, 700, f"Std dev: {stats['std']:.2f}")
-        pdf.drawString(48, 682, f"Points processed: {stats['point_count']}")
-        pdf.drawString(48, 648, "Aurora summary")
-        pdf.drawString(48, 630, aurora.summary[:108])
-        y_pos = 610
-        for highlight in aurora.highlights[:3]:
-            pdf.drawString(60, y_pos, f"- {highlight[:100]}")
-            y_pos -= 18
-        pdf.showPage()
-        pdf.save()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=20*mm, rightMargin=20*mm,
+                                topMargin=20*mm, bottomMargin=20*mm)
+        styles = getSampleStyleSheet()
+        story = []
+
+        h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontSize=18, spaceAfter=4)
+        h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontSize=13, spaceAfter=3, spaceBefore=10)
+        body = ParagraphStyle("body", parent=styles["Normal"], fontSize=10, leading=15)
+        bullet = ParagraphStyle("bullet", parent=styles["Normal"], fontSize=10, leading=14,
+                                leftIndent=12, bulletIndent=0)
+        meta = ParagraphStyle("meta", parent=styles["Normal"], fontSize=9, textColor=colors.grey)
+
+        story.append(Paragraph(project["name"], h1))
+        story.append(Paragraph(task["name"], styles["Heading2"]))
+        story.append(Paragraph(f"Generated: {utc_now()}", meta))
+        story.append(Spacer(1, 6*mm))
+
+        if task.get("description"):
+            story.append(Paragraph("Survey Description", h2))
+            story.append(Paragraph(task["description"], body))
+            story.append(Spacer(1, 4*mm))
+
+        # Stats table
+        results_data = task.get("results", {}).get("data", {})
+        stats = results_data.get("stats") or {}
+        if stats:
+            story.append(Paragraph("Magnetic Statistics", h2))
+            tdata = [
+                ["Metric", "Value"],
+                ["Mean field", f"{stats.get('mean', 0):.2f} nT"],
+                ["Std deviation", f"{stats.get('std', 0):.2f} nT"],
+                ["Min / Max", f"{stats.get('min', 0):.2f} / {stats.get('max', 0):.2f} nT"],
+                ["Points processed", str(stats.get("point_count", 0))],
+                ["Anomaly count", str(stats.get("anomaly_count", 0))],
+            ]
+            t = Table(tdata, colWidths=[60*mm, 80*mm])
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a7340")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f5f5")]),
+                ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#cccccc")),
+                ("PADDING", (0, 0), (-1, -1), 5),
+            ]))
+            story.append(t)
+            story.append(Spacer(1, 4*mm))
+
+        # AI analysis
+        story.append(Paragraph("AI Analysis", h2))
+        if aurora.summary:
+            story.append(Paragraph(aurora.summary, body))
+            story.append(Spacer(1, 3*mm))
+        for item in aurora.highlights:
+            story.append(Paragraph(f"• {item}", bullet))
+
+        doc.build(story)
         return buffer.getvalue()
 
     def _build_docx(self, project: dict, task: dict, aurora) -> bytes:
         from docx import Document
+        from docx.shared import Pt, RGBColor
 
         doc = Document()
-        doc.add_heading(project["name"], level=1)
+
+        # Title
+        title = doc.add_heading(project["name"], level=1)
+        title.runs[0].font.color.rgb = RGBColor(0x1a, 0x73, 0x40)
         doc.add_heading(task["name"], level=2)
-        doc.add_paragraph(task["description"])
-        doc.add_paragraph(f"Aurora summary: {aurora.summary}")
-        for highlight in aurora.highlights:
-            doc.add_paragraph(highlight, style="List Bullet")
-        stats = task["results"]["data"]["stats"]
-        doc.add_paragraph(f"Mean magnetic field: {stats['mean']:.2f}")
-        doc.add_paragraph(f"Standard deviation: {stats['std']:.2f}")
-        doc.add_paragraph(f"Points processed: {stats['point_count']}")
+        doc.add_paragraph(f"Generated: {utc_now()}")
+
+        # Survey description
+        if task.get("description"):
+            doc.add_heading("Survey Description", level=2)
+            doc.add_paragraph(task["description"])
+
+        # Configuration summary
+        config = task.get("analysis_config") or {}
+        doc.add_heading("Processing Configuration", level=2)
+        cfg_para = doc.add_paragraph()
+        for label, val in [
+            ("Model", config.get("model") or "—"),
+            ("Corrections", ", ".join(config.get("corrections") or []) or "None"),
+            ("Add-ons", ", ".join(config.get("add_ons") or []) or "None"),
+            ("Scenario", task.get("scenario") or "—"),
+            ("Platform", task.get("platform") or "—"),
+        ]:
+            run = cfg_para.add_run(f"{label}: ")
+            run.bold = True
+            cfg_para.add_run(f"{val}\n")
+
+        # Statistics
+        results_data = task.get("results", {}).get("data", {})
+        stats = results_data.get("stats") or {}
+        if stats:
+            doc.add_heading("Magnetic Statistics", level=2)
+            tbl = doc.add_table(rows=1, cols=2)
+            tbl.style = "Table Grid"
+            hdr = tbl.rows[0].cells
+            hdr[0].text = "Metric"
+            hdr[1].text = "Value"
+            for label, val in [
+                ("Mean field", f"{stats.get('mean', 0):.2f} nT"),
+                ("Std deviation", f"{stats.get('std', 0):.2f} nT"),
+                ("Min / Max", f"{stats.get('min', 0):.2f} / {stats.get('max', 0):.2f} nT"),
+                ("Points processed", str(stats.get("point_count", 0))),
+                ("Anomaly count", str(stats.get("anomaly_count", 0))),
+            ]:
+                row = tbl.add_row().cells
+                row[0].text = label
+                row[1].text = val
+
+        # AI analysis
+        doc.add_heading("AI Analysis", level=2)
+        if aurora.summary:
+            doc.add_paragraph(aurora.summary)
+        for item in aurora.highlights:
+            doc.add_paragraph(item, style="List Bullet")
+
         output = io.BytesIO()
         doc.save(output)
         return output.getvalue()
 
     def _build_pptx(self, project: dict, task: dict, aurora) -> bytes:
         from pptx import Presentation
+        from pptx.util import Pt
 
-        presentation = Presentation()
-        slide = presentation.slides.add_slide(presentation.slide_layouts[1])
-        slide.shapes.title.text = project["name"]
-        slide.placeholders[1].text = task["name"]
-        summary_slide = presentation.slides.add_slide(presentation.slide_layouts[1])
-        summary_slide.shapes.title.text = "Aurora Summary"
-        summary_slide.placeholders[1].text = aurora.summary
-        stats_slide = presentation.slides.add_slide(presentation.slide_layouts[1])
-        stats_slide.shapes.title.text = "Magnetic Summary"
-        stats = task["results"]["data"]["stats"]
-        stats_slide.placeholders[1].text = (
-            f"Mean: {stats['mean']:.2f}\n"
-            f"Std dev: {stats['std']:.2f}\n"
-            f"Points: {stats['point_count']}\n"
-            f"Anomalies: {stats.get('anomaly_count', 0)}"
+        prs = Presentation()
+
+        def _add_slide(title_text, body_text):
+            slide = prs.slides.add_slide(prs.slide_layouts[1])
+            slide.shapes.title.text = title_text
+            tf = slide.placeholders[1].text_frame
+            tf.clear()
+            for i, line in enumerate(body_text.splitlines()):
+                p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+                p.text = line
+                p.font.size = Pt(14)
+            return slide
+
+        config = task.get("analysis_config") or {}
+        stats = task.get("results", {}).get("data", {}).get("stats") or {}
+        corrections = ", ".join(config.get("corrections") or []) or "None"
+        add_ons = ", ".join(config.get("add_ons") or []) or "None"
+        model = config.get("model") or "Not specified"
+
+        # Slide 1 — Title
+        title_slide = prs.slides.add_slide(prs.slide_layouts[0])
+        title_slide.shapes.title.text = project["name"]
+        title_slide.placeholders[1].text = f"{task['name']}  |  GAIA Magnetics"
+
+        # Slide 2 — Executive summary (AI-generated)
+        _add_slide("Survey Summary", aurora.summary)
+
+        # Slide 3 — AI highlights / anomaly observations
+        if aurora.highlights:
+            _add_slide("Key Findings", "\n".join(f"• {h}" for h in aurora.highlights))
+
+        # Slide 4 — Processing configuration
+        _add_slide(
+            "Processing Configuration",
+            f"Model:  {model}\n"
+            f"Corrections:  {corrections}\n"
+            f"Add-ons:  {add_ons}\n"
+            f"Scenario:  {task.get('scenario', '—').capitalize()}\n"
+            f"Platform:  {task.get('platform', '—').capitalize()}",
         )
+
+        # Slide 5 — Magnetic statistics
+        _add_slide(
+            "Magnetic Statistics",
+            f"Mean field:  {stats.get('mean', 0):.2f} nT\n"
+            f"Std deviation:  {stats.get('std', 0):.2f} nT\n"
+            f"Min / Max:  {stats.get('min', 0):.2f} / {stats.get('max', 0):.2f} nT\n"
+            f"Points processed:  {stats.get('point_count', 0)}\n"
+            f"Anomaly count (>mean+1σ):  {stats.get('anomaly_count', 0)}",
+        )
+
+        # Slide 6 — Notes / Limitations
+        _add_slide(
+            "Notes & Limitations",
+            "• Results are model-dependent; interpretation should account for survey geometry.\n"
+            "• Uncertainty surface reflects spatial data density — edge predictions carry higher uncertainty.\n"
+            "• Corrections applied are listed on the Processing Configuration slide.\n"
+            "• Report generated by GAIA Magnetics. Verify outputs before drilling or resource decisions.",
+        )
+
         output = io.BytesIO()
-        presentation.save(output)
+        prs.save(output)
         return output.getvalue()

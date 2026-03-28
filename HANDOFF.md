@@ -25,82 +25,76 @@ Read these first:
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
+> The most recent code changes (AI wiring, chat panels, export improvements) are **not yet deployed**.
+> The live revision is still `00056-xbp`. Deploy before verifying any AI features on live.
+
 ## What Changed Most Recently
 
-### Navigation and projects
+### AI assistant fully wired to Claude Sonnet 4.6
 
-- `Projects` is now the top-level nav item.
-- Home-page project buttons point into the projects hub.
-- New project and new task actions route through the existing setup screen, but conceptually the setup screen is now under Projects.
-- The previous broken setup navigation was fixed by routing directly to the `setup` screen instead of querying a missing `data-s="setup"` nav tab.
-- Projects directory now also exposes an `Edit project` action.
+- `backend/config.py`: model default now `claude-sonnet-4-6`.
+- `backend/gcp/vertex_ai.py`: `VertexAIClient` (was `VertexAuroraClient`);
+  `max_tokens` param added; alias kept.
+- `backend/services/container.py`: wired `VertexAIClient` and `storage_backend` into `AIService`.
+- `backend/services/ai_service.py`:
+  - System prompt removes "Aurora" branding.
+  - Prompt now passes a focused context block (project, task, config, stats, station sample).
+  - Reference file (`task.basemap_file`) downloaded from GCS and text-extracted per format
+    (PDF via pdfminer, DOCX via python-docx, TXT, KML, KMZ, GeoJSON/JSON); capped at 6000 chars.
+  - Export path: 3000 tokens, structured prompt with labelled sections.
+  - `_parse_response` correctly maps `EXECUTIVE SUMMARY` → `summary`,
+    `KEY FINDINGS` / `MODELLING NOTES` / `RECOMMENDATIONS` → `highlights`.
+- `backend/services/export_service.py`:
+  - Export AI call now passes full GCS results (stats + 50-point sample) as `extra_results`.
+  - PDF rebuilt with `SimpleDocTemplate` (proper styles, stats table).
+  - DOCX rebuilt with config table, stats table, full AI analysis.
+  - PPTX rebuilt as 6-slide deck using AI-generated content.
 
-### Preview and maps
+### Interactive AI chatbox on all three screens
 
-- Preview no longer draws station-connecting lines.
-- Basemap options were reduced to `Terrain`, `Satellite`, and `Map`.
-- Predicted markers are filtered/layered so they do not overlap measured/base stations as badly as before.
-- Measured and predicted marker colours persist from Preview into Visualisation.
+- New: `frontend/js/shared/ai_chat.js` — shared chat module.
+  `initAIChat(bodyEl, inputEl, sendEl, {location})` → `{autoLoad, clear}`.
+- **Preview**: new `a-panel` added to the right of the map in `screen-preview`.
+  Wired in `preview.js`; auto-loads on every `loadPreview()`.
+- **Visualisation**: chat input row added below the right stats panel in `screen-visualisation`.
+  `renderInterpretation` fires a layer-specific auto-load on every layer change.
+  Chat body (`visAIBody`) persists; layer card (`visLayerCard`) refreshes separately.
+  Chat initialised via `MutationObserver` in `initVisualisation` since `visAIBody`
+  is created lazily by the first `renderInterpretation` call.
+- **Export**: existing `a-panel` upgraded from static one-shot content to live chat.
+  Input row added. `_ensureExportChat()` called from `initExport` and `loadExportView`.
 
-### Visualisation
+### Aurora text removed
 
-- Visualisation was refactored to support selectable result layers.
-- Selected layer now controls:
-  stats, value scale, map hover values, heatmap/contour/3D source data, and line profiles.
-- Line profiles support stacking.
-- Hover behaviour changes when stacking is enabled.
-
-### Processing
-
-- Added processing add-ons:
-  `First Vertical Derivative`
-  `Horizontal Derivative`
-- Backend derived-layer generation was improved for single-traverse data.
-- Prediction behaviour is scenario-driven:
-  `explicit` predicts at explicit unknown rows.
-  `sparse` predicts at generated line/grid nodes from spacing settings.
-
-### Encoding and setup editing
-
-- Remaining mojibake in the active frontend/backend paths was cleaned up.
-- Existing tasks can now be edited via setup and saved back through the backend task-update route.
-- Browser title now serves as:
-  `GAIA Magnetics - V2`
-
-### Deployment
-
-- Latest successful deployment used source deploy to Cloud Run.
-- Health endpoint was verified after deploy.
-- Latest deploy verified:
-  live health `ok`
-  homepage `200`
-  homepage free of mojibake markers in fetched HTML
-  live smoke succeeded through project create, task upload, analysis save, and preview
-- Live smoke still timed out waiting for processing completion.
+- All user-visible "Aurora" text replaced with "GAIA AI" or neutral "AI".
+- Affected: export format card descriptions, section headings, panel headers,
+  processing step detail, home page capability card.
+- Internal Python class/variable names (`AuroraResponse`, `aurora_sections` API field)
+  left unchanged to avoid breaking the API contract.
 
 ## Most Important Files To Check First
 
-- `frontend/index.html`
-- `frontend/js/state.js`
-- `frontend/js/sections/navigation.js`
-- `frontend/js/sections/sidebar.js`
-- `frontend/js/sections/setup.js`
-- `frontend/js/sections/analysis.js`
+- `backend/config.py`
+- `backend/gcp/vertex_ai.py`
+- `backend/services/ai_service.py`
+- `backend/services/export_service.py`
+- `backend/services/container.py`
+- `frontend/js/shared/ai_chat.js`
 - `frontend/js/sections/preview.js`
-- `frontend/js/sections/maps.js`
 - `frontend/js/sections/visualisation.js`
-- `frontend/js/api.js`
-- `backend/routes/tasks.py`
-- `backend/services/task_service.py`
-- `backend/services/processing_service.py`
+- `frontend/js/sections/export.js`
+- `frontend/index.html`
 
 ## Remaining Gaps
 
-1. Full live click-through verification still needs a deliberate browser pass, especially the latest `Projects -> setup` fixes.
-2. Long-running processing still needs investigation because live smoke timed out waiting for completion.
-3. `predicted_points` still rely on sampled surface values for hover/readout rather than a separately persisted predicted-value field.
-4. Export Cloud Run Job is still not implemented.
-5. More visualisation types can be added next if requested.
+1. **Deploy required** — run deploy command below, then verify `/api/health` and homepage.
+2. **SA permissions** — verify `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
+   has `roles/aiplatform.user` on project `app-01-488817-ai`. Without this the AI calls
+   will fail silently (falling back to deterministic text).
+3. Long-running processing still times out on live smoke; needs investigation.
+4. `predicted_points` still use sampled surface values for hover/readout.
+5. Export Cloud Run Job not yet implemented.
+6. Full browser click-through after deploy.
 
 ## Deploy Command
 
@@ -114,3 +108,4 @@ gcloud run deploy gaia-magnetics --source gaia-magnetics --region=us-central1 --
 - Prefer fixing and verifying over only describing.
 - If you deploy, report the exact revision and URL.
 - If you make assumptions, state them after the work.
+- No "Aurora" branding in user-visible text. Internal Python names are fine to keep.

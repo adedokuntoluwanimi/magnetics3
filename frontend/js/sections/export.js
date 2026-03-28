@@ -1,7 +1,10 @@
-﻿import {askAurora, createExport, fetchTask} from "../api.js";
+﻿import {createExport, fetchTask} from "../api.js";
 import {renderWorkflowProgress} from "./progress.js";
 import {appState, setTask} from "../state.js";
 import {formatBytes} from "../shared/format.js";
+import {initAIChat} from "../shared/ai_chat.js";
+
+let _exportChat = null;
 
 const CARD_TO_FORMAT = {
   "ec-pdf": "pdf",
@@ -15,14 +18,23 @@ const CARD_TO_FORMAT = {
 };
 
 function getRoots() {
-  const screen = document.getElementById("screen-export");
   return {
-    screen,
+    screen: document.getElementById("screen-export"),
     count: document.getElementById("exCnt"),
     progress: document.getElementById("exportProg"),
     done: document.getElementById("exportDone"),
-    auroraBody: screen.querySelector(".a-body"),
+    aiBody: document.getElementById("exportAIBody"),
   };
+}
+
+function _ensureExportChat() {
+  if (_exportChat) return;
+  const bodyEl = document.getElementById("exportAIBody");
+  const inputEl = document.getElementById("exportAIInput");
+  const sendEl = document.getElementById("exportAISend");
+  if (bodyEl && inputEl && sendEl) {
+    _exportChat = initAIChat(bodyEl, inputEl, sendEl, {location: "export"});
+  }
 }
 
 function getSelectedFormats() {
@@ -75,20 +87,12 @@ function renderDownloads(job) {
   ` : "";
 }
 
-async function renderAurora(job) {
-  if (!appState.project || !appState.task) {
-    return;
-  }
-  const aurora = job?.details?.aurora || await askAurora({
-    project_id: appState.project.id,
-    task_id: appState.task.id,
-    location: "export",
-    question: "Recommend the best deliverables and explain what the export package contains.",
-  });
-  getRoots().auroraBody.innerHTML = `
-    <div class="amsg">${aurora.summary}</div>
-    ${(aurora.highlights || []).map((item) => `<div class="ahi">${item}</div>`).join("")}
-  `;
+async function renderAIPanel() {
+  _ensureExportChat();
+  if (!_exportChat) return;
+  await _exportChat.autoLoad(
+    "Explain what each selected export format contains and recommend which combination best fits a professional survey deliverable."
+  );
 }
 
 export async function loadExportView() {
@@ -105,7 +109,8 @@ export async function loadExportView() {
   if (!appState.project || !appState.task) {
     getRoots().done.style.display = "none";
     getRoots().progress.style.display = "none";
-    getRoots().auroraBody.innerHTML = "<div class='amsg'>Select a processed task to generate live export artifacts.</div>";
+    const ab = document.getElementById("exportAIBody");
+    if (ab) ab.innerHTML = "<div class='amsg'>Select a processed task to generate export artifacts. The AI will provide delivery guidance once a task is active.</div>";
     throw new Error("Run a processed task before opening Export.");
   }
   const task = await fetchTask(appState.project.id, appState.task.id);
@@ -115,11 +120,11 @@ export async function loadExportView() {
   if (latestJob) {
     renderProgress(latestJob.formats || [], latestJob.details?.artifacts || []);
     renderDownloads(latestJob);
-    await renderAurora(latestJob);
+    await renderAIPanel();
   } else {
     getRoots().progress.style.display = "none";
     getRoots().done.style.display = "none";
-    await renderAurora(null);
+    await renderAIPanel();
   }
 }
 
@@ -135,13 +140,14 @@ export async function runExport() {
   renderWorkflowProgress();
   renderProgress(formats, job.details?.artifacts || []);
   renderDownloads(job);
-  await renderAurora(job);
+  await renderAIPanel();
 }
 
 export function initExport() {
   renderSelectionCount();
   getRoots().done.style.display = "none";
   getRoots().progress.style.display = "none";
+  _ensureExportChat();
   window.toggleEx = (card) => {
     card.classList.toggle("on");
     renderSelectionCount();

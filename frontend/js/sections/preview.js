@@ -5,6 +5,9 @@ import {appState, setPredictedMarkerColor, setSurveyMarkerColor, setBaseStationM
 import {titleCase} from "../shared/format.js";
 import {showGlobalNotice} from "../shared/notice.js";
 import {renderStationMap, recolorSurveyMarkers, recolorPredictedMarkers, recolorBaseStationMarkers} from "./maps.js";
+import {initAIChat} from "../shared/ai_chat.js";
+
+let _previewChat = null;
 
 // Human-readable labels for normalized backend IDs
 const CORRECTION_LABELS = {
@@ -204,9 +207,24 @@ export async function loadPreview() {
       const maxLon = Math.max(...lons).toFixed(4);
       attribution.textContent = `Google Maps · ${minLat}, ${minLon} → ${maxLat}, ${maxLon}`;
     }
+    // Fire AI analysis after map loads (non-blocking)
+    _loadPreviewAI();
   } finally {
     setPreviewLoading(false);
   }
+}
+
+function _loadPreviewAI() {
+  const bodyEl = document.getElementById("previewAIBody");
+  const inputEl = document.getElementById("previewAIInput");
+  const sendEl = document.getElementById("previewAISend");
+  if (!bodyEl || !inputEl || !sendEl) return;
+  if (!_previewChat) {
+    _previewChat = initAIChat(bodyEl, inputEl, sendEl, {location: "preview"});
+  }
+  _previewChat.autoLoad(
+    "Analyse this survey configuration. Explain the expected outputs, flag any risks or data gaps, and give one operational recommendation."
+  );
 }
 
 window.drawPreviewMap = async () => {
