@@ -117,6 +117,21 @@ class PreviewService:
         import math
         import numpy as np
 
+        def _len_extent(trav, start_c, end_c, mid_lat, axis="lon"):
+            """Return (start, end) adjusted for custom traverse length if set."""
+            if trav.get("length_same_as_original", True):
+                return start_c, end_c
+            lv = float(trav.get("length") or 1000)
+            lu = (trav.get("length_unit") or "Metres").lower()
+            lm = lv * (1000 if "kilo" in lu else 0.3048 if "feet" in lu else 1)
+            if axis == "lon":
+                cos_lat = max(abs(math.cos(math.radians(mid_lat))), 1e-6)
+                half = (lm / 111_320) / cos_lat / 2
+            else:
+                half = (lm / 111_320) / 2
+            mid = (start_c + end_c) / 2
+            return mid - half, mid + half
+
         # Get measured traverse geometry
         meas_lats = [p["latitude"] for p in measured if not p.get("is_base_station")]
         meas_lons = [p["longitude"] for p in measured if not p.get("is_base_station")]
@@ -157,11 +172,10 @@ class PreviewService:
                     if len(pts) < 2: continue
                     if lon_range >= lat_range:
                         pts.sort(key=lambda p: p["longitude"])
-                        line_lon_start = pts[0]["longitude"]
-                        line_lon_end = pts[-1]["longitude"]
                         line_lat = sum(p["latitude"] for p in pts) / len(pts)
-                        n_pts = max(int(abs(line_lon_end - line_lon_start) / spacing_deg) + 1, 2)
-                        lons_new = np.linspace(line_lon_start, line_lon_end, n_pts)
+                        ls, le = _len_extent(trav, pts[0]["longitude"], pts[-1]["longitude"], line_lat, "lon")
+                        n_pts = max(int(abs(le - ls) / spacing_deg) + 1, 2)
+                        lons_new = np.linspace(ls, le, n_pts)
                         for lon in lons_new:
                             all_predicted.append({
                                 "latitude": line_lat, "longitude": float(lon),
@@ -169,11 +183,10 @@ class PreviewService:
                             })
                     else:
                         pts.sort(key=lambda p: p["latitude"])
-                        line_lat_start = pts[0]["latitude"]
-                        line_lat_end = pts[-1]["latitude"]
                         line_lon = sum(p["longitude"] for p in pts) / len(pts)
-                        n_pts = max(int(abs(line_lat_end - line_lat_start) / spacing_deg) + 1, 2)
-                        lats_new = np.linspace(line_lat_start, line_lat_end, n_pts)
+                        ls, le = _len_extent(trav, pts[0]["latitude"], pts[-1]["latitude"], sum(p["latitude"] for p in pts) / len(pts), "lat")
+                        n_pts = max(int(abs(le - ls) / spacing_deg) + 1, 2)
+                        lats_new = np.linspace(ls, le, n_pts)
                         for lat in lats_new:
                             all_predicted.append({
                                 "latitude": float(lat), "longitude": line_lon,
@@ -206,11 +219,12 @@ class PreviewService:
                     if len(pts) < 2: continue
                     if lon_range >= lat_range:
                         pts.sort(key=lambda p: p["longitude"])
-                        line_lon_start = pts[0]["longitude"] + dlon
-                        line_lon_end = pts[-1]["longitude"] + dlon
                         line_lat = sum(p["latitude"] for p in pts) / len(pts) + dlat
-                        n_pts = max(int(abs(line_lon_end - line_lon_start) / spacing_deg) + 1, 2)
-                        lons_new = np.linspace(line_lon_start, line_lon_end, n_pts)
+                        raw_s = pts[0]["longitude"] + dlon
+                        raw_e = pts[-1]["longitude"] + dlon
+                        ls, le = _len_extent(trav, raw_s, raw_e, line_lat, "lon")
+                        n_pts = max(int(abs(le - ls) / spacing_deg) + 1, 2)
+                        lons_new = np.linspace(ls, le, n_pts)
                         for lon in lons_new:
                             all_predicted.append({
                                 "latitude": float(line_lat), "longitude": float(lon),
@@ -218,11 +232,12 @@ class PreviewService:
                             })
                     else:
                         pts.sort(key=lambda p: p["latitude"])
-                        line_lat_start = pts[0]["latitude"] + dlat
-                        line_lat_end = pts[-1]["latitude"] + dlat
                         line_lon = sum(p["longitude"] for p in pts) / len(pts) + dlon
-                        n_pts = max(int(abs(line_lat_end - line_lat_start) / spacing_deg) + 1, 2)
-                        lats_new = np.linspace(line_lat_start, line_lat_end, n_pts)
+                        raw_s = pts[0]["latitude"] + dlat
+                        raw_e = pts[-1]["latitude"] + dlat
+                        ls, le = _len_extent(trav, raw_s, raw_e, (raw_s + raw_e) / 2, "lat")
+                        n_pts = max(int(abs(le - ls) / spacing_deg) + 1, 2)
+                        lats_new = np.linspace(ls, le, n_pts)
                         for lat in lats_new:
                             all_predicted.append({
                                 "latitude": float(lat), "longitude": float(line_lon),

@@ -751,29 +751,38 @@ export async function loadVisualisation() {
   const stats = computeLayerStats(activeLayer);
   const mode = appState.activeVisualisation || "Heatmap";
 
-  // Single-traverse fallback: redirect heatmap/contour/3D to line profile for single-line datasets
-  const _measuredLineIds = new Set((results?.points || []).map((p) => (p.line_id != null ? String(p.line_id) : "__default__")));
-  const _singleTraverse = _measuredLineIds.size <= 1 && (results?.points || []).length > 0;
-  const effectiveMode = (_singleTraverse && (mode === "Heatmap" || mode === "Contour" || mode === "3D"))
-    ? "Line Profiles"
-    : mode;
+  // Detect single-traverse to show a hint (never force-redirect — let user choose their tab)
+  const _lineIds = new Set((results?.points || []).map((p) => (p.line_id != null ? String(p.line_id) : null)).filter(Boolean));
+  const _isSingleTraverse = _lineIds.size <= 1 && (results?.points || []).length > 0;
 
-  syncVisualisationTabs(effectiveMode);
+  syncVisualisationTabs(mode);
 
   renderStats(activeLayer, stats);
   renderHeader(results, activeLayer, stats);
   renderLayerBar(layers, activeLayer);
-  renderLayerControls(layers, activeLayer, effectiveMode);
+  renderLayerControls(layers, activeLayer, mode);
+
+  // Single-traverse hint banner
+  const _mapBox = getRoots().mapBox;
+  const _existingHint = document.getElementById("_visSingleTraverseHint");
+  if (_existingHint) _existingHint.remove();
+  if (_isSingleTraverse && (mode === "Heatmap" || mode === "Contour" || mode === "3D")) {
+    const _hint = document.createElement("div");
+    _hint.id = "_visSingleTraverseHint";
+    _hint.style.cssText = "position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:200;background:rgba(255,247,230,0.97);border:1px solid #e9c46a;border-radius:8px;padding:7px 14px;font-family:'Manrope',sans-serif;font-size:11px;color:#7a5a00;display:flex;align-items:center;gap:10px;pointer-events:auto;white-space:nowrap";
+    _hint.innerHTML = `<span>Single traverse detected — <button onclick="window.drawVis('Line Profiles')" style="background:none;border:none;color:#1a7f4b;font-weight:700;cursor:pointer;font-size:11px;padding:0;font-family:inherit">Switch to Line Profiles</button> for best view</span><button onclick="this.parentElement.remove()" style="background:none;border:none;cursor:pointer;color:#7a5a00;font-size:13px;line-height:1;padding:0 2px">×</button>`;
+    if (_mapBox) { _mapBox.style.position = "relative"; _mapBox.appendChild(_hint); }
+  }
 
   let displayData = {measured: [], predicted: [], traverses: []};
-  if (effectiveMode === "Map") {
+  if (mode === "Map") {
     displayData = await renderMapOverlay(results, activeLayer);
-  } else if (effectiveMode === "Line Profiles") {
+  } else if (mode === "Line Profiles") {
     syncVisualisationMapControls(false);
     displayData = await renderLineProfiles(results, activeLayer, stats);
   } else {
     syncVisualisationMapControls(false);
-    await renderPlot(effectiveMode, results, activeLayer);
+    await renderPlot(mode, results, activeLayer);
     displayData = buildDisplayDatasets(results, activeLayer);
   }
   renderInterpretation(activeLayer, stats, displayData);
@@ -799,13 +808,16 @@ export function initVisualisation() {
     loadVisualisation();
   };
   window.pickVis = async (element, mode) => {
+    const resolvedMode = mode === "3D surface" ? "3D" : mode;
     document.querySelectorAll("#screen-visualisation .vt").forEach((node) => node.classList.remove("on"));
     element?.classList.add("on");
-    setActiveVisualisation(mode === "3D surface" ? "3D" : mode);
+    setActiveVisualisation(resolvedMode);
     await loadVisualisation();
   };
   window.drawVis = async (mode) => {
-    setActiveVisualisation(mode === "3D surface" ? "3D" : mode);
+    const resolvedMode = mode === "3D surface" ? "3D" : mode;
+    setActiveVisualisation(resolvedMode);
+    syncVisualisationTabs(resolvedMode);
     await loadVisualisation();
   };
   window.switchResultLayer = async (layerId) => {

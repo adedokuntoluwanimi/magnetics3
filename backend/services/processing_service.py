@@ -1117,6 +1117,20 @@ class ProcessingService:
                 lat_range = max(meas_lats) - min(meas_lats)
                 lon_range = max(meas_lons) - min(meas_lons)
 
+                def _len_ext(trav, s, e, mid_lat, axis="lon"):
+                    if trav.get("length_same_as_original", True):
+                        return s, e
+                    lv = float(trav.get("length") or 1000)
+                    lu = (trav.get("length_unit") or "Metres").lower()
+                    lm = lv * (1000 if "kilo" in lu else 0.3048 if "feet" in lu else 1)
+                    if axis == "lon":
+                        cos_lat = max(abs(math.cos(math.radians(mid_lat))), 1e-6)
+                        half = (lm / 111_320) / cos_lat / 2
+                    else:
+                        half = (lm / 111_320) / 2
+                    mid = (s + e) / 2
+                    return mid - half, mid + half
+
                 for tidx, trav in enumerate(predicted_traverses):
                     ttype = trav.get("type", "offset")
                     spacing_val = float(trav.get("spacing") or 10)
@@ -1136,13 +1150,15 @@ class ProcessingService:
                             if lon_range >= lat_range:
                                 pts.sort(key=lambda p: p[1])
                                 lat_m = sum(p[0] for p in pts) / len(pts)
-                                lons_new = np.arange(pts[0][1], pts[-1][1] + spacing_deg * 0.5, spacing_deg)
+                                ls, le = _len_ext(trav, pts[0][1], pts[-1][1], lat_m, "lon")
+                                lons_new = np.arange(ls, le + spacing_deg * 0.5, spacing_deg)
                                 for lon in lons_new:
                                     predict_rows.append({"latitude": lat_m, "longitude": float(lon)})
                             else:
                                 pts.sort(key=lambda p: p[0])
                                 lon_m = sum(p[1] for p in pts) / len(pts)
-                                lats_new = np.arange(pts[0][0], pts[-1][0] + spacing_deg * 0.5, spacing_deg)
+                                ls, le = _len_ext(trav, pts[0][0], pts[-1][0], (pts[0][0] + pts[-1][0]) / 2, "lat")
+                                lats_new = np.arange(ls, le + spacing_deg * 0.5, spacing_deg)
                                 for lat in lats_new:
                                     predict_rows.append({"latitude": float(lat), "longitude": lon_m})
                     else:
@@ -1159,13 +1175,17 @@ class ProcessingService:
                             if lon_range >= lat_range:
                                 pts.sort(key=lambda p: p[1])
                                 lat_m = sum(p[0] for p in pts) / len(pts) + dlat
-                                lons_new = np.arange(pts[0][1] + dlon, pts[-1][1] + dlon + spacing_deg * 0.5, spacing_deg)
+                                rs, re = pts[0][1] + dlon, pts[-1][1] + dlon
+                                ls, le = _len_ext(trav, rs, re, lat_m, "lon")
+                                lons_new = np.arange(ls, le + spacing_deg * 0.5, spacing_deg)
                                 for lon in lons_new:
                                     predict_rows.append({"latitude": float(lat_m), "longitude": float(lon)})
                             else:
                                 pts.sort(key=lambda p: p[0])
                                 lon_m = sum(p[1] for p in pts) / len(pts) + dlon
-                                lats_new = np.arange(pts[0][0] + dlat, pts[-1][0] + dlat + spacing_deg * 0.5, spacing_deg)
+                                rs, re = pts[0][0] + dlat, pts[-1][0] + dlat
+                                ls, le = _len_ext(trav, rs, re, (rs + re) / 2, "lat")
+                                lats_new = np.arange(ls, le + spacing_deg * 0.5, spacing_deg)
                                 for lat in lats_new:
                                     predict_rows.append({"latitude": float(lat), "longitude": float(lon_m)})
 

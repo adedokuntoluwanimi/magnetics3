@@ -2,6 +2,10 @@ const storedSurveyColor = localStorage.getItem("gaiaSurveyColor") || "#2daa52";
 const storedPredictedColor = localStorage.getItem("gaiaPredictedColor") || "#5ba8d4";
 const storedBaseStationColor = localStorage.getItem("gaiaBaseStationColor") || "#e07b14";
 
+const _VALID_VIS = new Set(["Heatmap", "Contour", "3D", "Map", "Line Profiles"]);
+const _storedVis = localStorage.getItem("gaiaActiveVis") || "Heatmap";
+const _storedLayer = localStorage.getItem("gaiaActiveLayer") || "magnetic";
+
 export const appState = {
   project: null,
   task: null,
@@ -10,8 +14,8 @@ export const appState = {
   basemapFile: null,
   headers: [],
   mapsApiKey: null,
-  activeVisualisation: "Heatmap",
-  activeResultLayer: "magnetic",
+  activeVisualisation: _VALID_VIS.has(_storedVis) ? _storedVis : "Heatmap",
+  activeResultLayer: _storedLayer,
   stackProfiles: false,
   mapColors: {
     survey: storedSurveyColor,
@@ -62,10 +66,12 @@ export function setMapsApiKey(apiKey) {
 
 export function setActiveVisualisation(mode) {
   appState.activeVisualisation = mode;
+  localStorage.setItem("gaiaActiveVis", mode);
 }
 
 export function setActiveResultLayer(layerId) {
   appState.activeResultLayer = layerId;
+  localStorage.setItem("gaiaActiveLayer", layerId);
 }
 
 export function setStackProfiles(value) {

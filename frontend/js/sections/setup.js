@@ -871,6 +871,9 @@ window.addPredictedTraverse = function(type) {
     distance: 50,
     distance_unit: "Metres",
     direction: 90,
+    length_same_as_original: true,
+    length: 1000,
+    length_unit: "Metres",
   };
   window.state.predictedTraverses.push(t);
   renderPredictedTraverseList();
@@ -897,20 +900,28 @@ function renderPredictedTraverseList() {
     container.innerHTML = `<div style="font-size:11px;color:var(--text4);padding:6px 0">No predicted traverses added yet.</div>`;
     return;
   }
-  container.innerHTML = list.map((t, i) => `
+  container.innerHTML = list.map((t, i) => {
+    const isOffset = t.type === 'offset';
+    const isInfill = t.type === 'infill';
+    const offsetActive = `background:var(--accent);color:#fff;border-color:var(--accent);cursor:pointer`;
+    const offsetInactive = `background:var(--card);color:var(--text4);border-color:var(--border);cursor:pointer;opacity:0.45`;
+    const infillActive = `background:var(--accent);color:#fff;border-color:var(--accent);cursor:pointer`;
+    const infillInactive = `background:var(--card);color:var(--text4);border-color:var(--border);cursor:pointer;opacity:0.45`;
+    const sameLength = t.length_same_as_original !== false;
+    return `
     <div class="card" style="margin-bottom:8px;padding:10px 12px;position:relative">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <span style="font-size:12px;font-weight:700;color:var(--text1)">${t.label}</span>
         <button onclick="window.removePredictedTraverse(${i})" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:13px;padding:0 4px" title="Remove">✕</button>
       </div>
       <div style="display:flex;gap:8px;margin-bottom:8px">
-        <button onclick="window.setPTType(${i},'offset')" class="pt-type-btn${t.type==='offset'?' selected':''}" style="flex:1;padding:4px;font-size:10.5px;border-radius:5px;border:1px solid var(--border);background:${t.type==='offset'?'var(--accent)':'var(--card)'};color:${t.type==='offset'?'#fff':'var(--text2)'};cursor:pointer">Offset traverse</button>
-        <button onclick="window.setPTType(${i},'infill')" class="pt-type-btn${t.type==='infill'?' selected':''}" style="flex:1;padding:4px;font-size:10.5px;border-radius:5px;border:1px solid var(--border);background:${t.type==='infill'?'var(--accent)':'var(--card)'};color:${t.type==='infill'?'#fff':'var(--text2)'};cursor:pointer">Infill spacing</button>
+        <button onclick="window.setPTType(${i},'offset')" style="flex:1;padding:4px;font-size:10.5px;border-radius:5px;border:1px solid;${isOffset ? offsetActive : offsetInactive}">${isOffset ? '● ' : ''}Offset traverse</button>
+        <button onclick="window.setPTType(${i},'infill')" style="flex:1;padding:4px;font-size:10.5px;border-radius:5px;border:1px solid;${isInfill ? infillActive : infillInactive}">${isInfill ? '● ' : ''}Infill spacing</button>
       </div>
-      ${t.type === 'offset' ? `
+      ${isOffset ? `
         <div class="g2" style="margin-bottom:6px">
           <div>
-            <label class="fl" style="font-size:10.5px">Distance</label>
+            <label class="fl" style="font-size:10.5px">Distance from original</label>
             <div class="g2">
               <input class="fi" type="number" min="1" value="${t.distance||50}" oninput="window.updatePredictedTraverse(${i},'distance',+this.value)" style="font-size:11px">
               <select class="fsel" onchange="window.updatePredictedTraverse(${i},'distance_unit',this.value)" style="font-size:11px">
@@ -926,6 +937,22 @@ function renderPredictedTraverseList() {
           </div>
         </div>
       ` : ''}
+      <div style="margin-bottom:6px">
+        <label class="fl" style="font-size:10.5px">Traverse length</label>
+        <label style="display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:10.5px;color:var(--text2);cursor:pointer">
+          <input type="checkbox" ${sameLength ? 'checked' : ''} onchange="window.updatePredictedTraverse(${i},'length_same_as_original',this.checked);window.renderPTList()" style="accent-color:var(--accent)">
+          Same as original traverse
+        </label>
+        ${!sameLength ? `
+        <div class="g2">
+          <input class="fi" type="number" min="1" value="${t.length||1000}" oninput="window.updatePredictedTraverse(${i},'length',+this.value)" style="font-size:11px">
+          <select class="fsel" onchange="window.updatePredictedTraverse(${i},'length_unit',this.value)" style="font-size:11px">
+            <option${t.length_unit==='Metres'?' selected':''}>Metres</option>
+            <option${t.length_unit==='Kilometres'?' selected':''}>Kilometres</option>
+            <option${t.length_unit==='Feet'?' selected':''}>Feet</option>
+          </select>
+        </div>` : ''}
+      </div>
       <div>
         <label class="fl" style="font-size:10.5px">Station spacing</label>
         <div class="g2">
@@ -938,7 +965,7 @@ function renderPredictedTraverseList() {
         </div>
       </div>
     </div>
-  `).join("");
+  `}).join("");
 }
 
 window.setPTType = function(idx, type) {
@@ -946,3 +973,5 @@ window.setPTType = function(idx, type) {
   window.state.predictedTraverses[idx].type = type;
   renderPredictedTraverseList();
 };
+
+window.renderPTList = renderPredictedTraverseList;
