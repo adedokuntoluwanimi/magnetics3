@@ -1,10 +1,10 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <link rel="icon" type="image/png" href="/frontend/favicon.png">
-<title>GAIA Magnetics — V2</title>
+<title>GAIA Magnetics - V2</title>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,400;0,500;0,700;0,900;1,300;1,400&family=Roboto+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -45,7 +45,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 .logo{display:flex;align-items:center;gap:8px;cursor:pointer;margin-right:24px;text-decoration:none}
 .logo-g{font-family:'Roboto',sans-serif;font-size:21px;font-weight:700;color:var(--g500);letter-spacing:3px;line-height:1}
 .logo-sep{width:1px;height:16px;background:var(--border2)}
-.logo-tag{font-size:9px;font-weight:700;letter-spacing:2px;color:var(--text3);text-transform:uppercase}
+.logo-tag{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--text3);text-transform:uppercase}
 .nav-links{display:flex;height:100%;align-items:center;gap:1px;flex:1;overflow-x:auto}
 .nav-links::-webkit-scrollbar{display:none}
 .nlnk{padding:0 14px;height:38px;display:flex;align-items:center;font-size:14px;font-weight:600;color:var(--text3);cursor:pointer;border-radius:var(--r);transition:all 0.15s;white-space:nowrap}
@@ -86,12 +86,12 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 .sb-chev{border:none;background:transparent;cursor:pointer;width:14px;height:14px;font-size:10px;color:var(--text4);flex-shrink:0;padding:0;display:flex;align-items:center;justify-content:center;transition:color 0.12s}
 .sb-chev:hover{color:var(--text2)}
 /* Task count badge */
-.sb-count{background:var(--g100);color:var(--g600);border-radius:10px;padding:1px 7px;font-size:10px;font-weight:700;margin-left:auto;flex-shrink:0;transition:opacity 0.1s}
+.sb-count{background:var(--g100);color:var(--g600);border-radius:10px;padding:2px 7px;font-size:11px;font-weight:700;margin-left:auto;flex-shrink:0;transition:opacity 0.1s}
 /* Inline rename input */
-.sb-rename-input{background:var(--bg3);border:1px solid var(--g400);border-radius:4px;font-family:'Manrope',sans-serif;font-size:12px;font-weight:600;color:var(--text);padding:2px 6px;width:100%;outline:none;box-shadow:0 0 0 2px rgba(45,170,82,0.15)}
+.sb-rename-input{background:var(--bg3);border:1px solid var(--g400);border-radius:4px;font-family:'Manrope',sans-serif;font-size:13px;font-weight:600;color:var(--text);padding:3px 7px;width:100%;outline:none;box-shadow:0 0 0 2px rgba(45,170,82,0.15)}
 .sbs{margin-bottom:18px}
-.sbh{font-size:11px;font-weight:700;letter-spacing:2px;color:var(--text4);padding:0 16px 8px;text-transform:uppercase}
-.sbi{display:flex;align-items:center;gap:9px;padding:9px 16px;cursor:pointer;font-size:14px;font-weight:600;color:var(--text3);border-left:2px solid transparent;transition:all 0.14s}
+.sbh{font-size:12px;font-weight:700;letter-spacing:2px;color:var(--text4);padding:0 16px 10px;text-transform:uppercase}
+.sbi{display:flex;align-items:center;gap:9px;padding:10px 16px;cursor:pointer;font-size:15.5px;font-weight:600;color:var(--text3);border-left:2px solid transparent;transition:all 0.14s}
 .sbi:hover{color:var(--text2);background:var(--bg3);border-left-color:var(--g200)}
 .sbi.active{color:var(--g600);background:var(--g50);border-left-color:var(--g400)}
 .sdot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
@@ -319,34 +319,26 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 /* NAV FOOTER */
 .nfoot{padding:16px 0 0;display:flex;justify-content:flex-end;gap:10px;flex-shrink:0}
 
-/* STATUS BAR */
-.statusbar{height:30px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 18px;flex-shrink:0;background:var(--bg2)}
-.sdots{display:flex;gap:5px}
-.sdot{width:6px;height:6px;border-radius:3px;background:var(--bg4);transition:all 0.3s}
-.sdot.active{width:20px;background:var(--g400)}
-.sdot.done{background:var(--g300)}
-
 /* HOME */
 .home-scroll{flex:1;overflow-y:auto;background:var(--bg)}
 .home-scroll::-webkit-scrollbar{width:3px}
 .home-scroll::-webkit-scrollbar-thumb{background:var(--border2)}
 .hero{padding:70px 56px 56px;text-align:center;border-bottom:1px solid var(--border);position:relative;overflow:hidden}
 .hero-grid-bg{position:absolute;inset:0;opacity:0.035;background:repeating-linear-gradient(0deg,transparent,transparent 28px,var(--g400) 28px,var(--g400) 29px),repeating-linear-gradient(90deg,transparent,transparent 28px,var(--g400) 28px,var(--g400) 29px);pointer-events:none}
-.hero-name{font-family:'Roboto',sans-serif;font-size:72px;font-weight:700;letter-spacing:14px;color:var(--text);line-height:1;margin-bottom:10px;}
+.hero-name{font-family:'Roboto',sans-serif;font-size:88px;font-weight:700;letter-spacing:14px;color:var(--text);line-height:1;margin-bottom:12px;}
 .hero-name span{color:var(--g500)}
-.hero-sub{font-size:12px;font-weight:700;letter-spacing:3px;color:var(--text3);margin-bottom:24px;text-transform:uppercase}
-.hero-desc{font-size:14px;color:var(--text3);max-width:460px;margin:0 auto 28px;font-weight:500;line-height:1.75}
+.hero-sub{font-size:14px;font-weight:700;letter-spacing:3px;color:var(--text3);margin-bottom:26px;text-transform:uppercase}
 .hero-btns{display:flex;gap:10px;justify-content:center}
 .hsec{padding:44px 56px;border-bottom:1px solid var(--border)}
 .hsec:last-child{border:none}
 .hslabel{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--text4);text-transform:uppercase;margin-bottom:7px}
-.hstitle{font-family:'Roboto',sans-serif;font-size:24px;font-weight:600;color:var(--text);margin-bottom:16px;}
+.hstitle{font-family:'Roboto',sans-serif;font-size:30px;font-weight:600;color:var(--text);margin-bottom:18px;}
 .cap-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:13px}
 .cap-card{padding:17px;border:1px solid var(--border);border-radius:var(--rl);background:var(--bg);transition:all 0.15s}
 .cap-card:hover{border-color:var(--g200);box-shadow:var(--shadow-md);transform:translateY(-2px)}
 .cap-ic{font-size:20px;margin-bottom:9px;display:block}
-.cap-t{font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px}
-.cap-d{font-size:11.5px;color:var(--text3);line-height:1.55;font-weight:500}
+.cap-t{font-size:15px;font-weight:700;color:var(--text);margin-bottom:6px}
+.cap-d{font-size:13px;color:var(--text3);line-height:1.65;font-weight:500}
 .out-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
 .out-t{font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:9px;padding-bottom:5px;border-bottom:1px solid var(--border)}
 .tag{display:inline-flex;padding:4px 11px;border-radius:20px;font-size:11px;font-weight:700;border:1px solid var(--border);color:var(--text2);margin:3px;background:var(--bg2);transition:all 0.15s}
@@ -407,7 +399,6 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 [data-theme="dark"] .tag:hover{background:var(--bg4);color:var(--g300)}
 [data-theme="dark"] .upzone{background:var(--bg2);border-color:var(--border2)}
 [data-theme="dark"] .upzone:hover{background:var(--bg3);border-color:var(--g400)}
-[data-theme="dark"] .statusbar{background:var(--bg2)}
 [data-theme="dark"] .out-t{color:var(--text3)}
 [data-theme="dark"] .map-legend{background:rgba(15,21,16,0.92);color:var(--text2);border-color:var(--border2)}
 [data-theme="dark"] .map-attribution{background:rgba(15,21,16,0.75);color:rgba(168,212,176,0.6)}
@@ -444,7 +435,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
     </a>
     <div class="nav-links" id="navLinks">
       <div class="nlnk active" data-s="home" onclick="go(this)">Home</div>
-      <div class="nlnk" data-s="setup" onclick="go(this)">Project Setup</div>
+      <div class="nlnk" data-s="projects" onclick="go(this)">Projects</div>
       <div class="nlnk" data-s="analysis" onclick="go(this)">Analysis</div>
       <div class="nlnk" data-s="preview" onclick="go(this)">Preview</div>
       <div class="nlnk" data-s="processing" onclick="go(this)">Processing</div>
@@ -472,7 +463,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
       <div class="sbs" id="sb-projects">
         <div class="sbh">Projects</div>
         <div id="sb-project-list"></div>
-        <div class="sbi" style="color:var(--g500)" id="sb-new-project"><div class="sdot d-new"></div>New project…</div>
+        <div class="sbi" style="color:var(--g500)" id="sb-new-project"><div class="sdot d-new"></div>New project...</div>
       </div>
     </div>
     <!-- Expand button shown when sidebar is collapsed -->
@@ -490,10 +481,15 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             <div class="hero-name">G<span>AI</span>A</div>
             <div style="font-size:11px;font-weight:600;color:var(--g500);letter-spacing:2px;margin-bottom:6px;text-transform:uppercase">Geospatial Analysis and Inference Architecture</div>
             <div class="hero-sub">Magnetic Data Processing Platform</div>
-            <div class="hero-desc">From raw survey CSV to publication-ready interpretation — corrections, modelling, AI analysis, and multi-format export in a single workflow.</div>
             <div class="hero-btns">
-              <button class="btn btn-g" style="padding:12px 28px;font-size:13px" onclick="startProject()">Start project →</button>
-              <button class="btn btn-out" style="padding:12px 22px;font-size:13px" onclick="startProject()">Open project</button>
+              <button class="btn btn-g" style="padding:12px 28px;font-size:13px" onclick="openProjectsHub()">Projects</button>
+              <button class="btn btn-out" style="padding:12px 22px;font-size:13px" onclick="openProjectsHub()">Open project</button>
+            </div>
+          </div>
+          <div class="hsec" style="text-align:center">
+            <div class="hstitle" style="margin-bottom:10px"><span style="color:var(--g500)">GAaaS</span></div>
+            <div style="font-size:13px;color:var(--text3);max-width:640px;margin:0 auto;line-height:1.8;font-weight:500">
+              Geophysical Automation as a Service for magnetic survey setup, quality control, processing, visualisation, and export in one workflow.
             </div>
           </div>
 
@@ -514,9 +510,24 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
           <!-- CTA -->
           <div class="hsec" style="text-align:center">
             <div class="hstitle" style="margin-bottom:8px">Ready to process your survey?</div>
-            <div style="font-size:13px;color:var(--text3);margin-bottom:22px;font-weight:500">Create a project, define context, upload your CSV, and run the full pipeline.</div>
-            <button class="btn btn-g" style="padding:12px 30px;font-size:13px" onclick="startProject()">Start project →</button>
+            <div style="font-size:13px;color:var(--text3);margin-bottom:22px;font-weight:500">Open your projects hub, create a project, upload your CSV, and run the full pipeline.</div>
+            <button class="btn btn-g" style="padding:12px 30px;font-size:13px" onclick="openProjectsHub()">Open projects</button>
           </div>
+        </div>
+      </div>
+
+      <!-- ═══ PROJECTS DIRECTORY ═══ -->
+      <div class="screen" id="screen-projects">
+        <div class="shdr" style="display:flex;align-items:center;gap:10px">
+          <div style="flex:1">
+            <div class="stitle">Projects</div>
+            <div class="ssub">View the full list of projects and jump into the one you want.</div>
+          </div>
+          <span class="badge bg" id="projectsListCount">0 projects</span>
+          <button class="btn btn-g btn-sm" onclick="window.beginNewProjectFlow?.();window.openProjectSetup?.()">+ New project</button>
+        </div>
+        <div class="scroll">
+          <div id="projectsListHost"></div>
         </div>
       </div>
 
@@ -527,8 +538,8 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             <div class="stitle" id="proj-title">Project</div>
             <div class="ssub" id="proj-sub"></div>
           </div>
-          <button class="btn btn-out btn-sm" onclick="window.beginNewTaskFlow?.();window.go?.(document.querySelector('[data-s=setup]'))">+ New task</button>
-          <button class="btn btn-out btn-sm" style="color:var(--red);border-color:var(--red-bg)" id="projDeleteBtn">⊗ Delete project</button>
+          <button class="btn btn-out btn-sm" onclick="window.beginEditProjectFlow?.();window.openProjectSetup?.()">Edit project</button>
+          <button class="btn btn-out btn-sm" onclick="window.beginNewTaskFlow?.();window.openTaskSetup?.()">+ New task</button>
           <button class="btn btn-g btn-sm" onclick="window.go?.(document.querySelector('[data-s=analysis]'))">Open analysis →</button>
         </div>
         <div class="scroll" id="proj-scroll">
@@ -552,8 +563,8 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
       <!-- ═══ PROJECT SETUP ═══ -->
       <div class="screen" id="screen-setup">
         <div class="shdr">
-          <div class="stitle">Project Setup</div>
-          <div class="ssub">Define project context, configure survey and upload basemap</div>
+          <div class="stitle">Projects</div>
+          <div class="ssub">Create a project, configure tasks, and upload survey/reference data</div>
         </div>
         <div class="scroll" id="setupScroll">
           <div class="stepbar">
@@ -610,7 +621,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             </div>
 
             <div class="nfoot">
-              <button class="btn btn-g" id="setupToTaskBtn" type="button">Continue to Task setup →</button>
+              <button class="btn btn-g" id="setupToTaskBtn" type="button">Save project and continue to Task setup →</button>
             </div>
           </div>
 
@@ -841,10 +852,11 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
           <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Reduction to Pole (RTP)</div><div class="chk-d">Declination and inclination from reference model — makes anomalies symmetric over vertical sources</div></div></div>
           <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">Analytic signal</div><div class="chk-d">Source body edge detection — maxima delineate geological contacts independent of inclination</div></div></div>
           <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">EMAG2 comparison</div><div class="chk-d">Compare against EMAG2 global 2-arc-minute model at survey extent</div></div></div>
-          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Uncertainty quantification</div><div class="chk-d">Propagate data quality through pipeline — output confidence raster alongside predictions</div></div></div>
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">First Vertical Derivative</div><div class="chk-d">Sharpen shallow anomalies and suppress broad regional trends for near-surface structure mapping</div></div></div>
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Horizontal Derivative</div><div class="chk-d">Highlight lateral gradients and edges along contacts, dykes, and fault traces</div></div></div>
 
           <div class="nfoot">
-            <button class="btn btn-out" onclick="go(document.querySelector('[data-s=setup]'))">← Back</button>
+            <button class="btn btn-out" onclick="go('setup')">← Back</button>
             <button class="btn btn-g" onclick="window.saveAndPreview?.()">Preview →</button>
           </div>
         </div>
@@ -901,12 +913,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
               <select id="mapTypeSelect">
                 <option value="terrain">Terrain</option>
                 <option value="satellite">Satellite</option>
-                <option value="hybrid">Hybrid</option>
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
-                <option value="muted">Muted green</option>
-                <option value="greyscale">Greyscale</option>
-                <option value="roadmap">Roadmap</option>
+                <option value="roadmap">Map</option>
               </select>
             </div>
             <div class="map-color-picker" id="mapColorPicker" style="display:none">
@@ -1041,39 +1048,45 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             <div class="vt" onclick="pickVis(this,'Map')">Map overlay</div>
             <div class="vt" onclick="pickVis(this,'Line Profiles')">Line profiles</div>
           </div>
-          <div style="display:flex;align-items:center;gap:7px;margin-left:auto">
-            <button class="btn btn-sm btn-out" onclick="go(document.querySelector('[data-s=export]'))">Export ↗</button>
-          </div>
+          <div style="display:flex;align-items:center;gap:7px;margin-left:auto" id="visHeaderActions"></div>
         </div>
         <div style="flex:1;display:flex;overflow:hidden">
           <div style="flex:1;display:flex;flex-direction:column;padding:13px 17px;overflow:hidden">
             <div class="mapbox" style="flex:1;min-height:0">
+              <div class="map-type-picker" id="visMapToolbar" style="display:none;top:10px;left:10px">
+                <div class="mcp-label">Basemap</div>
+                <select id="visMapTypeSelect">
+                  <option value="terrain">Terrain</option>
+                  <option value="satellite">Satellite</option>
+                  <option value="roadmap">Map</option>
+                </select>
+              </div>
               <svg width="100%" height="100%" viewBox="0 0 600 340" id="visSvg" style="display:block"></svg>
             </div>
-            <div style="margin-top:9px;display:flex;align-items:center;gap:7px;flex-wrap:wrap">
-              <span style="font-size:10px;font-weight:700;color:var(--text4);letter-spacing:1px">LAYERS</span>
+            <div style="margin-top:9px;display:flex;align-items:center;gap:7px;flex-wrap:wrap" id="visLayerBar">
+              <span style="font-size:10px;font-weight:700;color:var(--text4);letter-spacing:1px">ACTIVE RESULTS</span>
               <span class="badge bg">TMF grid</span>
               <span style="font-size:10px;color:var(--text4);margin-left:auto">Google Maps / Plotly</span>
             </div>
           </div>
           <div style="width:270px;flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid var(--border);overflow:hidden">
             <div style="padding:13px 15px;border-bottom:1px solid var(--border)">
-              <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:10px">Statistics</div>
-              <div class="srow"><span class="sk">Mean TMF</span><span class="sv">—</span></div>
-              <div class="srow"><span class="sk">Std dev</span><span class="sv">—</span></div>
-              <div class="srow"><span class="sk">Anomalies</span><span class="sv" style="color:var(--amber)">—</span></div>
-              <div class="srow"><span class="sk">Min</span><span class="sv" style="color:var(--blue)">—</span></div>
-              <div class="srow"><span class="sk">Max</span><span class="sv" style="color:var(--g500)">—</span></div>
+              <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:10px" id="visStatsTitle">Statistics</div>
+              <div class="srow"><span class="sk" id="visStatMeanLabel">Mean TMF</span><span class="sv" id="visStatMeanValue">-</span></div>
+              <div class="srow"><span class="sk" id="visStatStdLabel">Std dev</span><span class="sv" id="visStatStdValue">-</span></div>
+              <div class="srow"><span class="sk" id="visStatAnomalyLabel">Anomalies</span><span class="sv" id="visStatAnomalyValue" style="color:var(--amber)">-</span></div>
+              <div class="srow"><span class="sk" id="visStatMinLabel">Min</span><span class="sv" id="visStatMinValue" style="color:var(--blue)">-</span></div>
+              <div class="srow"><span class="sk" id="visStatMaxLabel">Max</span><span class="sv" id="visStatMaxValue" style="color:var(--g500)">-</span></div>
             </div>
             <div style="padding:10px 15px;border-bottom:1px solid var(--border)">
               <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--text4);text-transform:uppercase;margin-bottom:7px">Value scale</div>
-              <div style="height:10px;border-radius:5px;background:linear-gradient(90deg,var(--g700),var(--g500),var(--g300),var(--g100));margin-bottom:5px"></div>
+              <div style="height:10px;border-radius:5px;background:linear-gradient(90deg,var(--g700),var(--g500),var(--g300),var(--g100));margin-bottom:5px" id="visScaleBar"></div>
               <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace">
-                <span>Min</span><span>Mean</span><span>Max</span>
+                <span id="visScaleMin">Min</span><span id="visScaleMid">Mean</span><span id="visScaleMax">Max</span>
               </div>
             </div>
             <div style="flex:1;overflow-y:auto;padding:13px 15px">
-              <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text4);text-transform:uppercase;margin-bottom:10px">Results layers</div>
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text4);text-transform:uppercase;margin-bottom:10px">Processing outputs</div>
               <div id="visLayerToggles">
                 <div style="font-size:11px;color:var(--text3)">Run processing to see available layers.</div>
               </div>
@@ -1082,7 +1095,6 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
           </div>
         </div>
       </div>
-
       <!-- ═══ EXPORT ═══ -->
       <div class="screen" id="screen-export" style="flex-direction:row">
         <div class="split-l">
@@ -1173,17 +1185,6 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 
     </div><!-- /main -->
   </div><!-- /body -->
-
-  <div class="statusbar">
-    <div style="display:flex;gap:14px;align-items:center">
-      <span id="statTxt" style="font-size:10.5px;color:var(--text3);font-weight:600">Ready</span>
-    </div>
-    <div class="sdots" id="sdots">
-      <div class="sdot"></div><div class="sdot"></div><div class="sdot"></div>
-      <div class="sdot"></div><div class="sdot"></div><div class="sdot"></div><div class="sdot"></div>
-    </div>
-    <div></div>
-  </div>
 </div>
 
 <script>
@@ -1198,8 +1199,8 @@ function goProjectScreen(){
   cur='project';
 }
 var state={platform:'ground',scenario:'explicit',mode:'single',model:'ml',basemap:false,files:1,lineMode:'line',gridRows:12,gridCols:8};
-var smap={home:'Ready',setup:'Project setup',analysis:'Configuring analysis pipeline',preview:'Review configuration',processing:'Pipeline executing…',visualisation:'Results ready',export:'Export centre'};
-var sorder=['home','setup','analysis','preview','processing','visualisation','export'];
+var smap={home:'Ready',projects:'Projects',setup:'Projects',analysis:'Configuring analysis pipeline',preview:'Review configuration',processing:'Pipeline executing...',visualisation:'Results ready',export:'Export centre'};
+var sorder=['home','projects','setup','analysis','preview','processing','visualisation','export'];
 
 function goHome(){
   document.querySelectorAll('.screen').forEach(function(s){s.classList.remove('active')});
@@ -1214,7 +1215,11 @@ function goHome(){
 function startProject(){
   document.getElementById('sidebar').classList.remove('off');
   document.getElementById('ctxBadge').style.display='flex';
-  go(document.querySelector('[data-s=setup]'));
+  go('setup');
+}
+
+function openProjectsHub(){
+  go(document.querySelector('[data-s=projects]'));
 }
 
 function go(el){
@@ -1236,7 +1241,8 @@ function go(el){
 }
 
 function setStatus(txt,idx){
-  document.getElementById('statTxt').textContent=txt;
+  var statTxt=document.getElementById('statTxt');
+  if(statTxt)statTxt.textContent=txt;
   var dots=document.querySelectorAll('.sdot');
   dots.forEach(function(d,i){d.classList.remove('active','done');if(i<idx)d.classList.add('done');else if(i===idx)d.classList.add('active');});
 }
@@ -1417,9 +1423,6 @@ function drawPreviewMap(){
   ];
   lines.forEach(function(pts,li){
     var lc=lineColors[li%lineColors.length];
-    // draw line
-    var d='M'+pts.map(function(p){return p[0]+','+p[1]}).join('L');
-    stations+='<path d="'+d+'" stroke="'+lc+'" stroke-width="0.8" fill="none" opacity="0.5"/>';
     pts.forEach(function(pt){
       stations+='<circle cx="'+pt[0]+'" cy="'+pt[1]+'" r="3" fill="'+lc+'"/>';
     });

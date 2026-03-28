@@ -1,4 +1,4 @@
-import {askAurora, createExport, fetchTask} from "../api.js";
+﻿import {askAurora, createExport, fetchTask} from "../api.js";
 import {renderWorkflowProgress} from "./progress.js";
 import {appState, setTask} from "../state.js";
 import {formatBytes} from "../shared/format.js";
@@ -65,9 +65,9 @@ function renderDownloads(job) {
           <div style="${index ? "border-top:1px solid var(--g100);padding-top:11px;" : ""}display:flex;align-items:center;justify-content:space-between;gap:10px">
             <div>
               <div style="font-size:12.5px;font-weight:700;color:var(--text)">${artifact.file_name}</div>
-              <div style="font-size:10.5px;color:var(--text3);margin-top:2px;font-family:'JetBrains Mono',monospace">${formatBytes(artifact.size_bytes)} · ${artifact.gcs_uri}</div>
+              <div style="font-size:10.5px;color:var(--text3);margin-top:2px;font-family:'JetBrains Mono',monospace">${formatBytes(artifact.size_bytes)}  -  ${artifact.gcs_uri}</div>
             </div>
-            <a class="btn btn-g btn-sm" href="${artifact.signed_url}" target="_blank" rel="noreferrer">↓ Download</a>
+            <a class="btn btn-g btn-sm" href="${artifact.signed_url}" target="_blank" rel="noreferrer">Download</a>
           </div>
         `).join("")}
       </div>

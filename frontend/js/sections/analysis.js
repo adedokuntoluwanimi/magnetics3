@@ -14,6 +14,8 @@ const CORRECTION_MAP = {
 const ADD_ON_MAP = {
   "Reduction to Pole (RTP)": "rtp",
   "Analytic signal": "analytic_signal",
+  "First Vertical Derivative": "first_vertical_derivative",
+  "Horizontal Derivative": "horizontal_derivative",
   "EMAG2 comparison": "emag2",
   "Uncertainty quantification": "uncertainty",
 };

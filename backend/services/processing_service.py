@@ -85,17 +85,17 @@ class ProcessingService:
 
                 self._update_run(run_id, 4, "running", "Running the magnetic field model...")
                 results = self._generate_surfaces(task, prep)
-                self._update_run(run_id, 4, "completed", f"Model complete — used {results['model_used']} approach")
+                self._update_run(run_id, 4, "completed", f"Model complete - used {results['model_used']} approach")
 
                 self._update_run(run_id, 5, "running", "Calculating derived layers...")
                 add_on_payload = self._apply_add_ons(task, results)
                 self._update_run(run_id, 5, "completed", add_on_payload["detail"])
             else:
-                # Skip modelling — output corrected data only
+                # Skip modelling and output corrected data only.
                 import numpy as np
-                self._update_run(run_id, 3, "completed", "Prediction modelling disabled — skipped")
-                self._update_run(run_id, 4, "completed", "Prediction modelling disabled — skipped")
-                self._update_run(run_id, 5, "completed", "No derived layers — modelling was disabled")
+                self._update_run(run_id, 3, "completed", "Prediction modelling disabled - skipped")
+                self._update_run(run_id, 4, "completed", "Prediction modelling disabled - skipped")
+                self._update_run(run_id, 5, "completed", "No derived layers - modelling was disabled")
                 grid_x, grid_y = self._build_grid(task, corrected)
                 surface = self._nearest_surface(
                     corrected["longitude"].to_numpy(),
@@ -130,6 +130,8 @@ class ProcessingService:
                 }
                 add_on_payload = {
                     "analytic_signal": [],
+                    "first_vertical_derivative": [],
+                    "horizontal_derivative": [],
                     "filtered_surface": [],
                     "emag2_residual": [],
                     "rtp_surface": [],
@@ -257,7 +259,7 @@ class ProcessingService:
 
     @staticmethod
     def _remove_coordinate_outliers(frame: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-        """Remove points whose coordinates are statistical outliers (3×IQR fence)."""
+        """Remove points whose coordinates are statistical outliers (3xIQR fence)."""
         original_len = len(frame)
         for col in ("latitude", "longitude"):
             if col not in frame.columns or frame.empty:
@@ -467,7 +469,7 @@ class ProcessingService:
             traverse_length_m = max(float(np.sqrt(lon_range_m**2 + lat_range_m**2)), 1.0)
             line_interp = task.get("line_interpolation", True)
             if not line_interp:
-                # Full 2D grid mode — ignore traverse grouping
+                # Full 2D grid mode: ignore traverse grouping.
                 grid_rows = int(task.get("grid_rows") or 0)
                 grid_cols = int(task.get("grid_cols") or 0)
                 if grid_rows >= 2 and grid_cols >= 2:
@@ -601,11 +603,39 @@ class ProcessingService:
         selected = set(add_ons)
         detail_items = []
 
-        # np.gradient requires ≥ 2 elements per dimension; guard for sparse along-line grids
-        if surface.ndim == 2 and surface.shape[0] > 1 and surface.shape[1] > 1:
-            analytic = np.sqrt(sum(c ** 2 for c in np.gradient(surface)))
-        else:
-            analytic = np.zeros_like(surface)
+        # np.gradient requires at least 2 elements per dimension; guard for sparse along-line grids.
+        def gradient_components(values):
+            values = np.asarray(values, dtype=float)
+            if values.ndim == 1:
+                values = values.reshape(1, -1)
+            grad_y = np.zeros_like(values)
+            grad_x = np.zeros_like(values)
+            if values.shape[0] > 1:
+                grad_y = np.gradient(values, axis=0)
+            if values.shape[1] > 1:
+                grad_x = np.gradient(values, axis=1)
+            if values.shape[0] <= 1 < values.shape[1]:
+                grad_x = np.gradient(values.ravel()).reshape(values.shape)
+            if values.shape[1] <= 1 < values.shape[0]:
+                grad_y = np.gradient(values.ravel()).reshape(values.shape)
+            return grad_x, grad_y
+
+        def second_derivative(values):
+            values = np.asarray(values, dtype=float)
+            if values.ndim == 1:
+                values = values.reshape(1, -1)
+            if values.shape[0] > 1 and values.shape[1] > 1:
+                grad_x = np.gradient(values, axis=1)
+                grad_y = np.gradient(values, axis=0)
+                return np.gradient(grad_x, axis=1) + np.gradient(grad_y, axis=0)
+            axis = 1 if values.shape[1] > 1 else 0
+            first = np.gradient(values, axis=axis)
+            return np.gradient(first, axis=axis)
+
+        grad_x, grad_y = gradient_components(surface)
+        first_vertical_derivative = second_derivative(surface)
+        horizontal_derivative = np.sqrt((grad_x ** 2) + (grad_y ** 2))
+        analytic = np.sqrt((grad_x ** 2) + (grad_y ** 2) + (first_vertical_derivative ** 2))
         filtered_surface = surface
         # gaussian_filter sigma must not exceed array size; clamp it
         sigma = min(5.0, max(surface.shape) / 4.0) if surface.size > 1 else 0.0
@@ -617,6 +647,10 @@ class ProcessingService:
             detail_items.append("regional residual comparison")
         if "rtp" in selected:
             detail_items.append("RTP-style centred field")
+        if "first_vertical_derivative" in selected:
+            detail_items.append("first vertical derivative")
+        if "horizontal_derivative" in selected:
+            detail_items.append("horizontal derivative")
         if "uncertainty" in selected:
             detail_items.append("uncertainty surface")
 
@@ -628,6 +662,8 @@ class ProcessingService:
 
         return {
             "analytic_signal": analytic.tolist(),
+            "first_vertical_derivative": first_vertical_derivative.tolist(),
+            "horizontal_derivative": horizontal_derivative.tolist(),
             "filtered_surface": filtered_surface.tolist(),
             "emag2_residual": emag2_residual.tolist(),
             "rtp_surface": rtp_surface.tolist(),
@@ -716,6 +752,7 @@ class ProcessingService:
         # Firestore rejects list-of-lists (nested arrays). Store only lightweight
         # scalar/1D data in the task document; full grid data lives in results.json.
         _2d_keys = {"grid_x", "grid_y", "surface", "uncertainty", "analytic_signal",
+                    "first_vertical_derivative", "horizontal_derivative",
                     "filtered_surface", "emag2_residual", "rtp_surface"}
         firestore_data = {k: v for k, v in payload.items() if k not in _2d_keys}
         # Cap points to 500 for Firestore document size limits

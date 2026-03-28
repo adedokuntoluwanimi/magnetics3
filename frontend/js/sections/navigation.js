@@ -1,4 +1,4 @@
-import {loadAnalysis} from "./analysis.js";
+﻿import {loadAnalysis} from "./analysis.js";
 import {loadExportView} from "./export.js";
 import {loadPreview} from "./preview.js";
 import {loadProcessingView} from "./processing.js";
@@ -33,20 +33,29 @@ async function openProjsDropdown() {
   dropdown.style.top = (rect.bottom + 4) + "px";
   dropdown.style.right = (window.innerWidth - rect.right) + "px";
   dropdown.style.display = "block";
-  list.innerHTML = `<div style="padding:10px 13px;font-size:11px;color:var(--text3)">Loading…</div>`;
+  list.innerHTML = `<div style="padding:10px 13px;font-size:11px;color:var(--text3)">Loading...</div>`;
   try {
     const projects = await getProjectsCached();
     if (!projects.length) {
-      list.innerHTML = `<div style="padding:10px 13px;font-size:11px;color:var(--text3)">No projects yet.</div>`;
+      list.innerHTML = `
+        <div style="padding:8px 13px">
+          <button class="btn btn-out btn-xs" style="width:100%;justify-content:center" onclick="window.openProjectsList?.();window.closeProjsDropdown?.()">View full project list</button>
+        </div>
+        <div style="padding:10px 13px;font-size:11px;color:var(--text3)">No projects yet.</div>
+      `;
       return;
     }
-    list.innerHTML = projects.map((p) => `
+    list.innerHTML = `
+      <div style="padding:8px 13px;border-bottom:1px solid var(--border)">
+        <button class="btn btn-out btn-xs" style="width:100%;justify-content:center" onclick="window.openProjectsList?.();window.closeProjsDropdown?.()">View full project list</button>
+      </div>
+    ` + projects.map((p) => `
       <div data-proj-id="${p.id}" style="display:flex;align-items:center;gap:8px;padding:8px 13px;font-size:12px;font-weight:600;color:var(--text2);cursor:pointer;transition:background 0.1s" onmouseenter="this.style.background='var(--bg3)'" onmouseleave="this.style.background=''" onclick="window.loadProjectFromDropdown('${p.id}')">
         <div style="width:6px;height:6px;border-radius:50%;background:var(--g400);flex-shrink:0"></div>
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.name}</span>
       </div>
     `).join("") + `<div style="border-top:1px solid var(--border);margin:4px 0"></div>
-      <div style="padding:8px 13px;font-size:11.5px;font-weight:700;color:var(--g500);cursor:pointer" onmouseenter="this.style.background='var(--g50)'" onmouseleave="this.style.background=''" onclick="window.beginNewProjectFlow?.();window.startProject?.();closeProjsDropdown()">+ New project</div>`;
+      <div style="padding:8px 13px;font-size:11.5px;font-weight:700;color:var(--g500);cursor:pointer" onmouseenter="this.style.background='var(--g50)'" onmouseleave="this.style.background=''" onclick="window.beginNewProjectFlow?.();window.openProjectSetup?.();window.closeProjsDropdown?.()">+ New project</div>`;
   } catch {
     list.innerHTML = `<div style="padding:10px 13px;font-size:11px;color:var(--red)">Could not load projects.</div>`;
   }
@@ -57,10 +66,19 @@ export function initNavigation() {
   getProjectsCached().catch(() => null);
 
   window.goHome = () => window.go(document.querySelector("[data-s=home]"));
-  window.startProject = () => {
+  window.openProjectSetup = () => {
     document.getElementById("sidebar")?.classList.remove("off");
-    window.go(document.querySelector("[data-s=setup]"));
+    window.go("setup");
   };
+  window.openTaskSetup = () => {
+    document.getElementById("sidebar")?.classList.remove("off");
+    window.go("setup");
+  };
+  window.openProjectsHub = async () => {
+    const {openProjectsList} = await import("./sidebar.js");
+    await openProjectsList();
+  };
+  window.startProject = () => window.openProjectsHub?.();
   window.toggleDark = async () => {
     const dark = document.documentElement.getAttribute("data-theme") === "dark";
     document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
@@ -84,7 +102,7 @@ export function initNavigation() {
   window.toggleSidebar = () => {
     const sidebar = document.getElementById("sidebar");
     if (!sidebar) return;
-    // Complete collapse — no residual expand button
+    // Complete collapse with no residual expand button.
     sidebar.classList.toggle("collapsed");
     // Always hide the expand button (full collapse, no half-visible indicator)
     document.getElementById("sbExpandBtn")?.style.setProperty("display", "none");
@@ -120,9 +138,22 @@ export function initNavigation() {
   };
 
   window.go = async (element) => {
-    const target = element?.dataset?.s;
+    let target = typeof element === "string" ? element : element?.dataset?.s;
     if (!target) {
       return null;
+    }
+    if (target === "projects") {
+      const {openProjectsList} = await import("./sidebar.js");
+      await openProjectsList();
+      return "projects";
+    }
+    const workflowScreens = ["analysis", "preview", "processing", "visualisation", "export", "project"];
+    if (workflowScreens.includes(target) && !appState.project) {
+      target = "projects";
+      element = document.querySelector("[data-s=projects]");
+      const {openProjectsList} = await import("./sidebar.js");
+      await openProjectsList();
+      return "projects";
     }
     document.querySelectorAll(".screen").forEach((node) => node.classList.remove("active"));
     document.getElementById(`screen-${target}`)?.classList.add("active");
@@ -136,18 +167,6 @@ export function initNavigation() {
     window.cur = target;
     if (typeof window.setStatus === "function" && Array.isArray(window.sorder)) {
       window.setStatus(window.smap?.[target] || "Ready", window.sorder.indexOf(target) - 1);
-    }
-    // Guard: all workflow screens require a project to be active
-    const workflowScreens = ["analysis", "preview", "processing", "visualisation", "export", "project"];
-    if (workflowScreens.includes(target) && !appState.project) {
-      // Undo screen change and redirect to setup
-      document.querySelectorAll(".screen").forEach((node) => node.classList.remove("active"));
-      document.getElementById("screen-home")?.classList.add("active");
-      document.querySelectorAll(".nlnk").forEach((node) => node.classList.remove("active"));
-      document.getElementById("sidebar")?.classList.add("off");
-      window.cur = "home";
-      showGlobalNotice("Create a project first to continue.");
-      return null;
     }
     try {
       hideGlobalNotice();
@@ -169,3 +188,4 @@ export function initNavigation() {
     return target;
   };
 }
+

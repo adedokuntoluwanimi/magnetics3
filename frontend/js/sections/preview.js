@@ -1,8 +1,9 @@
-import {fetchPreview} from "../api.js";
+﻿import {fetchPreview} from "../api.js";
 import {persistAnalysis} from "./analysis.js";
 import {renderWorkflowProgress} from "./progress.js";
-import {appState, setTask} from "../state.js";
+import {appState, setPredictedMarkerColor, setSurveyMarkerColor, setTask} from "../state.js";
 import {titleCase} from "../shared/format.js";
+import {showGlobalNotice} from "../shared/notice.js";
 import {renderStationMap, recolorSurveyMarkers, recolorPredictedMarkers} from "./maps.js";
 
 // Human-readable labels for normalized backend IDs
@@ -17,6 +18,8 @@ const CORRECTION_LABELS = {
 const ADD_ON_LABELS = {
   rtp: "RTP",
   analytic_signal: "Analytic signal",
+  first_vertical_derivative: "First vertical derivative",
+  horizontal_derivative: "Horizontal derivative",
   emag2: "EMAG2 comparison",
   uncertainty: "Uncertainty",
 };
@@ -114,7 +117,12 @@ export async function loadPreview() {
   }
   setPreviewLoading(true, "Loading preview...");
   try {
-    await persistAnalysis();
+    try {
+      await persistAnalysis();
+    } catch (error) {
+      console.warn("Could not persist analysis before loading preview:", error);
+      showGlobalNotice("Preview loaded with the last saved analysis settings because the latest analysis changes could not be saved.");
+    }
     setPreviewLoading(true, "Fetching survey data...");
     const preview = await fetchPreview(appState.project.id, appState.task.id);
     const points = renderPreview(preview);
@@ -126,7 +134,9 @@ export async function loadPreview() {
 
     setPreviewLoading(true, "Rendering map...");
     const host = ensurePreviewMapHost();
-    await renderStationMap(host, points, {predictedPoints});
+    await renderStationMap(host, points, {predictedPoints, showLines: false});
+    recolorSurveyMarkers(appState.mapColors.survey);
+    recolorPredictedMarkers(appState.mapColors.predicted);
 
     const legend = document.getElementById("mapLegend");
     if (legend) legend.style.zIndex = "2";
@@ -142,6 +152,7 @@ export async function loadPreview() {
 
     window.setMapColor = (color, swatchEl) => {
       recolorSurveyMarkers(color);
+      setSurveyMarkerColor(color);
       document.querySelectorAll(".mcp-swatch-survey").forEach((s) => s.classList.remove("active"));
       swatchEl?.classList.add("active");
       const legDot = document.getElementById("leg-measured-dot");
@@ -149,6 +160,7 @@ export async function loadPreview() {
     };
     window.setPredictedColor = (color, swatchEl) => {
       recolorPredictedMarkers(color);
+      setPredictedMarkerColor(color);
       document.querySelectorAll(".mcp-swatch-pred").forEach((s) => s.classList.remove("active"));
       swatchEl?.classList.add("active");
       const legDot = document.getElementById("leg-pred-dot");
@@ -157,6 +169,19 @@ export async function loadPreview() {
         legDot.style.border = color === "#ffffff" ? "1px solid #1a5f8c" : "1px solid rgba(0,0,0,0.2)";
       }
     };
+    document.querySelectorAll(".mcp-swatch-survey").forEach((swatch) => {
+      swatch.classList.toggle("active", swatch.dataset.color?.toLowerCase() === appState.mapColors.survey.toLowerCase());
+    });
+    document.querySelectorAll(".mcp-swatch-pred").forEach((swatch) => {
+      swatch.classList.toggle("active", swatch.dataset.color?.toLowerCase() === appState.mapColors.predicted.toLowerCase());
+    });
+    const legMeasuredDot = document.getElementById("leg-measured-dot");
+    if (legMeasuredDot) legMeasuredDot.style.background = appState.mapColors.survey;
+    const legPredDot = document.getElementById("leg-pred-dot");
+    if (legPredDot) {
+      legPredDot.style.background = appState.mapColors.predicted;
+      legPredDot.style.border = appState.mapColors.predicted.toLowerCase() === "#ffffff" ? "1px solid #1a5f8c" : "1px solid rgba(0,0,0,0.2)";
+    }
 
     const attribution = document.querySelector("#screen-preview .map-attribution");
     if (attribution && points.length) {

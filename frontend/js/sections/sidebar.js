@@ -1,12 +1,12 @@
-import {listProjects, listTasks, renameProject, deleteProject, renameTask, deleteTask} from "../api.js";
+﻿import {listProjects, listTasks, renameProject, deleteProject, renameTask, deleteTask} from "../api.js";
 import {appState, clearProcessingRun, clearProject, clearTask, setProject, setTask} from "../state.js";
 import {renderWorkflowProgress} from "./progress.js";
 import {showConfirm, showAlert} from "../shared/modal.js";
 
-// Track collapsed project IDs
+// Track collapsed project ids.
 const collapsedProjects = new Set();
 
-/* ── Helpers ─────────────────────────────────────── */
+/* Helpers */
 
 function lifecycleDot(task, active) {
   if (active) return "d-active";
@@ -38,12 +38,12 @@ function wireProjectNewBtn() {
     btn.dataset.bound = "true";
     btn.addEventListener("click", () => {
       window.beginNewProjectFlow?.();
-      window.startProject?.();
+      window.openProjectSetup?.();
     });
   }
 }
 
-/* ── Inline rename ───────────────────────────────── */
+/* Inline rename */
 function startRename(nameEl, currentName, onSave) {
   const input = document.createElement("input");
   input.className = "sb-rename-input";
@@ -75,14 +75,14 @@ function startRename(nameEl, currentName, onSave) {
   input.addEventListener("blur", commit);
 }
 
-/* ── Project overview screen ─────────────────────── */
+/* Project overview screen */
 function renderProjectScreen(project, tasks) {
   const titleEl = document.getElementById("proj-title");
   if (!titleEl) return;
 
   document.getElementById("proj-title").textContent = project.name;
   document.getElementById("proj-sub").textContent =
-    `${tasks.length} task${tasks.length !== 1 ? "s" : ""}  ·  Created ${fmtDate(project.created_at)}`;
+    `${tasks.length} task${tasks.length !== 1 ? "s" : ""} - Created ${fmtDate(project.created_at)}`;
   const contextEl = document.getElementById("proj-context");
   if (contextEl) contextEl.textContent = project.context || "No description provided.";
 
@@ -133,7 +133,7 @@ function renderProjectScreen(project, tasks) {
           await renameProject(project.id, undefined, newCtx);
           project.context = newCtx;
           contextEl.textContent = newCtx;
-          editCtxBtn.textContent = "✎ Edit";
+          editCtxBtn.textContent = "Edit";
           renderProjectScreen(project, tasks);
         } catch (err) {
           showAlert(err.message || "Save failed.");
@@ -186,9 +186,9 @@ function renderProjectScreen(project, tasks) {
       </div>
       <div style="display:flex;gap:7px;flex-wrap:wrap">
         <button class="btn btn-g btn-xs ptask-open">Open task →</button>
-        <button class="btn btn-out btn-xs ptask-rename">✎ Rename</button>
-        <button class="btn btn-out btn-xs ptask-dup" title="Duplicate — start a new task with the same config">⧉ Duplicate</button>
-        <button class="btn btn-out btn-xs ptask-del" style="color:var(--red);border-color:var(--red-bg)">⊗ Delete</button>
+        <button class="btn btn-out btn-xs ptask-edit">Edit setup</button>
+        <button class="btn btn-out btn-xs ptask-rename">Rename</button>
+        <button class="btn btn-out btn-xs ptask-del" style="color:var(--red);border-color:var(--red-bg)">Delete</button>
       </div>
     `;
 
@@ -214,10 +214,8 @@ function renderProjectScreen(project, tasks) {
       });
     });
 
-    card.querySelector(".ptask-dup").addEventListener("click", () => {
-      // Navigate to task setup pre-filled with this task's config
-      window.beginNewTaskFlow?.();
-      window.go?.(document.querySelector("[data-s=setup]"));
+    card.querySelector(".ptask-edit").addEventListener("click", () => {
+      window.loadTaskForEdit?.(task, project);
     });
 
     card.querySelector(".ptask-del").addEventListener("click", () => {
@@ -243,7 +241,49 @@ function renderProjectScreen(project, tasks) {
   });
 }
 
-/* ── Sidebar task sub-list ───────────────────────── */
+function renderProjectsDirectory(projects, tasksByProject = {}) {
+  const count = document.getElementById("projectsListCount");
+  const host = document.getElementById("projectsListHost");
+  if (!host) return;
+  if (count) {
+    count.textContent = `${projects.length} project${projects.length === 1 ? "" : "s"}`;
+  }
+  if (!projects.length) {
+    host.innerHTML = `
+      <div class="card" style="text-align:center;padding:34px">
+        <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">No projects yet</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:16px">Start a new project to begin your first GAIA workflow.</div>
+        <button class="btn btn-g btn-sm" onclick="window.beginNewProjectFlow?.();window.openProjectSetup?.()">Create project</button>
+      </div>
+    `;
+    return;
+  }
+
+  host.innerHTML = projects.map((project) => {
+    const tasks = tasksByProject[project.id] || [];
+    const previewTask = tasks[0];
+    return `
+      <div class="card" style="margin-bottom:12px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px">
+          <div style="flex:1">
+            <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px">${project.name}</div>
+            <div style="font-size:11px;color:var(--text4);font-weight:700;letter-spacing:0.5px">${tasks.length} task${tasks.length === 1 ? "" : "s"}  -  Updated ${fmtDate(project.updated_at || project.created_at)}</div>
+          </div>
+          <span class="badge ${project.id === appState.project?.id ? "bg" : "bgr"}">${project.id === appState.project?.id ? "Active" : "Project"}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text2);line-height:1.7;margin-bottom:12px">${project.context || "No project context yet."}</div>
+        ${previewTask ? `<div style="font-size:11px;color:var(--text3);margin-bottom:12px">Latest task: <strong style="color:var(--text)">${previewTask.name}</strong></div>` : `<div style="font-size:11px;color:var(--text3);margin-bottom:12px">No tasks created yet.</div>`}
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-g btn-xs" onclick="window.openProjectFromDirectory?.('${project.id}')">Open project</button>
+          <button class="btn btn-out btn-xs" onclick="window.editProjectFromDirectory?.('${project.id}')">Edit project</button>
+          <button class="btn btn-out btn-xs" onclick="window.beginNewTaskForProject?.('${project.id}')">+ New task</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+/* Sidebar task sub-list */
 function renderTaskSubList(tasks, projectId, container) {
   container.querySelector(".sb-task-sublist")?.remove();
 
@@ -297,7 +337,7 @@ function renderTaskSubList(tasks, projectId, container) {
 
     item.append(dot, nameEl, dotsWrap);
 
-    // Click on item → select task, navigate to analysis
+    // Click on item: select task and navigate to analysis.
     item.addEventListener("click", (e) => {
       if (e.target.closest(".sb-dots-wrap")) return;
       e.stopPropagation();
@@ -365,18 +405,18 @@ function renderTaskSubList(tasks, projectId, container) {
   const newBtn = document.createElement("div");
   newBtn.className = "sbi";
   newBtn.style.cssText = "padding:5px 10px;font-size:11.5px;color:var(--g500)";
-  newBtn.innerHTML = `<div class="sdot d-new" style="width:5px;height:5px;flex-shrink:0"></div><span>New task…</span>`;
+  newBtn.innerHTML = `<div class="sdot d-new" style="width:5px;height:5px;flex-shrink:0"></div><span>New task...</span>`;
   newBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     window.beginNewTaskFlow?.();
-    window.go?.(document.querySelector("[data-s=setup]"));
+    window.openTaskSetup?.();
   });
   subList.appendChild(newBtn);
 
   container.appendChild(subList);
 }
 
-/* ── Sidebar project list ────────────────────────── */
+/* Sidebar project list */
 function renderProjectList(projects, tasksForActive = []) {
   const projectList = document.getElementById("sb-project-list");
   if (!projectList) return;
@@ -437,11 +477,11 @@ function renderProjectList(projects, tasksForActive = []) {
     const projDropdown = document.createElement("div");
     projDropdown.className = "sb-dropdown";
     projDropdown.innerHTML = `
-      <div class="sb-dd-item" data-act="view">⊙ View project</div>
+      <div class="sb-dd-item" data-act="view">View project</div>
       <div class="sb-dd-item" data-act="newtask">+ New task</div>
-      <div class="sb-dd-item" data-act="rename">✎ Rename</div>
+      <div class="sb-dd-item" data-act="rename">Rename</div>
       <div class="sb-dd-sep"></div>
-      <div class="sb-dd-item danger" data-act="delete">⊗ Delete project</div>
+      <div class="sb-dd-item danger" data-act="delete">Delete project</div>
     `;
     projDotsWrap.append(projDotsBtn, projDropdown);
 
@@ -459,7 +499,7 @@ function renderProjectList(projects, tasksForActive = []) {
 
     item.append(chev, dot, nameEl, countBadge, projDotsWrap);
 
-    // Click row → select project + navigate to project screen
+    // Click row: select project and navigate to the project screen.
     item.addEventListener("click", async (e) => {
       if (e.target.closest(".sb-dots-wrap") || e.target.closest(".sb-chev")) return;
       collapsedProjects.delete(project.id);
@@ -477,7 +517,7 @@ function renderProjectList(projects, tasksForActive = []) {
       projDropdown.classList.remove("open");
       if (appState.project?.id !== project.id) setProject(project);
       window.beginNewTaskFlow?.();
-      window.go?.(document.querySelector("[data-s=setup]"));
+      window.openTaskSetup?.();
     });
 
     projDropdown.querySelector("[data-act=rename]").addEventListener("click", async (e) => {
@@ -530,7 +570,7 @@ function renderProjectList(projects, tasksForActive = []) {
   });
 }
 
-/* ── selectProject ───────────────────────────────── */
+/* selectProject */
 export async function selectProject(project) {
   setProject(project);
   clearTask();
@@ -546,7 +586,30 @@ export async function selectProject(project) {
   renderWorkflowProgress();
 }
 
-/* ── refreshSidebar ──────────────────────────────── */
+export async function openProjectsList() {
+  const projects = await listProjects();
+  const taskPairs = await Promise.all(
+    projects.map(async (project) => {
+      try {
+        return [project.id, await listTasks(project.id)];
+      } catch {
+        return [project.id, []];
+      }
+    }),
+  );
+  const tasksByProject = Object.fromEntries(taskPairs);
+  renderProjectsDirectory(projects, tasksByProject);
+  document.querySelectorAll(".screen").forEach((node) => node.classList.remove("active"));
+  document.getElementById("screen-projects")?.classList.add("active");
+  document.querySelectorAll(".nlnk").forEach((node) => node.classList.remove("active"));
+  document.querySelector("[data-s=projects]")?.classList.add("active");
+  document.getElementById("sidebar")?.classList.add("off");
+  document.getElementById("ctxBadge")?.style.setProperty("display", appState.project ? "flex" : "none");
+  window.cur = "projects";
+  window.setStatus?.("Projects", 0);
+}
+
+/* refreshSidebar */
 export async function refreshSidebar({bootstrap = false} = {}) {
   wireProjectNewBtn();
   const projects = await listProjects();
@@ -586,11 +649,34 @@ export async function refreshSidebar({bootstrap = false} = {}) {
   renderWorkflowProgress();
 }
 
-/* ── initSidebar ─────────────────────────────────── */
+/* initSidebar */
 export function initSidebar() {
   wireProjectNewBtn();
   syncContext();
   initSidebarResize();
+  window.openProjectsList = openProjectsList;
+  window.openProjectFromDirectory = async (projectId) => {
+    const project = (await listProjects()).find((item) => item.id === projectId);
+    if (project) {
+      await selectProject(project);
+    }
+  };
+  window.editProjectFromDirectory = async (projectId) => {
+    const project = (await listProjects()).find((item) => item.id === projectId);
+    if (!project) return;
+    setProject(project);
+    syncContext(project);
+    window.beginEditProjectFlow?.();
+    window.openProjectSetup?.();
+  };
+  window.beginNewTaskForProject = async (projectId) => {
+    const project = (await listProjects()).find((item) => item.id === projectId);
+    if (!project) return;
+    setProject(project);
+    syncContext(project);
+    window.beginNewTaskFlow?.();
+    window.openTaskSetup?.();
+  };
 }
 
 function initSidebarResize() {

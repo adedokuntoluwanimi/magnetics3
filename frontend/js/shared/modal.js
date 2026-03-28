@@ -1,4 +1,7 @@
-export function showConfirm(message, {title = "Confirm", confirmLabel = "Confirm", danger = false, onConfirm, onCancel} = {}) {
+export function showConfirm(
+  message,
+  {title = "Confirm", confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false, onConfirm, onCancel} = {},
+) {
   const overlay = document.createElement("div");
   overlay.className = "gaia-modal-overlay";
   overlay.innerHTML = `
@@ -6,7 +9,7 @@ export function showConfirm(message, {title = "Confirm", confirmLabel = "Confirm
       <div class="gaia-modal-title">${title}</div>
       <div class="gaia-modal-msg">${message}</div>
       <div class="gaia-modal-actions">
-        <button class="btn btn-out btn-sm" id="_gmCancel">Cancel</button>
+        <button class="btn btn-out btn-sm" id="_gmCancel">${cancelLabel}</button>
         <button class="btn ${danger ? "btn-danger" : "btn-g"} btn-sm" id="_gmConfirm">${confirmLabel}</button>
       </div>
     </div>

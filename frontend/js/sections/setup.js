@@ -1,5 +1,6 @@
-import {createProject, createTask} from "../api.js";
+﻿import {createProject, createTask} from "../api.js";
 import {renderWorkflowProgress} from "./progress.js";
+import {renameProject, updateTask} from "../api.js";
 import {refreshSidebar} from "./sidebar.js";
 import {
   appState,
@@ -13,6 +14,10 @@ import {
   setTask,
 } from "../state.js";
 import {clearFlash, setFlash} from "../shared/dom.js";
+import {showConfirm} from "../shared/modal.js";
+
+let setupFlow = "new-project";
+let taskFlow = "new-task";
 
 function splitCsvHeader(text) {
   const first = (text || "").split(/\r?\n/, 1)[0] || "";
@@ -28,8 +33,257 @@ function getEl(id) {
   return document.getElementById(id);
 }
 
+function median(values) {
+  const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!sorted.length) return NaN;
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function toNumeric(value) {
+  if (typeof value === "number") return value;
+  const normalized = String(value ?? "").trim().replace(/,/g, "");
+  if (!normalized) return NaN;
+  return Number(normalized);
+}
+
+function toRadians(value) {
+  return value * (Math.PI / 180);
+}
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const earthRadius = 6371000;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * earthRadius * Math.asin(Math.sqrt(a));
+}
+
+async function readSurveyRows(file) {
+  if (!window.XLSX) {
+    throw new Error("Spreadsheet parser not loaded yet. Please try again.");
+  }
+  let workbook;
+  if (/\.xlsx?$/i.test(file.name)) {
+    workbook = window.XLSX.read(await file.arrayBuffer(), {type: "array"});
+  } else {
+    workbook = window.XLSX.read(await file.text(), {type: "string"});
+  }
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = window.XLSX.utils.sheet_to_json(sheet, {defval: ""});
+  const headers = Object.keys(rows[0] || {});
+  return {headers, rows};
+}
+
+function detectCoordinateOutliers(rows, mapping, coordSystem) {
+  const latKey = mapping.latitude;
+  const lonKey = mapping.longitude;
+  const isUtm = coordSystem === "utm";
+  const invalidWgs84 = new Set();
+  const coords = rows.map((row, index) => {
+    const rawLat = toNumeric(row[latKey]);
+    const rawLon = toNumeric(row[lonKey]);
+    if (!isUtm && Number.isFinite(rawLat) && Number.isFinite(rawLon) && (Math.abs(rawLat) > 90 || Math.abs(rawLon) > 180)) {
+      invalidWgs84.add(index);
+      return null;
+    }
+    return {index, rawLat, rawLon};
+  }).filter((row) => row && Number.isFinite(row.rawLat) && Number.isFinite(row.rawLon));
+
+  if (coords.length < 6) {
+    return {
+      outlierIndices: invalidWgs84,
+      threshold: NaN,
+      samples: [...invalidWgs84].slice(0, 5).map((index) => ({
+        latitude: toNumeric(rows[index]?.[latKey]),
+        longitude: toNumeric(rows[index]?.[lonKey]),
+        distance: NaN,
+      })),
+    };
+  }
+
+  const centerLat = median(coords.map((row) => row.rawLat));
+  const centerLon = median(coords.map((row) => row.rawLon));
+  const distances = coords.map((row) => {
+    const distance = isUtm
+      ? Math.hypot(row.rawLat - centerLat, row.rawLon - centerLon)
+      : haversineMeters(row.rawLat, row.rawLon, centerLat, centerLon);
+    return {...row, distance};
+  });
+
+  const medianDistance = median(distances.map((row) => row.distance));
+  const mad = median(distances.map((row) => Math.abs(row.distance - medianDistance)));
+  const threshold = Math.max(
+    medianDistance + Math.max(mad * 6, 250),
+    medianDistance * 4,
+    1000,
+  );
+  const outliers = distances.filter((row) => row.distance > threshold);
+  const combinedOutliers = new Set([...invalidWgs84, ...outliers.map((row) => row.index)]);
+  if (!combinedOutliers.size || combinedOutliers.size > Math.max(8, Math.floor(Math.max(distances.length, 1) * 0.25))) {
+    return {outlierIndices: invalidWgs84, threshold, samples: []};
+  }
+
+  return {
+    outlierIndices: combinedOutliers,
+    threshold,
+    samples: [...invalidWgs84].map((index) => ({
+      latitude: toNumeric(rows[index]?.[latKey]),
+      longitude: toNumeric(rows[index]?.[lonKey]),
+      distance: NaN,
+    })).concat(outliers.slice(0, 5).map((row) => ({
+      latitude: row.rawLat,
+      longitude: row.rawLon,
+      distance: row.distance,
+    }))).slice(0, 5),
+  };
+}
+
+function csvEscape(value) {
+  const text = String(value ?? "");
+  if (!/[",\r\n]/.test(text)) return text;
+  return `"${text.replace(/"/g, "\"\"")}"`;
+}
+
+function buildFilteredCsvFile(file, headers, rows, outlierIndices) {
+  const kept = rows.filter((_, index) => !outlierIndices.has(index));
+  const csv = [
+    headers.map((header) => csvEscape(header)).join(","),
+    ...kept.map((row) => headers.map((header) => csvEscape(row[header])).join(",")),
+  ].join("\r\n");
+  const fileName = file.name.replace(/\.[^.]+$/, "") + "-filtered.csv";
+  return new File([csv], fileName, {type: "text/csv"});
+}
+
+async function reviewCoordinateOutliers(files, mapping, coordSystem) {
+  const analyses = await Promise.all(files.map(async (file) => {
+    const parsed = await readSurveyRows(file);
+    const detection = detectCoordinateOutliers(parsed.rows, mapping, coordSystem);
+    return {file, ...parsed, ...detection};
+  }));
+
+  const flagged = analyses.filter((item) => item.outlierIndices.size);
+  if (!flagged.length) {
+    return files;
+  }
+
+  const totalOutliers = flagged.reduce((sum, item) => sum + item.outlierIndices.size, 0);
+  const sampleItems = flagged.flatMap((item) => item.samples.map((sample) => `
+    <li><strong>${item.file.name}</strong>: ${sample.latitude}, ${sample.longitude}${Number.isFinite(sample.distance) ? ` (${Math.round(sample.distance)} m from survey cluster)` : " (invalid coordinate range)"}</li>
+  `)).slice(0, 5).join("");
+
+  const discard = await new Promise((resolve) => {
+    showConfirm(`
+      GAIA found <strong>${totalOutliers}</strong> coordinate outlier${totalOutliers === 1 ? "" : "s"} far from the main survey cluster.
+      <div style="margin-top:10px;font-size:12px;color:var(--text3)">These points can stretch the preview and distort the map.</div>
+      ${sampleItems ? `<ul style="margin-top:10px;padding-left:18px;font-size:12px;color:var(--text2);line-height:1.7">${sampleItems}</ul>` : ""}
+    `, {
+      title: "Distant coordinates detected",
+      confirmLabel: "Discard outliers",
+      cancelLabel: "Keep all",
+      onConfirm: () => resolve(true),
+      onCancel: () => resolve(false),
+    });
+  });
+
+  if (!discard) {
+    return files;
+  }
+
+  return analyses.map((item) => (
+    item.outlierIndices.size
+      ? buildFilteredCsvFile(item.file, item.headers, item.rows, item.outlierIndices)
+      : item.file
+  ));
+}
+
 function flash() {
   return getEl("setupFlash");
+}
+
+function syncProjectInputs(project = appState.project) {
+  const pName = getEl("projectNameInput");
+  const pCtx = getEl("projectContextInput");
+  if (pName) pName.value = project?.name || "";
+  if (pCtx) pCtx.value = project?.context || "";
+}
+
+function updateSetupActionLabels() {
+  const projectBtn = getEl("setupToTaskBtn");
+  const taskBtn = getEl("setupSaveBtn");
+  if (projectBtn) {
+    projectBtn.textContent = setupFlow === "new-project"
+      ? "Save project and continue to Task setup →"
+      : "Save project changes and continue to Task setup →";
+  }
+  if (taskBtn) {
+    taskBtn.textContent = taskFlow === "edit-task"
+      ? "Save task changes and continue to Analysis →"
+      : "Save task and continue to Analysis →";
+  }
+}
+
+async function saveProjectDetails() {
+  clearFlash(flash());
+  if (!validateProject()) {
+    return false;
+  }
+
+  const name = (getEl("projectNameInput")?.value || "").trim();
+  const context = (getEl("projectContextInput")?.value || "").trim();
+  setFlash(
+    flash(),
+    setupFlow === "new-project" ? "Saving new project..." : "Saving project changes...",
+    "info",
+  );
+  getEl("setupScroll")?.scrollTo({top: 0, behavior: "smooth"});
+
+  try {
+    let project = appState.project;
+    if (setupFlow === "new-project" || !project) {
+      project = await createProject({name, context});
+    } else {
+      project = await renameProject(project.id, name, context);
+    }
+    setProject(project);
+    setupFlow = "existing-project";
+    syncProjectInputs(project);
+    updateSetupActionLabels();
+    await refreshSidebar();
+    renderWorkflowProgress();
+    setFlash(flash(), "Project saved. Continue with task setup.", "success");
+    setStep(2);
+    return true;
+  } catch (error) {
+    setFlash(flash(), error.message || "Could not save project.", "error");
+    return false;
+  }
+}
+
+function hydrateTaskFormFromRecord(task) {
+  const headers = task?.dataset_profile?.headers || task?.metadata?.headers || [];
+  if (headers.length) {
+    setHeaders(headers);
+    populateColumnMapping(headers);
+    if (isRawMode()) {
+      populateTimeMapping(headers);
+    }
+    syncBaseStationSection(headers, task?.survey_files?.[0]?.file_name || "");
+  } else {
+    setHeaders([]);
+    resetColumnMapping();
+    resetTimeMapping();
+    syncBaseStationSection([], "");
+  }
+
+  const mapping = task?.column_mapping || {};
+  if (getEl("latSelect")) getEl("latSelect").value = mapping.latitude || "";
+  if (getEl("lonSelect")) getEl("lonSelect").value = mapping.longitude || "";
+  if (getEl("magSelect")) getEl("magSelect").value = mapping.magnetic_field || "";
+  if (getEl("hourSelect")) getEl("hourSelect").value = mapping.hour || "";
+  if (getEl("minuteSelect")) getEl("minuteSelect").value = mapping.minute || "";
+  if (getEl("secondSelect")) getEl("secondSelect").value = mapping.second || "";
 }
 
 function buildUploadRow(name, meta, onRemove) {
@@ -288,19 +542,12 @@ function validateProject() {
 async function submitTaskFlow() {
   clearFlash(flash());
 
-  const name = (getEl("projectNameInput")?.value || "").trim();
-  const context = (getEl("projectContextInput")?.value || "").trim();
-  if (!name || name.length < 3) {
-    getEl("setupScroll")?.scrollTo({top: 0, behavior: "smooth"});
-    setFlash(flash(), "Project name must be at least 3 characters.", "error");
-    setStep(1);
-    return;
-  }
-  if (!context || context.length < 10) {
-    getEl("setupScroll")?.scrollTo({top: 0, behavior: "smooth"});
-    setFlash(flash(), "Project context must be at least 10 characters.", "error");
-    setStep(1);
-    return;
+  if (!appState.project) {
+    const savedProject = await saveProjectDetails();
+    if (!savedProject) {
+      setStep(1);
+      return;
+    }
   }
 
   const taskName = (getEl("taskNameInput")?.value || "").trim();
@@ -315,7 +562,8 @@ async function submitTaskFlow() {
     setFlash(flash(), "Task description must be at least 10 characters.", "error");
     return;
   }
-  if (!appState.surveyFiles.length) {
+  const isEditingTask = taskFlow === "edit-task" && appState.task?.id;
+  if (!appState.surveyFiles.length && !isEditingTask) {
     getEl("setupScroll")?.scrollTo({top: 0, behavior: "smooth"});
     setFlash(flash(), "Upload at least one survey CSV file.", "error");
     return;
@@ -352,15 +600,16 @@ async function submitTaskFlow() {
   }
 
   try {
-    setFlash(flash(), "Creating project and uploading files…", "info");
+    const preparedSurveyFiles = appState.surveyFiles.length
+      ? await reviewCoordinateOutliers(appState.surveyFiles, mapping, coordSys)
+      : [];
+    setFlash(
+      flash(),
+      isEditingTask ? "Saving task changes..." : "Creating task and uploading files...",
+      "info",
+    );
     // Scroll to top so the user can see the progress flash
     getEl("setupScroll")?.scrollTo({top: 0, behavior: "smooth"});
-
-    if (!appState.project) {
-      const project = await createProject({name, context});
-      setProject(project);
-      await refreshSidebar();
-    }
 
     const fd = new FormData();
     fd.set("name", taskName);
@@ -381,14 +630,17 @@ async function submitTaskFlow() {
       fd.set("grid_rows", String(window.state?.gridRows || 12));
       fd.set("grid_cols", String(window.state?.gridCols || 8));
     }
-    appState.surveyFiles.forEach((f) => fd.append("survey_files", f, f.name));
+    preparedSurveyFiles.forEach((f) => fd.append("survey_files", f, f.name));
     if (appState.basemapFile) fd.append("basemap_file", appState.basemapFile, appState.basemapFile.name);
 
-    const task = await createTask(appState.project.id, fd);
+    const task = isEditingTask
+      ? await updateTask(appState.project.id, appState.task.id, fd)
+      : await createTask(appState.project.id, fd);
     setTask(task);
+    taskFlow = "edit-task";
     await refreshSidebar();
     renderWorkflowProgress();
-    setFlash(flash(), "Project and task saved.", "success");
+    setFlash(flash(), isEditingTask ? "Task updated." : "Task saved.", "success");
     window.go(document.querySelector("[data-s=analysis]"));
   } catch (err) {
     setFlash(flash(), err.message || "Save failed. Please try again.", "error");
@@ -407,10 +659,7 @@ function fullReset({preserveProject = false} = {}) {
   if (taskDesc) taskDesc.value = "";
   if (!preserveProject) {
     clearProject();
-    const pName = getEl("projectNameInput");
-    const pCtx = getEl("projectContextInput");
-    if (pName) pName.value = "";
-    if (pCtx) pCtx.value = "";
+    syncProjectInputs(null);
   }
   clearTask();
   renderSurveyFiles();
@@ -421,6 +670,11 @@ function fullReset({preserveProject = false} = {}) {
   syncRawDataSection();
   syncBaseStationSection([], "");
   updateUploadZone(window.state?.mode || "single");
+  if (preserveProject) {
+    syncProjectInputs(appState.project);
+  }
+  taskFlow = "new-task";
+  updateSetupActionLabels();
   setStep(preserveProject ? 2 : 1);
 }
 
@@ -432,6 +686,7 @@ export function initSetup() {
 
   syncRawDataSection();
   updateUploadZone(window.state?.mode || "single");
+  updateSetupActionLabels();
   setStep(1);
 
   // Create hidden file inputs once
@@ -473,11 +728,8 @@ export function initSetup() {
   getEl("basemapZone")?.addEventListener("click", () => basemapInput.click());
 
   // Step buttons
-  getEl("setupToTaskBtn")?.addEventListener("click", () => {
-    if (validateProject()) {
-      clearFlash(flash());
-      setStep(2);
-    }
+  getEl("setupToTaskBtn")?.addEventListener("click", async () => {
+    await saveProjectDetails();
   });
   getEl("setupBackBtn")?.addEventListener("click", () => {
     clearFlash(flash());
@@ -575,26 +827,44 @@ export function initSetup() {
     renderBasemap();
   };
   window.goSetupProjectStep = () => setStep(1);
-  window.goSetupTaskStep = () => {
-    if (validateProject()) setStep(2);
+  window.goSetupTaskStep = async () => {
+    await saveProjectDetails();
   };
   window.beginNewProjectFlow = () => {
+    setupFlow = "new-project";
+    taskFlow = "new-task";
     fullReset();
     refreshSidebar();
   };
-  window.beginNewTaskFlow = () => {
+  window.beginEditProjectFlow = () => {
+    setupFlow = "existing-project";
+    taskFlow = "new-task";
     fullReset({preserveProject: true});
+    syncProjectInputs(appState.project);
+    updateSetupActionLabels();
+    setStep(1);
+  };
+  window.beginNewTaskFlow = () => {
+    setupFlow = "existing-project";
+    taskFlow = "new-task";
+    fullReset({preserveProject: true});
+    syncProjectInputs(appState.project);
     refreshSidebar();
   };
   window.submitTaskFlow = submitTaskFlow;
 
   window.loadTaskForEdit = (task, project) => {
+    setupFlow = "existing-project";
+    taskFlow = "edit-task";
     if (project) setProject(project);
     setTask(task);
-    const pName = getEl("projectNameInput");
-    const pCtx = getEl("projectContextInput");
-    if (pName) pName.value = project?.name || "";
-    if (pCtx) pCtx.value = project?.context || "";
+    syncProjectInputs(project);
+    setSurveyFiles([]);
+    renderSurveyFiles();
+    setBasemapFile(null);
+    renderBasemap();
+    hydrateTaskFormFromRecord(task);
+    updateSetupActionLabels();
     setStep(2);
     const tName = getEl("taskNameInput");
     const tDesc = getEl("taskDescInput");
@@ -602,7 +872,7 @@ export function initSetup() {
     if (tDesc) tDesc.value = task.description || "";
     window.setMode?.(task.processing_mode || "single");
     const platform = task.platform || "ground";
-    document.querySelectorAll(".plt-opt").forEach((el) => el.classList.toggle("selected", el.id === `plt-${platform}`));
+    window.setPlatform?.(platform);
     if (window.state) window.state.platform = platform;
     const scenario = task.scenario || "explicit";
     window.setScenario?.(scenario);
@@ -617,8 +887,8 @@ export function initSetup() {
       if (rowsInput && rows) rowsInput.value = rows;
       if (colsInput && cols) colsInput.value = cols;
     }
-    const dataState = task.data_state || "corrected";
-    document.querySelectorAll(".radio-opt[id^='state-']").forEach((el) => el.classList.toggle("selected", el.id === `state-${dataState}`));
+    const dataState = task.data_state === "corrected" ? "corr" : "raw";
+    window.setState?.(dataState);
     const mapping = task.column_mapping || {};
     if (mapping.coordinate_system) window.setCoordSystem?.(mapping.coordinate_system);
     if (mapping.utm_zone) { const z = getEl("utmZoneInput"); if (z) z.value = mapping.utm_zone; }
@@ -627,7 +897,7 @@ export function initSetup() {
     const unitEl = getEl("spacingUnit");
     if (unitEl && task.station_spacing_unit) unitEl.value = task.station_spacing_unit;
     getEl("setupScroll")?.scrollTo({top: 0, behavior: "smooth"});
-    window.go?.(document.querySelector("[data-s=setup]"));
+    window.go?.("setup");
   };
 
   // Wire "Start Project" buttons from the home screen

@@ -1,3 +1,6 @@
+const storedSurveyColor = localStorage.getItem("gaiaSurveyColor") || "#2daa52";
+const storedPredictedColor = localStorage.getItem("gaiaPredictedColor") || "#5ba8d4";
+
 export const appState = {
   project: null,
   task: null,
@@ -7,6 +10,12 @@ export const appState = {
   headers: [],
   mapsApiKey: null,
   activeVisualisation: "Heatmap",
+  activeResultLayer: "magnetic",
+  stackProfiles: false,
+  mapColors: {
+    survey: storedSurveyColor,
+    predicted: storedPredictedColor,
+  },
 };
 
 export function setProject(project) {
@@ -51,4 +60,22 @@ export function setMapsApiKey(apiKey) {
 
 export function setActiveVisualisation(mode) {
   appState.activeVisualisation = mode;
+}
+
+export function setActiveResultLayer(layerId) {
+  appState.activeResultLayer = layerId;
+}
+
+export function setStackProfiles(value) {
+  appState.stackProfiles = Boolean(value);
+}
+
+export function setSurveyMarkerColor(color) {
+  appState.mapColors.survey = color;
+  localStorage.setItem("gaiaSurveyColor", color);
+}
+
+export function setPredictedMarkerColor(color) {
+  appState.mapColors.predicted = color;
+  localStorage.setItem("gaiaPredictedColor", color);
 }

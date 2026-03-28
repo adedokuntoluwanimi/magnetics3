@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import csv
+from datetime import datetime, timezone
 from io import BytesIO, StringIO
 from statistics import fmean
 
 from backend.logging_utils import log_event
 from backend.models import ColumnMapping, DatasetProfile, TaskCreatePayload, TaskRecord
-from backend.models.common import MapBounds
+from backend.models.common import MapBounds, TaskLifecycle
 
 
 def _xlsx_to_csv_bytes(raw_bytes: bytes) -> bytes:
@@ -76,7 +77,6 @@ class TaskService:
         return self._store.get_task(task_id)
 
     def rename_task(self, task_id: str, name: str) -> dict:
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         return self._store.update_task(task_id, {"name": name, "updated_at": now})
 
@@ -96,7 +96,7 @@ class TaskService:
         if payload.processing_mode == "single" and len(survey_files) != 1:
             raise ValueError("Single-line mode requires exactly one survey CSV file.")
 
-        # Normalise xlsx → csv with bold-row base-station detection
+        # Normalise xlsx to csv with bold-row base-station detection.
         normalised_survey: list[tuple[str, str, bytes]] = []
         for file_name, content_type, data in survey_files:
             if file_name.lower().endswith((".xlsx", ".xls")):
@@ -151,6 +151,95 @@ class TaskService:
             task_id=task.id,
         )
         return self._store.create_task(task.model_dump(mode="json"))
+
+    def update_task(
+        self,
+        *,
+        task_id: str,
+        payload: TaskCreatePayload,
+        survey_files: list[tuple[str, str, bytes]] | None = None,
+        basemap_file: tuple[str, str, bytes] | None = None,
+    ) -> dict:
+        existing = self.get_task(task_id)
+        if not existing:
+            raise ValueError("Task not found.")
+
+        project_id = existing["project_id"]
+        effective_survey_files = survey_files or [
+            (
+                artifact["file_name"],
+                artifact.get("content_type") or "text/csv",
+                self._storage.download_bytes(artifact["bucket"], artifact["object_name"]),
+            )
+            for artifact in (existing.get("survey_files") or [])
+        ]
+        if not effective_survey_files:
+            raise ValueError("At least one survey CSV file is required.")
+
+        effective_basemap = basemap_file
+        if effective_basemap is None and existing.get("basemap_file"):
+            artifact = existing["basemap_file"]
+            effective_basemap = (
+                artifact["file_name"],
+                artifact.get("content_type") or "application/octet-stream",
+                self._storage.download_bytes(artifact["bucket"], artifact["object_name"]),
+            )
+
+        normalised_survey: list[tuple[str, str, bytes]] = []
+        for file_name, content_type, data in effective_survey_files:
+            if file_name.lower().endswith((".xlsx", ".xls")):
+                csv_bytes = _xlsx_to_csv_bytes(data)
+                base_name = file_name.rsplit(".", 1)[0] + ".csv"
+                normalised_survey.append((base_name, "text/csv", csv_bytes))
+            else:
+                data = _auto_detect_base_stations(data, payload.column_mapping.latitude, payload.column_mapping.longitude)
+                normalised_survey.append((file_name, content_type, data))
+
+        dataset_profile = self._build_dataset_profile(
+            survey_files=normalised_survey,
+            mapping=payload.column_mapping,
+        )
+
+        uploaded_survey_files = [
+            self._storage.upload_task_input(
+                project_id=project_id,
+                task_id=task_id,
+                file_name=file_name,
+                content_type=content_type,
+                data=data,
+                kind="survey",
+            )
+            for file_name, content_type, data in normalised_survey
+        ]
+
+        uploaded_basemap = None
+        if effective_basemap:
+            file_name, content_type, data = effective_basemap
+            uploaded_basemap = self._storage.upload_task_input(
+                project_id=project_id,
+                task_id=task_id,
+                file_name=file_name,
+                content_type=content_type,
+                data=data,
+                kind="basemap",
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        fields = {
+            **payload.model_dump(mode="json"),
+            "dataset_profile": dataset_profile.model_dump(mode="json"),
+            "survey_files": [artifact.model_dump(mode="json") for artifact in uploaded_survey_files],
+            "basemap_file": uploaded_basemap.model_dump(mode="json") if uploaded_basemap else None,
+            "analysis_config": {},
+            "processing_run_id": None,
+            "export_jobs": [],
+            "results": {},
+            "lifecycle": TaskLifecycle.draft.value,
+            "updated_at": now,
+        }
+        updated = self._store.update_task(task_id, fields)
+        self._store.update_project(project_id, {"updated_at": now})
+        return updated
 
     def _build_dataset_profile(
         self,

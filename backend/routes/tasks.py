@@ -16,6 +16,44 @@ class TaskRename(BaseModel):
 router = APIRouter(prefix="/api/projects/{project_id}/tasks", tags=["tasks"])
 
 
+def _build_task_payload(
+    *,
+    name: str,
+    description: str,
+    platform: str,
+    data_state: str,
+    scenario: str,
+    processing_mode: str,
+    station_spacing: float | None,
+    station_spacing_unit: str | None,
+    line_interpolation: str | None,
+    grid_rows: int | None,
+    grid_cols: int | None,
+    corrected_corrections: str,
+    column_mapping: str,
+    metadata: str,
+) -> TaskCreatePayload:
+    line_interp_val = True
+    if line_interpolation is not None:
+        line_interp_val = str(line_interpolation).lower() in {"1", "true", "yes", "y"}
+    return TaskCreatePayload(
+        name=name,
+        description=description,
+        platform=Platform(platform),
+        data_state=DataState(data_state),
+        scenario=Scenario(scenario),
+        processing_mode=ProcessingMode(processing_mode),
+        station_spacing=station_spacing,
+        station_spacing_unit=station_spacing_unit,
+        line_interpolation=line_interp_val,
+        grid_rows=grid_rows,
+        grid_cols=grid_cols,
+        corrected_corrections=json.loads(corrected_corrections or "[]"),
+        column_mapping=ColumnMapping(**json.loads(column_mapping)),
+        metadata=json.loads(metadata or "{}"),
+    )
+
+
 @router.get("")
 def list_tasks(project_id: str, service=Depends(get_task_service)) -> list[dict]:
     return service.list_tasks(project_id)
@@ -43,24 +81,21 @@ async def create_task(
     service=Depends(get_task_service),
 ) -> dict:
     try:
-        line_interp_val = True
-        if line_interpolation is not None:
-            line_interp_val = str(line_interpolation).lower() in {"1", "true", "yes", "y"}
-        payload = TaskCreatePayload(
+        payload = _build_task_payload(
             name=name,
             description=description,
-            platform=Platform(platform),
-            data_state=DataState(data_state),
-            scenario=Scenario(scenario),
-            processing_mode=ProcessingMode(processing_mode),
+            platform=platform,
+            data_state=data_state,
+            scenario=scenario,
+            processing_mode=processing_mode,
             station_spacing=station_spacing,
             station_spacing_unit=station_spacing_unit,
-            line_interpolation=line_interp_val,
+            line_interpolation=line_interpolation,
             grid_rows=grid_rows,
             grid_cols=grid_cols,
-            corrected_corrections=json.loads(corrected_corrections or "[]"),
-            column_mapping=ColumnMapping(**json.loads(column_mapping)),
-            metadata=json.loads(metadata or "{}"),
+            corrected_corrections=corrected_corrections,
+            column_mapping=column_mapping,
+            metadata=metadata,
         )
         survey_payloads = [
             (upload.filename, upload.content_type or "text/csv", await upload.read())
@@ -77,6 +112,70 @@ async def create_task(
             project_id=project_id,
             payload=payload,
             survey_files=survey_payloads,
+            basemap_file=basemap_payload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/{task_id}")
+async def update_task(
+    project_id: str,
+    task_id: str,
+    name: str = Form(...),
+    description: str = Form(...),
+    platform: str = Form(...),
+    data_state: str = Form(...),
+    scenario: str = Form(...),
+    processing_mode: str = Form(...),
+    station_spacing: float | None = Form(None),
+    station_spacing_unit: str | None = Form(None),
+    line_interpolation: str | None = Form(None),
+    grid_rows: int | None = Form(None),
+    grid_cols: int | None = Form(None),
+    corrected_corrections: str = Form("[]"),
+    column_mapping: str = Form(...),
+    metadata: str = Form("{}"),
+    survey_files: list[UploadFile] | None = File(None),
+    basemap_file: UploadFile | None = File(None),
+    service=Depends(get_task_service),
+) -> dict:
+    task = service.get_task(task_id)
+    if not task or task["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    try:
+        payload = _build_task_payload(
+            name=name,
+            description=description,
+            platform=platform,
+            data_state=data_state,
+            scenario=scenario,
+            processing_mode=processing_mode,
+            station_spacing=station_spacing,
+            station_spacing_unit=station_spacing_unit,
+            line_interpolation=line_interpolation,
+            grid_rows=grid_rows,
+            grid_cols=grid_cols,
+            corrected_corrections=corrected_corrections,
+            column_mapping=column_mapping,
+            metadata=metadata,
+        )
+        survey_payloads = [
+            (upload.filename, upload.content_type or "text/csv", await upload.read())
+            for upload in (survey_files or [])
+            if upload and upload.filename
+        ]
+        basemap_payload = None
+        if basemap_file and basemap_file.filename:
+            basemap_payload = (
+                basemap_file.filename,
+                basemap_file.content_type or "application/octet-stream",
+                await basemap_file.read(),
+            )
+        return service.update_task(
+            task_id=task_id,
+            payload=payload,
+            survey_files=survey_payloads or None,
             basemap_file=basemap_payload,
         )
     except ValueError as exc:

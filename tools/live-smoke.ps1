@@ -1,8 +1,9 @@
-$ErrorActionPreference = "Stop"
-
 param(
   [string]$BaseUrl = "https://gaia-magnetics-348555315681.us-central1.run.app"
 )
+
+$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Net.Http
 
 function Write-Step([string]$Message) {
   Write-Host ("== {0} ==" -f $Message)
@@ -41,7 +42,7 @@ latitude,longitude,magnetic
 6.5280,3.3828,41260
 '@
 $bytes = [System.Text.Encoding]::UTF8.GetBytes($csv)
-$client = [System.Net.Http.HttpClient]::new()
+$client = New-Object System.Net.Http.HttpClient
 $client.Timeout = [TimeSpan]::FromSeconds(90)
 $multipart = [System.Net.Http.MultipartFormDataContent]::new()
 $fields = @{
@@ -76,10 +77,11 @@ $task = $taskBody | ConvertFrom-Json
 
 Write-Step "save analysis"
 $analysis = Invoke-Json "Put" "$BaseUrl/api/projects/$($project.id)/tasks/$($task.id)/analysis" @{
-  corrections = @("Diurnal correction", "IGRF removal")
+  corrections = @("diurnal", "igrf")
   filter_type = "low-pass"
-  model = "Hybrid"
-  add_ons = @("Analytic signal", "Uncertainty quantification")
+  model = "hybrid"
+  add_ons = @("analytic_signal", "uncertainty")
+  run_prediction = $true
 }
 $analysis | ConvertTo-Json -Compress | Write-Host
 

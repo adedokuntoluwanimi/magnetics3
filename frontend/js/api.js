@@ -53,6 +53,13 @@ export function createTask(projectId, formData) {
   });
 }
 
+export function updateTask(projectId, taskId, formData) {
+  return request(`/api/projects/${projectId}/tasks/${taskId}`, {
+    method: "PUT",
+    body: formData,
+  });
+}
+
 export function saveAnalysis(projectId, taskId, payload) {
   return request(`/api/projects/${projectId}/tasks/${taskId}/analysis`, {
     method: "PUT",

@@ -1,4 +1,4 @@
-import {fetchDependencyStatus} from "../api.js";
+﻿import {fetchDependencyStatus} from "../api.js";
 import {showGlobalNotice} from "../shared/notice.js";
 
 function ensureStatusPanel() {
@@ -26,7 +26,7 @@ export async function loadHomeStatus() {
         ${entries.map(([name, state]) => `
           <div class="cap-card">
             <div class="cap-t">${name.charAt(0).toUpperCase() + name.slice(1)}</div>
-            <div class="cap-d">${state.ok ? "Ready" : "Attention needed"} · ${state.message}</div>
+            <div class="cap-d">${state.ok ? "Ready" : "Attention needed"}  -  ${state.message}</div>
           </div>
         `).join("")}
       </div>

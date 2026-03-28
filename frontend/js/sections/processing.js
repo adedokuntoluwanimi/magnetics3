@@ -1,4 +1,4 @@
-import {fetchProcessingRun, fetchTask, startProcessing} from "../api.js";
+﻿import {fetchProcessingRun, fetchTask, startProcessing} from "../api.js";
 import {renderWorkflowProgress} from "./progress.js";
 import {appState, setProcessingRun, setTask} from "../state.js";
 import {ensureElement} from "../shared/dom.js";
@@ -24,7 +24,12 @@ const CORRECTION_LABELS = {
   filtering: "Filtering", lag: "Lag correction", heading: "Heading correction",
 };
 const ADD_ON_LABELS = {
-  rtp: "RTP", analytic_signal: "Analytic signal", emag2: "EMAG2 comparison", uncertainty: "Uncertainty",
+  rtp: "RTP",
+  analytic_signal: "Analytic signal",
+  first_vertical_derivative: "First vertical derivative",
+  horizontal_derivative: "Horizontal derivative",
+  emag2: "EMAG2 comparison",
+  uncertainty: "Uncertainty",
 };
 const MODEL_LABELS = {kriging: "Kriging", ml: "Machine learning", hybrid: "Hybrid", none: "No modelling"};
 

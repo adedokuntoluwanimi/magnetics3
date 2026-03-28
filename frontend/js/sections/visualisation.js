@@ -1,11 +1,94 @@
-import {fetchTask, fetchTaskResults} from "../api.js";
+﻿import {fetchTask, fetchTaskResults} from "../api.js";
 import {renderWorkflowProgress} from "./progress.js";
-import {appState, setActiveVisualisation, setTask} from "../state.js";
-import {formatNumber} from "../shared/format.js";
+import {appState, setActiveResultLayer, setActiveVisualisation, setStackProfiles, setTask} from "../state.js";
+import {formatNumber, titleCase} from "../shared/format.js";
 import {loadScript} from "../shared/loaders.js";
 import {renderStationMap} from "./maps.js";
 
 let plotlyPromise = null;
+
+const LAYER_META = {
+  magnetic: {
+    label: "Corrected magnetic field",
+    shortLabel: "TMF",
+    key: "surface",
+    unit: "nT",
+    tone: "Core field",
+    description: "Main corrected magnetic surface used for modelling and interpretation.",
+    palette: ["#0c3b1d", "#22803c", "#63c47d", "#d6f5df"],
+  },
+  filtered_surface: {
+    label: "Filtered surface",
+    shortLabel: "Filtered",
+    key: "filtered_surface",
+    unit: "nT",
+    tone: "Correction",
+    description: "Filter output using the processing option selected in Analysis.",
+    palette: ["#113b57", "#1f6f9e", "#62b9dd", "#d8f2fb"],
+  },
+  rtp_surface: {
+    label: "Reduction to pole",
+    shortLabel: "RTP",
+    key: "rtp_surface",
+    unit: "nT",
+    tone: "Add-on",
+    description: "Centred magnetic response that makes anomalies easier to compare over vertical sources.",
+    palette: ["#1c3567", "#2d5ab3", "#79a8f2", "#e2edff"],
+  },
+  analytic_signal: {
+    label: "Analytic signal",
+    shortLabel: "Analytic",
+    key: "analytic_signal",
+    unit: "nT/m",
+    tone: "Derivative",
+    description: "Edge-enhancement layer highlighting source boundaries and contacts.",
+    palette: ["#5d2f0a", "#ba6412", "#efae55", "#fff0cf"],
+  },
+  first_vertical_derivative: {
+    label: "First vertical derivative",
+    shortLabel: "FVD",
+    key: "first_vertical_derivative",
+    unit: "nT/m",
+    tone: "Derivative",
+    description: "Sharper near-surface enhancement that suppresses regional trends.",
+    palette: ["#5a1b1b", "#b43737", "#ef7b68", "#ffe0d6"],
+  },
+  horizontal_derivative: {
+    label: "Horizontal derivative",
+    shortLabel: "HD",
+    key: "horizontal_derivative",
+    unit: "nT/m",
+    tone: "Derivative",
+    description: "Horizontal gradient magnitude for delineating lateral edges and structures.",
+    palette: ["#3f2d14", "#8e6528", "#d6a55c", "#f9ebca"],
+  },
+  emag2_residual: {
+    label: "EMAG2 residual",
+    shortLabel: "EMAG2",
+    key: "emag2_residual",
+    unit: "nT",
+    tone: "Comparison",
+    description: "Residual-style comparison surface against the smoothed regional field.",
+    palette: ["#3e1847", "#8b3e91", "#cf7ad7", "#f3def8"],
+  },
+  uncertainty: {
+    label: "Uncertainty",
+    shortLabel: "Uncertainty",
+    key: "uncertainty",
+    unit: "%",
+    tone: "Confidence",
+    description: "Estimated model uncertainty combining distance from data support and variance.",
+    palette: ["#4f2c00", "#936100", "#d29a16", "#fbe7ab"],
+  },
+};
+
+const VISUALISATION_TAB_LABELS = {
+  Heatmap: "Heatmap",
+  Contour: "Contour",
+  "3D": "3D surface",
+  Map: "Map overlay",
+  "Line Profiles": "Line profiles",
+};
 
 async function ensurePlotly() {
   if (window.Plotly) {
@@ -17,19 +100,29 @@ async function ensurePlotly() {
   return plotlyPromise;
 }
 
-function getResults() {
-  return appState.task?.results?.data || null;
-}
-
 function getRoots() {
-  const screen = document.getElementById("screen-visualisation");
   return {
-    screen,
-    mapBox: screen.querySelector(".mapbox"),
-    layerBar: screen.querySelector("div[style*='margin-top:9px']"),
-    statsRows: screen.querySelectorAll("div[style*='padding:13px 15px'] .srow .sv"),
-    scaleLabels: screen.querySelectorAll("div[style*='font-family:\\'JetBrains Mono\\''] span"),
-    headerBadgeWrap: screen.querySelector("div[style*='margin-left:auto']"),
+    screen: document.getElementById("screen-visualisation"),
+    mapBox: document.querySelector("#screen-visualisation .mapbox"),
+    headerActions: document.getElementById("visHeaderActions"),
+    headerLayerBar: document.getElementById("visLayerBar"),
+    statsTitle: document.getElementById("visStatsTitle"),
+    statMeanLabel: document.getElementById("visStatMeanLabel"),
+    statMeanValue: document.getElementById("visStatMeanValue"),
+    statStdLabel: document.getElementById("visStatStdLabel"),
+    statStdValue: document.getElementById("visStatStdValue"),
+    statAnomalyLabel: document.getElementById("visStatAnomalyLabel"),
+    statAnomalyValue: document.getElementById("visStatAnomalyValue"),
+    statMinLabel: document.getElementById("visStatMinLabel"),
+    statMinValue: document.getElementById("visStatMinValue"),
+    statMaxLabel: document.getElementById("visStatMaxLabel"),
+    statMaxValue: document.getElementById("visStatMaxValue"),
+    scaleBar: document.getElementById("visScaleBar"),
+    scaleMin: document.getElementById("visScaleMin"),
+    scaleMid: document.getElementById("visScaleMid"),
+    scaleMax: document.getElementById("visScaleMax"),
+    layerToggles: document.getElementById("visLayerToggles"),
+    interpretation: document.getElementById("visInterpretation"),
   };
 }
 
@@ -40,245 +133,552 @@ function ensureHost() {
     host.id = "visRenderHost";
     host.style.width = "100%";
     host.style.height = "100%";
-    getRoots().mapBox.innerHTML = "";
-    getRoots().mapBox.appendChild(host);
+    const mapBox = getRoots().mapBox;
+    mapBox.innerHTML = "";
+    mapBox.appendChild(host);
   }
   return host;
 }
 
-function renderStats(results) {
-  const stats = results?.stats || {};
-  const roots = getRoots();
-  const rows = [
-    formatNumber(stats.mean),
-    formatNumber(stats.std),
-    String(stats.anomaly_count || 0),
-    formatNumber(stats.min),
-    formatNumber(stats.max),
-  ];
-  roots.statsRows.forEach((node, index) => {
-    if (rows[index] !== undefined) {
-      node.textContent = rows[index];
+function resetVisualisationHost() {
+  const host = ensureHost();
+  if (window.Plotly) {
+    try {
+      window.Plotly.purge(host);
+    } catch (_error) {
+      // Ignore cleanup errors and continue with a fresh host.
     }
+  }
+  host.innerHTML = "";
+  return host;
+}
+
+function syncVisualisationTabs(mode) {
+  const activeLabel = VISUALISATION_TAB_LABELS[mode] || VISUALISATION_TAB_LABELS.Heatmap;
+  document.querySelectorAll("#screen-visualisation .vt").forEach((node) => {
+    node.classList.toggle("on", node.textContent.trim() === activeLabel);
   });
-  if (roots.scaleLabels[0]) {
-    roots.scaleLabels[0].textContent = formatNumber(stats.min);
-  }
-  if (roots.scaleLabels[1]) {
-    roots.scaleLabels[1].textContent = formatNumber(stats.mean);
-  }
-  if (roots.scaleLabels[2]) {
-    roots.scaleLabels[2].textContent = formatNumber(stats.max);
+}
+
+function syncVisualisationMapControls(show) {
+  const toolbar = document.getElementById("visMapToolbar");
+  if (toolbar) {
+    toolbar.style.display = show ? "flex" : "none";
   }
 }
 
-const ADD_ON_LABELS = {rtp: "RTP", analytic_signal: "Analytic signal", emag2: "EMAG2", uncertainty: "Uncertainty"};
-const MODEL_DISPLAY = {kriging: "Kriging", ml: "Machine learning", hybrid: "Hybrid"};
-
-function renderLayerBar(results) {
-  const task = appState.task || {};
-  const layers = [
-    "<span style=\"font-size:10px;font-weight:700;color:var(--text4);letter-spacing:1px\">LAYERS</span>",
-    "<span class=\"badge bg\">TMF grid</span>",
-  ];
-  (task.analysis_config?.add_ons || []).forEach((addOn) => {
-    const label = ADD_ON_LABELS[addOn] || addOn;
-    layers.push(`<span class="badge ba">${label}</span>`);
-  });
-  const modelLabel = MODEL_DISPLAY[results?.model_used] || results?.model_used || "";
-  if (modelLabel) {
-    layers.push(`<span style="font-size:10px;color:var(--text4);margin-left:auto">${modelLabel}</span>`);
+function matrixify(values) {
+  if (!Array.isArray(values)) {
+    return [];
   }
-  getRoots().layerBar?.innerHTML && (getRoots().layerBar.innerHTML = layers.join(""));
+  if (!values.length) {
+    return [];
+  }
+  return Array.isArray(values[0]) ? values : [values];
 }
 
-function renderHeader(results) {
-  const modelLabel = MODEL_DISPLAY[results?.model_used] || results?.model_used || "";
-  const wrap = getRoots().headerBadgeWrap;
-  if (!wrap) return;
-  wrap.innerHTML = `
-    <span class="badge bgr">${results.stats?.point_count || 0} points</span>
+function flattenFinite(values) {
+  return matrixify(values)
+    .flat()
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+}
+
+function axisFromGrid(grid, axis) {
+  const matrix = matrixify(grid);
+  if (!matrix.length) {
+    return [];
+  }
+  if (axis === "x") {
+    return (matrix[0] || []).map((value) => Number(value));
+  }
+  return matrix.map((row) => Number((row || [])[0]));
+}
+
+function buildPlotSurface(results, surfaceValues) {
+  const z = matrixify(surfaceValues).map((row) => row.map((value) => Number(value)));
+  let x = axisFromGrid(results.grid_x, "x");
+  let y = axisFromGrid(results.grid_y, "y");
+
+  if (!z.length || !z[0]?.length) {
+    return {x: [], y: [], z: []};
+  }
+  if (!x.length) {
+    x = Array.from({length: z[0].length}, (_, index) => index + 1);
+  }
+  if (!y.length) {
+    y = Array.from({length: z.length}, (_, index) => index + 1);
+  }
+  if (z.length === 1) {
+    const delta = Math.max(Math.abs((x[x.length - 1] || 1) - (x[0] || 0)) * 0.015, 0.0001);
+    const y0 = Number.isFinite(y[0]) ? y[0] : 0;
+    return {x, y: [y0 - delta, y0 + delta], z: [z[0], z[0]]};
+  }
+  if (z[0].length === 1) {
+    const delta = Math.max(Math.abs((y[y.length - 1] || 1) - (y[0] || 0)) * 0.015, 0.0001);
+    const x0 = Number.isFinite(x[0]) ? x[0] : 0;
+    return {x: [x0 - delta, x0 + delta], y, z: z.map((row) => [row[0], row[0]])};
+  }
+  return {x, y, z};
+}
+
+function computeLayerStats(layer) {
+  const values = flattenFinite(layer.surface);
+  if (!values.length) {
+    return {min: null, max: null, mean: null, std: null, anomalyCount: 0, pointCount: 0, range: null};
+  }
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const variance = values.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / values.length;
+  const std = Math.sqrt(variance);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  return {
+    min,
+    max,
+    mean,
+    std,
+    anomalyCount: values.filter((value) => value > mean + std).length,
+    pointCount: values.length,
+    range: max - min,
+  };
+}
+
+function paletteToCss(palette) {
+  return `linear-gradient(90deg, ${palette.join(",")})`;
+}
+
+function paletteToPlotly(palette) {
+  if (!palette?.length) {
+    return "Viridis";
+  }
+  return palette.map((color, index) => [index / Math.max(palette.length - 1, 1), color]);
+}
+
+function renderStats(layer, stats) {
+  const roots = getRoots();
+  if (roots.statsTitle) {
+    roots.statsTitle.textContent = `${layer.shortLabel} statistics`;
+  }
+  if (roots.statMeanLabel) roots.statMeanLabel.textContent = `Mean ${layer.shortLabel}`;
+  if (roots.statStdLabel) roots.statStdLabel.textContent = "Std dev";
+  if (roots.statAnomalyLabel) roots.statAnomalyLabel.textContent = "High anomalies";
+  if (roots.statMinLabel) roots.statMinLabel.textContent = `Min ${layer.unit}`;
+  if (roots.statMaxLabel) roots.statMaxLabel.textContent = `Max ${layer.unit}`;
+  if (roots.statMeanValue) roots.statMeanValue.textContent = formatNumber(stats.mean);
+  if (roots.statStdValue) roots.statStdValue.textContent = formatNumber(stats.std);
+  if (roots.statAnomalyValue) roots.statAnomalyValue.textContent = String(stats.anomalyCount || 0);
+  if (roots.statMinValue) roots.statMinValue.textContent = formatNumber(stats.min);
+  if (roots.statMaxValue) roots.statMaxValue.textContent = formatNumber(stats.max);
+  if (roots.scaleBar) roots.scaleBar.style.background = paletteToCss(layer.palette);
+  if (roots.scaleMin) roots.scaleMin.textContent = formatNumber(stats.min);
+  if (roots.scaleMid) roots.scaleMid.textContent = formatNumber(stats.mean);
+  if (roots.scaleMax) roots.scaleMax.textContent = formatNumber(stats.max);
+}
+
+function renderHeader(results, layer, stats) {
+  const roots = getRoots();
+  if (!roots.headerActions) return;
+  const modelLabel = {
+    kriging: "Kriging",
+    hybrid: "Hybrid",
+    machine_learning: "Machine learning",
+    ml: "Machine learning",
+    none: "No modelling",
+  }[results?.model_used] || titleCase(results?.model_used || "");
+  roots.headerActions.innerHTML = `
+    <span class="badge bgr">${results?.points?.length || 0} measured points</span>
+    ${(results?.predicted_points?.length || 0) ? `<span class="badge bb">${results.predicted_points.length} predicted</span>` : ""}
+    <span class="badge bg">${layer.shortLabel}</span>
     ${modelLabel ? `<span class="badge" style="background:var(--amber-bg);color:var(--amber)">${modelLabel}</span>` : ""}
-    <button class="btn btn-sm btn-out" onclick="go(document.querySelector('[data-s=export]'))">Export ↗</button>
+    ${stats.range != null ? `<span class="badge bgr">Range ${formatNumber(stats.range)} ${layer.unit}</span>` : ""}
+    <button class="btn btn-sm btn-out" onclick="go(document.querySelector('[data-s=export]'))">Export →</button>
   `;
 }
 
-function renderLayerToggles(results) {
-  const container = document.getElementById("visLayerToggles");
-  if (!container) return;
-  const mode = appState.activeVisualisation || "Map";
-  const hasPoints = (results?.points?.length || 0) > 0;
-  const hasSurface = hasSurfaceGrid(results);
-  const layers = [
-    {id: "Map", label: "Map overlay", desc: "Survey stations on interactive map", available: hasPoints},
-    {id: "Line Profiles", label: "Line profiles", desc: "Distance vs magnetic field", available: hasPoints},
-    {id: "Heatmap", label: "Heatmap", desc: "Interpolated 2D colour map", available: hasSurface},
-    {id: "Contour", label: "Contour", desc: "Magnetic field contour lines", available: hasSurface},
-    {id: "Surface", label: "3D surface", desc: "Interactive 3D terrain model", available: hasSurface},
-  ].filter((l) => l.available);
-  if (!layers.length) {
-    container.innerHTML = `<div style="font-size:11px;color:var(--text3);padding:4px 0">No layers available.</div>`;
-    return;
-  }
-  container.innerHTML = layers.map((layer) => {
-    const isActive = mode === layer.id;
-    return `
-      <div onclick="window.switchVisLayer('${layer.id}')" style="display:flex;align-items:flex-start;gap:9px;padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:3px;background:${isActive ? "var(--g50)" : "transparent"};border:1px solid ${isActive ? "var(--g200)" : "transparent"};transition:background 0.1s">
-        <div style="width:8px;height:8px;border-radius:50%;background:${isActive ? "var(--g500)" : "var(--g300)"};flex-shrink:0;margin-top:4px"></div>
-        <div>
-          <div style="font-size:12px;font-weight:${isActive ? "700" : "600"};color:${isActive ? "var(--g600)" : "var(--text2)"}">${layer.label}</div>
-          <div style="font-size:10px;color:var(--text3);margin-top:1px">${layer.desc}</div>
-        </div>
-      </div>
-    `;
-  }).join("");
-  const interp = document.getElementById("visInterpretation");
-  if (interp && results?.stats) {
-    const s = results.stats;
-    const range = Number.isFinite(s.max) && Number.isFinite(s.min) ? s.max - s.min : null;
-    interp.innerHTML = `
-      <div style="font-size:10px;font-weight:700;color:var(--text3);letter-spacing:0.5px;text-transform:uppercase;margin-bottom:8px">Summary</div>
-      <div style="font-size:11px;color:var(--text2);line-height:1.8">
-        <div style="display:flex;justify-content:space-between;margin-bottom:2px"><span style="color:var(--text3)">Points</span><span style="font-weight:600;font-family:'JetBrains Mono',monospace">${s.point_count || 0}</span></div>
-        ${range !== null ? `<div style="display:flex;justify-content:space-between;margin-bottom:2px"><span style="color:var(--text3)">Field range</span><span style="font-weight:600;font-family:'JetBrains Mono',monospace">${formatNumber(range)} nT</span></div>` : ""}
-        ${s.anomaly_count ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Anomalies</span><span style="font-weight:600;font-family:'JetBrains Mono',monospace">${s.anomaly_count}</span></div>` : ""}
-      </div>
-    `;
-  }
+function renderLayerBar(layers, activeLayer) {
+  const roots = getRoots();
+  if (!roots.headerLayerBar) return;
+  roots.headerLayerBar.innerHTML = `
+    <span style="font-size:10px;font-weight:700;color:var(--text4);letter-spacing:1px">ACTIVE RESULTS</span>
+    ${layers.map((layer) => `<span class="badge ${layer.id === activeLayer.id ? "bg" : "bgr"}">${layer.shortLabel}</span>`).join("")}
+    <span style="font-size:10px;color:var(--text4);margin-left:auto">${activeLayer.tone}</span>
+  `;
 }
 
-async function renderLineProfiles(results) {
-  const Plotly = await ensurePlotly();
-  const host = ensureHost();
-  const points = results.points || [];
-  if (!points.length) {
-    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">No point data available for line profiles.</div>`;
-    return;
+function buildAvailableLayers(results, task) {
+  const config = task?.analysis_config || {};
+  const selectedAddOns = new Set(config.add_ons || []);
+  const selectedCorrections = new Set(config.corrections || []);
+  const layers = [];
+
+  const pushLayer = (id, enabled = true) => {
+    const meta = LAYER_META[id];
+    if (!meta || !enabled) return;
+    const surface = results?.[meta.key];
+    if (!Array.isArray(surface) || !matrixify(surface).length) return;
+    layers.push({...meta, id, surface});
+  };
+
+  pushLayer("magnetic", true);
+  pushLayer("filtered_surface", selectedCorrections.has("filtering"));
+  pushLayer("rtp_surface", selectedAddOns.has("rtp"));
+  pushLayer("analytic_signal", selectedAddOns.has("analytic_signal"));
+  pushLayer("first_vertical_derivative", selectedAddOns.has("first_vertical_derivative"));
+  pushLayer("horizontal_derivative", selectedAddOns.has("horizontal_derivative"));
+  pushLayer("emag2_residual", selectedAddOns.has("emag2"));
+  pushLayer("uncertainty", selectedAddOns.has("uncertainty"));
+  return layers;
+}
+
+function getActiveLayer(layers) {
+  const fallback = layers[0] || {...LAYER_META.magnetic, id: "magnetic", surface: []};
+  const active = layers.find((layer) => layer.id === appState.activeResultLayer) || fallback;
+  if (active.id !== appState.activeResultLayer) {
+    setActiveResultLayer(active.id);
   }
-  // Group points into traverses by rounding the perpendicular coordinate
-  const lats = points.map((p) => Number(p.latitude));
-  const lons = points.map((p) => Number(p.longitude));
+  return active;
+}
+
+function buildSurfaceSampler(results, layer) {
+  const z = matrixify(layer.surface);
+  const gx = matrixify(results.grid_x);
+  const gy = matrixify(results.grid_y);
+  const nodes = [];
+  for (let row = 0; row < z.length; row += 1) {
+    for (let col = 0; col < (z[row] || []).length; col += 1) {
+      const value = Number(z[row][col]);
+      const lon = Number((gx[row] || [])[col]);
+      const lat = Number((gy[row] || [])[col]);
+      if (Number.isFinite(value) && Number.isFinite(lat) && Number.isFinite(lon)) {
+        nodes.push({lat, lon, value});
+      }
+    }
+  }
+  return (latitude, longitude) => {
+    if (!nodes.length) return null;
+    let best = nodes[0];
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const node of nodes) {
+      const distance = ((node.lat - latitude) ** 2) + ((node.lon - longitude) ** 2);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = node;
+      }
+    }
+    return best?.value ?? null;
+  };
+}
+
+function deriveGrouping(points) {
+  const coords = points.filter((point) => Number.isFinite(Number(point.latitude)) && Number.isFinite(Number(point.longitude)));
+  if (!coords.length) {
+    return {groupByLat: true, axisKey: "longitude", transverseKey: "latitude", step: 0.001};
+  }
+  const lats = coords.map((point) => Number(point.latitude));
+  const lons = coords.map((point) => Number(point.longitude));
   const latRange = Math.max(...lats) - Math.min(...lats);
   const lonRange = Math.max(...lons) - Math.min(...lons);
-  const groupByLat = latRange < lonRange; // E-W survey: group by lat, vary along lon
-  const step = (groupByLat ? latRange : lonRange) / Math.max(Math.sqrt(points.length / 5), 1);
-  const groups = new Map();
-  points.forEach((p) => {
-    const key = Math.round((groupByLat ? Number(p.latitude) : Number(p.longitude)) / (step || 0.001)) * (step || 0.001);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(p);
+  const groupByLat = latRange < lonRange;
+  const stepBase = (groupByLat ? latRange : lonRange) / Math.max(Math.sqrt(coords.length / 5), 1);
+  return {
+    groupByLat,
+    axisKey: groupByLat ? "longitude" : "latitude",
+    transverseKey: groupByLat ? "latitude" : "longitude",
+    step: Math.max(stepBase || 0, 0.0001),
+  };
+}
+
+function buildDisplayDatasets(results, layer) {
+  const measured = (results?.points || []).filter((point) => Number.isFinite(Number(point.latitude)) && Number.isFinite(Number(point.longitude)));
+  const predicted = (results?.predicted_points || []).filter((point) => Number.isFinite(Number(point.latitude)) && Number.isFinite(Number(point.longitude)));
+  const sampler = buildSurfaceSampler(results, layer);
+  const grouping = deriveGrouping([...measured, ...predicted]);
+  const all = [];
+
+  const measuredDisplay = measured.map((point) => {
+    const sampled = sampler(Number(point.latitude), Number(point.longitude));
+    const displayValue = layer.id === "magnetic" && Number.isFinite(Number(point.magnetic))
+      ? Number(point.magnetic)
+      : sampled;
+    const item = {
+      ...point,
+      display_value: Number.isFinite(displayValue) ? displayValue : null,
+      display_label: layer.shortLabel,
+      display_unit: layer.unit,
+      point_kind: point.is_base_station ? "Measured base station" : "Measured data",
+      value_type: "measured",
+    };
+    all.push(item);
+    return item;
   });
+
+  const predictedDisplay = predicted.map((point) => {
+    const displayValue = sampler(Number(point.latitude), Number(point.longitude));
+    const item = {
+      ...point,
+      display_value: Number.isFinite(displayValue) ? displayValue : null,
+      display_label: layer.shortLabel,
+      display_unit: layer.unit,
+      point_kind: "Predicted data",
+      value_type: "predicted",
+    };
+    all.push(item);
+    return item;
+  });
+
+  const traverseMap = new Map();
+  all.forEach((point) => {
+    const key = point.line_id != null
+      ? `line-${point.line_id}`
+      : `group-${Math.round(Number(point[grouping.transverseKey]) / grouping.step)}`;
+    if (!traverseMap.has(key)) traverseMap.set(key, []);
+    traverseMap.get(key).push(point);
+  });
+
+  const orderedTraverses = [...traverseMap.entries()]
+    .sort(([, a], [, b]) => Number(a[0]?.[grouping.transverseKey] || 0) - Number(b[0]?.[grouping.transverseKey] || 0))
+    .map(([key, points], index) => {
+      const sorted = [...points].sort((a, b) => Number(a[grouping.axisKey]) - Number(b[grouping.axisKey]));
+      const origin = sorted[0]
+        ? {lat: Number(sorted[0].latitude), lon: Number(sorted[0].longitude)}
+        : {lat: 0, lon: 0};
+      sorted.forEach((point, stationIndex) => {
+        point.station_number = stationIndex + 1;
+        const dLat = (Number(point.latitude) - origin.lat) * 111320;
+        const dLon = (Number(point.longitude) - origin.lon) * 111320 * Math.cos(origin.lat * Math.PI / 180);
+        point.distance_along = Math.sqrt((dLat ** 2) + (dLon ** 2));
+        point.traverse_label = `Traverse ${index + 1}`;
+      });
+      return {
+        key,
+        label: `Traverse ${index + 1}`,
+        points: sorted,
+      };
+    });
+
+  return {
+    measured: measuredDisplay,
+    predicted: predictedDisplay,
+    traverses: orderedTraverses,
+  };
+}
+
+function renderLayerControls(layers, activeLayer, mode) {
+  const roots = getRoots();
+  if (!roots.layerToggles) return;
+  roots.layerToggles.innerHTML = `
+    <div style="font-size:10px;font-weight:700;color:var(--text4);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:10px">Selected processing outputs</div>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${layers.map((layer) => {
+        const active = layer.id === activeLayer.id;
+        return `
+          <button
+            type="button"
+            onclick="window.switchResultLayer('${layer.id}')"
+            style="display:flex;align-items:flex-start;gap:10px;text-align:left;padding:9px 10px;border-radius:8px;border:1px solid ${active ? "var(--g300)" : "var(--border)"};background:${active ? "var(--g50)" : "var(--bg)"};cursor:pointer"
+          >
+            <span style="width:10px;height:10px;border-radius:50%;background:${layer.palette[1]};margin-top:4px;flex-shrink:0"></span>
+            <span style="flex:1">
+              <span style="display:block;font-size:12px;font-weight:${active ? "700" : "600"};color:${active ? "var(--g600)" : "var(--text)"}">${layer.label}</span>
+              <span style="display:block;font-size:10px;color:var(--text3);margin-top:2px">${layer.description}</span>
+            </span>
+          </button>
+        `;
+      }).join("")}
+    </div>
+    ${mode === "Line Profiles" ? `
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+          <input type="checkbox" ${appState.stackProfiles ? "checked" : ""} onchange="window.toggleProfileStacking(this.checked)" style="width:14px;height:14px;accent-color:var(--g500);margin-top:2px">
+          <span>
+            <span style="display:block;font-size:12px;font-weight:700;color:var(--text)">Stack profiles</span>
+            <span style="display:block;font-size:10px;color:var(--text3);margin-top:2px">Offset each traverse vertically for easier comparison. Hover shows station number only when stacking is on.</span>
+          </span>
+        </label>
+      </div>
+    ` : ""}
+  `;
+}
+
+function renderInterpretation(layer, stats, displayData) {
+  const roots = getRoots();
+  if (!roots.interpretation) return;
+  roots.interpretation.innerHTML = `
+    <div style="font-size:10px;font-weight:700;color:var(--text3);letter-spacing:0.6px;text-transform:uppercase;margin-bottom:8px">Current layer</div>
+    <div class="card card-sm" style="padding:12px">
+      <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">${layer.label}</div>
+      <div style="font-size:11px;color:var(--text2);line-height:1.75;margin-bottom:10px">${layer.description}</div>
+      <div style="font-size:11px;color:var(--text3);line-height:1.8">
+        <div style="display:flex;justify-content:space-between"><span>Measured points</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">${displayData.measured.length}</span></div>
+        <div style="display:flex;justify-content:space-between"><span>Predicted points</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">${displayData.predicted.length}</span></div>
+        <div style="display:flex;justify-content:space-between"><span>Traverses</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">${displayData.traverses.length}</span></div>
+        <div style="display:flex;justify-content:space-between"><span>Range</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">${formatNumber(stats.range)} ${layer.unit}</span></div>
+      </div>
+    </div>
+  `;
+}
+
+async function renderLineProfiles(results, layer, stats) {
+  const Plotly = await ensurePlotly();
+  const host = resetVisualisationHost();
+  const displayData = buildDisplayDatasets(results, layer);
+  const traverses = displayData.traverses.filter((traverse) => traverse.points.some((point) => Number.isFinite(point.display_value)));
+
+  if (!traverses.length) {
+    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">No profile points are available for ${layer.label.toLowerCase()}.</div>`;
+    return displayData;
+  }
+
+  const offsetStep = appState.stackProfiles
+    ? Math.max((stats.range || 0) * 0.25, stats.std || 0, 1)
+    : 0;
   const traces = [];
-  [...groups.entries()].sort(([a], [b]) => a - b).slice(0, 20).forEach(([key, pts]) => {
-    const sorted = pts.sort((a, b) => (groupByLat ? Number(a.longitude) - Number(b.longitude) : Number(a.latitude) - Number(b.latitude)));
-    const origin = {lat: Number(sorted[0].latitude), lon: Number(sorted[0].longitude)};
-    const distances = sorted.map((p) => {
-      const dlat = (Number(p.latitude) - origin.lat) * 111320;
-      const dlon = (Number(p.longitude) - origin.lon) * 111320 * Math.cos(origin.lat * Math.PI / 180);
-      return Math.sqrt(dlat * dlat + dlon * dlon);
-    });
-    traces.push({
-      x: distances,
-      y: sorted.map((p) => Number(p.magnetic || 0)),
-      type: "scatter",
-      mode: "lines",
-      name: `Line ${(groupByLat ? key.toFixed(4) + "°N" : key.toFixed(4) + "°E")}`,
-      line: {width: 1.5},
-    });
+  traverses.slice(0, 24).forEach((traverse, index) => {
+    const measured = traverse.points.filter((point) => point.value_type === "measured" && Number.isFinite(point.display_value));
+    const predicted = traverse.points.filter((point) => point.value_type === "predicted" && Number.isFinite(point.display_value));
+    const offset = appState.stackProfiles ? index * offsetStep : 0;
+
+    const makeCustom = (points) => points.map((point) => [point.station_number, point.display_value, point.value_type]);
+    const hoverTemplate = appState.stackProfiles
+      ? "Station #%{customdata[0]}<extra>%{fullData.name}</extra>"
+      : `Station #%{customdata[0]}<br>${layer.shortLabel}: %{customdata[1]:.2f} ${layer.unit}<extra>%{fullData.name}</extra>`;
+
+    if (measured.length) {
+      traces.push({
+        x: measured.map((point) => point.distance_along),
+        y: measured.map((point) => Number(point.display_value) + offset),
+        customdata: makeCustom(measured),
+        type: "scatter",
+        mode: "lines+markers",
+        name: `${traverse.label} - measured`,
+        line: {color: appState.mapColors.survey, width: 1.8},
+        marker: {color: appState.mapColors.survey, size: 6},
+        hovertemplate: hoverTemplate,
+        legendgroup: traverse.key,
+      });
+    }
+    if (predicted.length) {
+      traces.push({
+        x: predicted.map((point) => point.distance_along),
+        y: predicted.map((point) => Number(point.display_value) + offset),
+        customdata: makeCustom(predicted),
+        type: "scatter",
+        mode: "markers",
+        name: `${traverse.label} - predicted`,
+        marker: {
+          color: appState.mapColors.predicted,
+          size: 7,
+          symbol: "circle-open",
+          line: {color: appState.mapColors.predicted, width: 1.8},
+        },
+        hovertemplate: hoverTemplate,
+        legendgroup: traverse.key,
+      });
+    }
   });
-  const commonLayout = {
+
+  await Plotly.newPlot(host, traces, {
     margin: {t: 20, r: 12, b: 48, l: 56},
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
     font: {color: "#5f6d64", size: 11},
     xaxis: {title: "Distance along traverse (m)", gridcolor: "rgba(0,0,0,0.06)"},
-    yaxis: {title: "Magnetic field (nT)", gridcolor: "rgba(0,0,0,0.06)"},
-    showlegend: traces.length <= 8,
+    yaxis: {title: appState.stackProfiles ? `${layer.shortLabel} (${layer.unit}) - stacked` : `${layer.shortLabel} (${layer.unit})`, gridcolor: "rgba(0,0,0,0.06)"},
+    showlegend: true,
     legend: {font: {size: 9}},
-  };
-  await Plotly.newPlot(host, traces, commonLayout, {displayModeBar: false, responsive: true});
+    hovermode: "closest",
+  }, {displayModeBar: false, responsive: true});
+
+  return displayData;
 }
 
-function hasSurfaceGrid(results) {
-  if (!results?.surface || !results?.grid_x || !results?.grid_y) return false;
-  if (!Array.isArray(results.surface) || !Array.isArray(results.grid_y)) return false;
-  return results.surface.length > 1 && results.grid_y.length > 1;
-}
-
-async function renderPlot(mode, results) {
+async function renderPlot(mode, results, layer) {
   const Plotly = await ensurePlotly();
-  const host = ensureHost();
-  if (!hasSurfaceGrid(results)) {
-    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">Surface grid is not available for this task. Try Line profiles or Map overlay.</div>`;
+  const host = resetVisualisationHost();
+  const plotSurface = buildPlotSurface(results, layer.surface);
+  if (!plotSurface.z.length) {
+    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">No grid data is available for ${layer.label.toLowerCase()}.</div>`;
     return;
   }
+
   const commonLayout = {
     margin: {t: 20, r: 12, b: 42, l: 48},
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
     font: {color: "#5f6d64"},
   };
+  const colorscale = paletteToPlotly(layer.palette);
+
   if (mode === "Heatmap") {
     await Plotly.newPlot(host, [{
-      x: results.grid_x[0],
-      y: results.grid_y.map((row) => row[0]),
-      z: results.surface,
+      x: plotSurface.x,
+      y: plotSurface.y,
+      z: plotSurface.z,
       type: "heatmap",
-      colorscale: "Viridis",
-      colorbar: {title: "nT"},
+      colorscale,
+      colorbar: {title: layer.unit},
     }], {...commonLayout, xaxis: {title: "Longitude"}, yaxis: {title: "Latitude"}}, {displayModeBar: false, responsive: true});
     return;
   }
   if (mode === "Contour") {
     await Plotly.newPlot(host, [{
-      x: results.grid_x[0],
-      y: results.grid_y.map((row) => row[0]),
-      z: results.surface,
+      x: plotSurface.x,
+      y: plotSurface.y,
+      z: plotSurface.z,
       type: "contour",
-      colorscale: "Viridis",
+      colorscale,
       contours: {showlabels: true},
-      colorbar: {title: "nT"},
+      colorbar: {title: layer.unit},
     }], {...commonLayout, xaxis: {title: "Longitude"}, yaxis: {title: "Latitude"}}, {displayModeBar: false, responsive: true});
     return;
   }
   await Plotly.newPlot(host, [{
-    x: results.grid_x[0],
-    y: results.grid_y.map((row) => row[0]),
-    z: results.surface,
+    x: plotSurface.x,
+    y: plotSurface.y,
+    z: plotSurface.z,
     type: "surface",
-    colorscale: "Viridis",
-  }], {...commonLayout, scene: {xaxis: {title: "Longitude"}, yaxis: {title: "Latitude"}, zaxis: {title: "nT"}}}, {displayModeBar: false, responsive: true});
+    colorscale,
+  }], {...commonLayout, scene: {xaxis: {title: "Longitude"}, yaxis: {title: "Latitude"}, zaxis: {title: layer.unit}}}, {displayModeBar: false, responsive: true});
 }
 
-async function renderMapOverlay(results) {
-  const host = ensureHost();
-  if (!results?.points?.length) {
-    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">No point data available for map overlay.</div>`;
-    return;
+async function renderMapOverlay(results, layer) {
+  const host = resetVisualisationHost();
+  syncVisualisationMapControls(true);
+  const displayData = buildDisplayDatasets(results, layer);
+  const measured = displayData.measured.map((point) => ({
+    ...point,
+    hide_value: false,
+  }));
+  const predicted = displayData.predicted.map((point) => ({
+    ...point,
+    hide_value: false,
+  }));
+  if (!measured.length && !predicted.length) {
+    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">No map points are available for ${layer.label.toLowerCase()}.</div>`;
+    return displayData;
   }
-  await renderStationMap(host, results.points, {
+  await renderStationMap(host, measured, {
     weighted: true,
-    predictedPoints: results.predicted_points || [],
+    predictedPoints: predicted,
+    mapTypeSelectId: "visMapTypeSelect",
+    surveyColor: appState.mapColors.survey,
+    predictedColor: appState.mapColors.predicted,
   });
-}
-
-function isSurface1D(results) {
-  const s = results?.surface;
-  // Surface is 1-D when it has only 1 row (sparse along-line output)
-  return Array.isArray(s) && s.length <= 1;
+  return displayData;
 }
 
 export async function loadVisualisation() {
   const host = ensureHost();
+  syncVisualisationMapControls(false);
   if (!appState.project || !appState.task) {
     host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">Create and run a task to see visualisations here.</div>`;
     return;
   }
+
   const task = await fetchTask(appState.project.id, appState.task.id);
   setTask(task);
   renderWorkflowProgress();
 
-  // Lightweight Firestore data tells us if processing ran; full results come from GCS
   if (!task.results?.artifacts?.length) {
     host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">Processing results are not available yet — run the task to generate them.</div>`;
     return;
@@ -291,47 +691,49 @@ export async function loadVisualisation() {
     host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">Could not load results. Please try again.</div>`;
     return;
   }
-  // For single-traverse (1-row) surfaces, Line Profiles is the meaningful view
-  let mode = appState.activeVisualisation;
-  if (isSurface1D(results) && mode !== "Map" && mode !== "Line Profiles") {
-    mode = "Line Profiles";
-    setActiveVisualisation(mode);
-    document.querySelectorAll("#screen-visualisation .vt").forEach((n) => n.classList.remove("on"));
-    document.querySelector("#screen-visualisation .vt[onclick*='Line Profiles']")?.classList.add("on");
-  }
-  try { renderStats(results); } catch (e) { console.warn("renderStats:", e); }
-  try { renderLayerBar(results); } catch (e) { console.warn("renderLayerBar:", e); }
-  try { renderHeader(results); } catch (e) { console.warn("renderHeader:", e); }
-  try { renderLayerToggles(results); } catch (e) { console.warn("renderLayerToggles:", e); }
+
+  const layers = buildAvailableLayers(results, task);
+  const activeLayer = getActiveLayer(layers);
+  const stats = computeLayerStats(activeLayer);
+  const mode = appState.activeVisualisation || "Heatmap";
+  syncVisualisationTabs(mode);
+
+  renderStats(activeLayer, stats);
+  renderHeader(results, activeLayer, stats);
+  renderLayerBar(layers, activeLayer);
+  renderLayerControls(layers, activeLayer, mode);
+
+  let displayData = {measured: [], predicted: [], traverses: []};
   if (mode === "Map") {
-    await renderMapOverlay(results);
+    displayData = await renderMapOverlay(results, activeLayer);
   } else if (mode === "Line Profiles") {
-    await renderLineProfiles(results);
+    syncVisualisationMapControls(false);
+    displayData = await renderLineProfiles(results, activeLayer, stats);
   } else {
-    await renderPlot(mode, results);
+    syncVisualisationMapControls(false);
+    await renderPlot(mode, results, activeLayer);
+    displayData = buildDisplayDatasets(results, activeLayer);
   }
+  renderInterpretation(activeLayer, stats, displayData);
 }
 
 export function initVisualisation() {
   window.pickVis = async (element, mode) => {
     document.querySelectorAll("#screen-visualisation .vt").forEach((node) => node.classList.remove("on"));
     element?.classList.add("on");
-    setActiveVisualisation(mode);
+    setActiveVisualisation(mode === "3D surface" ? "3D" : mode);
     await loadVisualisation();
   };
   window.drawVis = async (mode) => {
-    setActiveVisualisation(mode);
+    setActiveVisualisation(mode === "3D surface" ? "3D" : mode);
     await loadVisualisation();
   };
-  window.switchVisLayer = async (layerId) => {
-    setActiveVisualisation(layerId);
-    // Sync the .vt tab buttons if they exist
-    document.querySelectorAll("#screen-visualisation .vt").forEach((n) => n.classList.remove("on"));
-    document.querySelectorAll("#screen-visualisation .vt").forEach((n) => {
-      if (n.getAttribute("onclick")?.includes(`'${layerId}'`) || n.getAttribute("onclick")?.includes(`"${layerId}"`)) {
-        n.classList.add("on");
-      }
-    });
+  window.switchResultLayer = async (layerId) => {
+    setActiveResultLayer(layerId);
+    await loadVisualisation();
+  };
+  window.toggleProfileStacking = async (value) => {
+    setStackProfiles(value);
     await loadVisualisation();
   };
 }

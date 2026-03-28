@@ -18,6 +18,7 @@ class AnalysisConfig(GaiaModel):
     filter_type: str | None = None
     model: str
     add_ons: list[str] = Field(default_factory=list)
+    run_prediction: bool = True
     missing_correction_suggestions: list[str] = Field(default_factory=list)
 
 
