@@ -6,6 +6,13 @@ import {loadScript} from "../shared/loaders.js";
 import {renderStationMap} from "./maps.js";
 
 let plotlyPromise = null;
+const _customPalettes = {};
+
+function getLayerPalette(layer) {
+  const custom = _customPalettes[layer.id];
+  if (custom?.length >= 2) return custom;
+  return layer.palette;
+}
 
 const LAYER_META = {
   magnetic: {
@@ -15,7 +22,7 @@ const LAYER_META = {
     unit: "nT",
     tone: "Core field",
     description: "Main corrected magnetic surface used for modelling and interpretation.",
-    palette: ["#0c3b1d", "#22803c", "#63c47d", "#d6f5df"],
+    palette: ["#1a2980", "#0a9396", "#94d2bd", "#e9c46a", "#c0392b"],
   },
   filtered_surface: {
     label: "Filtered surface",
@@ -254,8 +261,49 @@ function paletteToPlotly(palette) {
   return palette.map((color, index) => [index / Math.max(palette.length - 1, 1), color]);
 }
 
+function _showPalettePickerFor(layerId, currentPalette) {
+  let picker = document.getElementById("_visPalPicker");
+  if (!picker) {
+    picker = document.createElement("div");
+    picker.id = "_visPalPicker";
+    picker.style.cssText = "position:fixed;z-index:9999;background:#fff;border:1px solid #d0d5d1;border-radius:10px;padding:14px 16px;box-shadow:0 4px 20px rgba(0,0,0,0.14);font-family:'Manrope',sans-serif;font-size:12px;min-width:190px";
+    document.body.appendChild(picker);
+    document.addEventListener("mousedown", (e) => {
+      if (!picker.contains(e.target) && !e.target.closest("#visScaleBar")) picker.style.display = "none";
+    }, true);
+  }
+  const cold = currentPalette[0] || "#1a2980";
+  const hot = currentPalette[currentPalette.length - 1] || "#c0392b";
+  picker.innerHTML = `
+    <div style="font-weight:700;color:#071a0b;margin-bottom:10px;font-size:12px">Colour scale</div>
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <label style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <span style="color:#5a8264">Cold (low)</span>
+        <input type="color" value="${cold}" oninput="window._setVisLayerPalCold('${layerId}',this.value)" style="width:34px;height:26px;border:1px solid #d0d5d1;border-radius:5px;cursor:pointer;padding:2px">
+      </label>
+      <label style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <span style="color:#5a8264">Hot (high)</span>
+        <input type="color" value="${hot}" oninput="window._setVisLayerPalHot('${layerId}',this.value)" style="width:34px;height:26px;border:1px solid #d0d5d1;border-radius:5px;cursor:pointer;padding:2px">
+      </label>
+      <div style="display:flex;gap:6px;margin-top:2px">
+        <button onclick="window._resetVisLayerPal('${layerId}')" style="flex:1;padding:5px;border:1px solid #ccc;border-radius:6px;background:#f5f5f5;cursor:pointer;font-size:11px">Reset</button>
+        <button onclick="document.getElementById('_visPalPicker').style.display='none'" style="flex:1;padding:5px;border:1px solid #ccc;border-radius:6px;background:#f5f5f5;cursor:pointer;font-size:11px">Close</button>
+      </div>
+    </div>
+  `;
+  const scaleBar = document.getElementById("visScaleBar");
+  if (scaleBar) {
+    const rect = scaleBar.getBoundingClientRect();
+    const top = Math.min(rect.bottom + 6, window.innerHeight - 180);
+    picker.style.left = `${Math.min(rect.left, window.innerWidth - 210)}px`;
+    picker.style.top = `${top}px`;
+  }
+  picker.style.display = "block";
+}
+
 function renderStats(layer, stats) {
   const roots = getRoots();
+  const pal = getLayerPalette(layer);
   if (roots.statsTitle) {
     roots.statsTitle.textContent = `${layer.shortLabel} statistics`;
   }
@@ -269,7 +317,13 @@ function renderStats(layer, stats) {
   if (roots.statAnomalyValue) roots.statAnomalyValue.textContent = String(stats.anomalyCount || 0);
   if (roots.statMinValue) roots.statMinValue.textContent = formatNumber(stats.min);
   if (roots.statMaxValue) roots.statMaxValue.textContent = formatNumber(stats.max);
-  if (roots.scaleBar) roots.scaleBar.style.background = paletteToCss(layer.palette);
+  if (roots.scaleBar) {
+    roots.scaleBar.style.background = paletteToCss(pal);
+    roots.scaleBar.style.cursor = "pointer";
+    roots.scaleBar.title = "Click to customise colour scale";
+    roots.scaleBar.setAttribute("data-layer-id", layer.id);
+    roots.scaleBar.onclick = () => _showPalettePickerFor(layer.id, pal);
+  }
   if (roots.scaleMin) roots.scaleMin.textContent = formatNumber(stats.min);
   if (roots.scaleMid) roots.scaleMid.textContent = formatNumber(stats.mean);
   if (roots.scaleMax) roots.scaleMax.textContent = formatNumber(stats.max);
@@ -607,7 +661,7 @@ async function renderPlot(mode, results, layer) {
     plot_bgcolor: "transparent",
     font: {color: "#5f6d64"},
   };
-  const colorscale = paletteToPlotly(layer.palette);
+  const colorscale = paletteToPlotly(getLayerPalette(layer));
 
   if (mode === "Heatmap") {
     await Plotly.newPlot(host, [{
@@ -696,28 +750,54 @@ export async function loadVisualisation() {
   const activeLayer = getActiveLayer(layers);
   const stats = computeLayerStats(activeLayer);
   const mode = appState.activeVisualisation || "Heatmap";
-  syncVisualisationTabs(mode);
+
+  // Single-traverse fallback: redirect heatmap/contour/3D to line profile for single-line datasets
+  const _measuredLineIds = new Set((results?.points || []).map((p) => (p.line_id != null ? String(p.line_id) : "__default__")));
+  const _singleTraverse = _measuredLineIds.size <= 1 && (results?.points || []).length > 0;
+  const effectiveMode = (_singleTraverse && (mode === "Heatmap" || mode === "Contour" || mode === "3D"))
+    ? "Line Profiles"
+    : mode;
+
+  syncVisualisationTabs(effectiveMode);
 
   renderStats(activeLayer, stats);
   renderHeader(results, activeLayer, stats);
   renderLayerBar(layers, activeLayer);
-  renderLayerControls(layers, activeLayer, mode);
+  renderLayerControls(layers, activeLayer, effectiveMode);
 
   let displayData = {measured: [], predicted: [], traverses: []};
-  if (mode === "Map") {
+  if (effectiveMode === "Map") {
     displayData = await renderMapOverlay(results, activeLayer);
-  } else if (mode === "Line Profiles") {
+  } else if (effectiveMode === "Line Profiles") {
     syncVisualisationMapControls(false);
     displayData = await renderLineProfiles(results, activeLayer, stats);
   } else {
     syncVisualisationMapControls(false);
-    await renderPlot(mode, results, activeLayer);
+    await renderPlot(effectiveMode, results, activeLayer);
     displayData = buildDisplayDatasets(results, activeLayer);
   }
   renderInterpretation(activeLayer, stats, displayData);
 }
 
 export function initVisualisation() {
+  window._setVisLayerPalCold = (layerId, color) => {
+    const cur = _customPalettes[layerId] || [];
+    const hot = cur[cur.length - 1] || (LAYER_META[layerId]?.palette || ["#c0392b"]).at(-1);
+    _customPalettes[layerId] = [color, hot];
+    loadVisualisation();
+  };
+  window._setVisLayerPalHot = (layerId, color) => {
+    const cur = _customPalettes[layerId] || [];
+    const cold = cur[0] || (LAYER_META[layerId]?.palette || ["#1a2980"])[0];
+    _customPalettes[layerId] = [cold, color];
+    loadVisualisation();
+  };
+  window._resetVisLayerPal = (layerId) => {
+    delete _customPalettes[layerId];
+    const picker = document.getElementById("_visPalPicker");
+    if (picker) picker.style.display = "none";
+    loadVisualisation();
+  };
   window.pickVis = async (element, mode) => {
     document.querySelectorAll("#screen-visualisation .vt").forEach((node) => node.classList.remove("on"));
     element?.classList.add("on");

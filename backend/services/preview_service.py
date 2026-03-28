@@ -94,102 +94,142 @@ class PreviewService:
 
         if not predicted_points:
             return survey_count, 0
-
-        pred_lats = [p["latitude"] for p in predicted_points]
-        pred_lons = [p["longitude"] for p in predicted_points]
-        if lon_range >= lat_range:
-            pred_groups = {round(lat / tol) for lat in pred_lats}
-        else:
-            pred_groups = {round(lon / tol) for lon in pred_lons}
-        return survey_count, len(pred_groups)
+        pred_labels = {p.get("traverse_label") for p in predicted_points if p.get("traverse_label")}
+        predicted_count = len(pred_labels) if pred_labels else len({round(p["latitude"] / tol) for p in predicted_points})
+        return survey_count, predicted_count
 
     def _extract_predicted_points(self, task: dict) -> list[dict]:
-        """For sparse scenario: compute predicted station positions for the preview map."""
+        """Generate predicted station positions from user-defined predicted traverses."""
         scenario = (task.get("scenario") or "explicit").lower()
-        if scenario != "sparse":
+        predicted_traverses = task.get("predicted_traverses") or []
+
+        # For explicit scenario: predicted targets come from is_predicted_target flag in measured points
+        if scenario == "explicit":
+            return []  # handled in _extract_preview_points via is_predicted_target flag
+
+        if scenario != "sparse" or not predicted_traverses:
             return []
 
         measured = self._extract_preview_points(task)
         if not measured:
             return []
 
-        def _filter_to_bounds(points: list[dict]) -> list[dict]:
-            lats = [p["latitude"] for p in measured]
-            lons = [p["longitude"] for p in measured]
-            lat_min, lat_max = min(lats), max(lats)
-            lon_min, lon_max = min(lons), max(lons)
-            pad_lat = max((lat_max - lat_min) * 0.05, 0.002)
-            pad_lon = max((lon_max - lon_min) * 0.05, 0.002)
-            return [
-                p for p in points
-                if (lat_min - pad_lat) <= p["latitude"] <= (lat_max + pad_lat)
-                and (lon_min - pad_lon) <= p["longitude"] <= (lon_max + pad_lon)
-            ]
-
-        line_interpolation = bool(task.get("line_interpolation", True))
-        spacing_value = float(task.get("station_spacing") or 20)
-        spacing_unit = (task.get("station_spacing_unit") or "Metres").lower()
-        spacing_metres = spacing_value * (1000 if "kilo" in spacing_unit else 0.3048 if "feet" in spacing_unit else 1)
-        spacing_deg = max(spacing_metres / 111_320, 0.0002)
-
-        lats = [p["latitude"] for p in measured]
-        lons = [p["longitude"] for p in measured]
-        lat_min, lat_max = min(lats), max(lats)
-        lon_min, lon_max = min(lons), max(lons)
-
-        if line_interpolation:
-            lat_range = lat_max - lat_min
-            lon_range = lon_max - lon_min
-            tol = max(spacing_deg * 3, 0.001)
-
-            def _group_key(point: dict) -> int:
-                return round(point["latitude"] / tol) if lon_range >= lat_range else round(point["longitude"] / tol)
-
-            groups: dict[int, list[dict]] = {}
-            for point in measured:
-                groups.setdefault(_group_key(point), []).append(point)
-
-            predicted: list[dict] = []
-            for points in groups.values():
-                if lon_range >= lat_range:
-                    points.sort(key=lambda p: p["longitude"])
-                else:
-                    points.sort(key=lambda p: p["latitude"])
-                for idx in range(len(points) - 1):
-                    a = points[idx]
-                    b = points[idx + 1]
-                    predicted.append({
-                        "latitude": (a["latitude"] + b["latitude"]) / 2,
-                        "longitude": (a["longitude"] + b["longitude"]) / 2,
-                    })
-            return _filter_to_bounds(predicted)[:600]
-
+        import math
         import numpy as np
-        grid_rows = int(task.get("grid_rows") or 0)
-        grid_cols = int(task.get("grid_cols") or 0)
-        if grid_rows < 2 or grid_cols < 2:
-            x_pts = min(max(int((lon_max - lon_min) / spacing_deg) + 1, 5), 60)
-            y_pts = min(max(int((lat_max - lat_min) / spacing_deg) + 1, 5), 60)
-        else:
-            x_pts = min(max(grid_cols, 2), 60)
-            y_pts = min(max(grid_rows, 2), 60)
 
-        pad_lat = (lat_max - lat_min) * 0.05
-        pad_lon = (lon_max - lon_min) * 0.05
-        lat_min = lat_min + pad_lat
-        lat_max = lat_max - pad_lat
-        lon_min = lon_min + pad_lon
-        lon_max = lon_max - pad_lon
+        # Get measured traverse geometry
+        meas_lats = [p["latitude"] for p in measured if not p.get("is_base_station")]
+        meas_lons = [p["longitude"] for p in measured if not p.get("is_base_station")]
+        if not meas_lats:
+            return []
 
-        x_axis = np.linspace(lon_min, lon_max, x_pts)
-        y_axis = np.linspace(lat_min, lat_max, y_pts)
-        grid_x, grid_y = np.meshgrid(x_axis, y_axis)
+        all_predicted = []
+        for tidx, trav in enumerate(predicted_traverses):
+            ttype = trav.get("type", "offset")
+            label = trav.get("label") or f"Predicted Traverse {tidx + 1}"
+            spacing_val = float(trav.get("spacing") or 10)
+            spacing_unit = (trav.get("spacing_unit") or "Metres").lower()
+            spacing_m = spacing_val * (1000 if "kilo" in spacing_unit else 0.3048 if "feet" in spacing_unit else 1)
+            spacing_deg = max(spacing_m / 111_320, 0.000001)
 
-        predicted = [
-            {"latitude": float(lat), "longitude": float(lon)}
-            for lat, lon in zip(grid_y.ravel(), grid_x.ravel())
-        ]
-        return _filter_to_bounds(predicted)[:600]
+            if ttype == "infill":
+                # Same line, denser spacing
+                # Find the traverse direction from measured points
+                lat_range = max(meas_lats) - min(meas_lats)
+                lon_range = max(meas_lons) - min(meas_lons)
+                if lon_range >= lat_range:
+                    # Primarily E-W traverses
+                    tol = max(spacing_deg * 3, 0.001)
+                    groups = {}
+                    for p in measured:
+                        if p.get("is_base_station"): continue
+                        k = round(p["latitude"] / tol)
+                        groups.setdefault(k, []).append(p)
+                else:
+                    tol = max(spacing_deg * 3, 0.001)
+                    groups = {}
+                    for p in measured:
+                        if p.get("is_base_station"): continue
+                        k = round(p["longitude"] / tol)
+                        groups.setdefault(k, []).append(p)
+
+                for pts in groups.values():
+                    if len(pts) < 2: continue
+                    if lon_range >= lat_range:
+                        pts.sort(key=lambda p: p["longitude"])
+                        line_lon_start = pts[0]["longitude"]
+                        line_lon_end = pts[-1]["longitude"]
+                        line_lat = sum(p["latitude"] for p in pts) / len(pts)
+                        n_pts = max(int(abs(line_lon_end - line_lon_start) / spacing_deg) + 1, 2)
+                        lons_new = np.linspace(line_lon_start, line_lon_end, n_pts)
+                        for lon in lons_new:
+                            all_predicted.append({
+                                "latitude": line_lat, "longitude": float(lon),
+                                "point_kind": "infill", "traverse_label": label,
+                            })
+                    else:
+                        pts.sort(key=lambda p: p["latitude"])
+                        line_lat_start = pts[0]["latitude"]
+                        line_lat_end = pts[-1]["latitude"]
+                        line_lon = sum(p["longitude"] for p in pts) / len(pts)
+                        n_pts = max(int(abs(line_lat_end - line_lat_start) / spacing_deg) + 1, 2)
+                        lats_new = np.linspace(line_lat_start, line_lat_end, n_pts)
+                        for lat in lats_new:
+                            all_predicted.append({
+                                "latitude": float(lat), "longitude": line_lon,
+                                "point_kind": "infill", "traverse_label": label,
+                            })
+            else:
+                # Offset traverse: shift measured traverses by distance in direction
+                distance_val = float(trav.get("distance") or 50)
+                distance_unit = (trav.get("distance_unit") or "Metres").lower()
+                distance_m = distance_val * (1000 if "kilo" in distance_unit else 0.3048 if "feet" in distance_unit else 1)
+                bearing_deg = float(trav.get("direction") or 90)
+                bearing_rad = math.radians(bearing_deg)
+
+                lat_mid = sum(meas_lats) / len(meas_lats)
+                cos_lat = max(abs(math.cos(math.radians(lat_mid))), 1e-6)
+                dlat = (distance_m / 111_320) * math.cos(bearing_rad)
+                dlon = (distance_m / 111_320) * math.sin(bearing_rad) / cos_lat
+
+                # Group measured into traverses, then offset each
+                lat_range = max(meas_lats) - min(meas_lats)
+                lon_range = max(meas_lons) - min(meas_lons)
+                tol = max(spacing_deg * 3, 0.001)
+                groups = {}
+                for p in measured:
+                    if p.get("is_base_station"): continue
+                    k = round(p["latitude"] / tol) if lon_range >= lat_range else round(p["longitude"] / tol)
+                    groups.setdefault(k, []).append(p)
+
+                for pts in groups.values():
+                    if len(pts) < 2: continue
+                    if lon_range >= lat_range:
+                        pts.sort(key=lambda p: p["longitude"])
+                        line_lon_start = pts[0]["longitude"] + dlon
+                        line_lon_end = pts[-1]["longitude"] + dlon
+                        line_lat = sum(p["latitude"] for p in pts) / len(pts) + dlat
+                        n_pts = max(int(abs(line_lon_end - line_lon_start) / spacing_deg) + 1, 2)
+                        lons_new = np.linspace(line_lon_start, line_lon_end, n_pts)
+                        for lon in lons_new:
+                            all_predicted.append({
+                                "latitude": float(line_lat), "longitude": float(lon),
+                                "point_kind": "offset", "traverse_label": label,
+                            })
+                    else:
+                        pts.sort(key=lambda p: p["latitude"])
+                        line_lat_start = pts[0]["latitude"] + dlat
+                        line_lat_end = pts[-1]["latitude"] + dlat
+                        line_lon = sum(p["longitude"] for p in pts) / len(pts) + dlon
+                        n_pts = max(int(abs(line_lat_end - line_lat_start) / spacing_deg) + 1, 2)
+                        lats_new = np.linspace(line_lat_start, line_lat_end, n_pts)
+                        for lat in lats_new:
+                            all_predicted.append({
+                                "latitude": float(lat), "longitude": float(line_lon),
+                                "point_kind": "offset", "traverse_label": label,
+                            })
+
+        return all_predicted[:1200]
 
     def _extract_preview_points(self, task: dict) -> list[dict]:
         """Load up to 500 rows from the first survey CSV for the preview map."""
@@ -217,14 +257,14 @@ class PreviewService:
             artifact = survey_files[0]
             csv_text = self._storage.download_text(artifact["bucket"], artifact["object_name"])
             frame = pd.read_csv(io.StringIO(csv_text))
-            needed = [c for c in [lat_col, lon_col, mag_col] if c and c in frame.columns]
+            needed = [c for c in [lat_col, lon_col] if c and c in frame.columns]
             frame = frame.dropna(subset=needed).copy()
             frame["_raw_lat"] = pd.to_numeric(frame[lat_col], errors="coerce")
             frame["_raw_lon"] = pd.to_numeric(frame[lon_col], errors="coerce")
             if mag_col and mag_col in frame.columns:
                 frame["magnetic"] = pd.to_numeric(frame[mag_col], errors="coerce")
             else:
-                frame["magnetic"] = 0.0
+                frame["magnetic"] = float("nan")
             frame = frame.dropna(subset=["_raw_lat", "_raw_lon"]).head(500)
 
             if coord_sys == "utm":
@@ -264,7 +304,9 @@ class PreviewService:
                 dup_mask = frame.duplicated(subset=["latitude", "longitude"], keep=False)
                 frame["is_base_station"] = dup_mask.astype(int)
 
-            return frame[["latitude", "longitude", "magnetic", "is_base_station"]].to_dict(orient="records")
+            frame["is_predicted_target"] = frame["magnetic"].isna().astype(int)
+
+            return frame[["latitude", "longitude", "magnetic", "is_base_station", "is_predicted_target"]].to_dict(orient="records")
         except Exception as exc:
             log_event("WARNING", "Preview point extraction failed", error=str(exc), task_id=task.get("id"))
             return []

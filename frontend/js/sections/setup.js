@@ -625,11 +625,8 @@ async function submitTaskFlow() {
     if (spacingVal) fd.set("station_spacing", spacingVal);
     const spacingUnit = getEl("spacingUnit")?.value;
     if (spacingUnit) fd.set("station_spacing_unit", spacingUnit);
-    fd.set("line_interpolation", String(window.state?.lineMode !== "grid"));
-    if (window.state?.lineMode === "grid") {
-      fd.set("grid_rows", String(window.state?.gridRows || 12));
-      fd.set("grid_cols", String(window.state?.gridCols || 8));
-    }
+    const ptList = window.state?.predictedTraverses || [];
+    fd.set("predicted_traverses_json", JSON.stringify(ptList));
     preparedSurveyFiles.forEach((f) => fd.append("survey_files", f, f.name));
     if (appState.basemapFile) fd.append("basemap_file", appState.basemapFile, appState.basemapFile.name);
 
@@ -737,55 +734,6 @@ export function initSetup() {
   });
   getEl("setupSaveBtn")?.addEventListener("click", submitTaskFlow);
 
-  function clampGrid(val, fallback) {
-    const n = parseInt(val || fallback, 10);
-    if (!Number.isFinite(n)) return fallback;
-    return Math.max(2, Math.min(40, n));
-  }
-
-  function syncGridState() {
-    if (!window.state) window.state = {};
-    const rowsInput = getEl("gridRowsInput");
-    const colsInput = getEl("gridColsInput");
-    const rows = clampGrid(rowsInput?.value, 12);
-    const cols = clampGrid(colsInput?.value, 8);
-    window.state.gridRows = rows;
-    window.state.gridCols = cols;
-    if (rowsInput) rowsInput.value = rows;
-    if (colsInput) colsInput.value = cols;
-  }
-
-  window.setLineMode = (m) => {
-    if (!window.state) window.state = {};
-    window.state.lineMode = m;
-    getEl("lm-line")?.classList.toggle("selected", m === "line");
-    getEl("lm-grid")?.classList.toggle("selected", m === "grid");
-    // Update radio circles
-    ["lm-line", "lm-grid"].forEach((id) => {
-      const el = getEl(id);
-      if (!el) return;
-      const circle = el.querySelector(".radio-circle");
-      if (!circle) return;
-      if (el.classList.contains("selected")) {
-        circle.innerHTML = `<div class="radio-dot"></div>`;
-      } else {
-        circle.innerHTML = "";
-      }
-    });
-    const gridRow = getEl("gridModeRow");
-    if (gridRow) gridRow.style.display = m === "grid" ? "block" : "none";
-    if (m === "grid") syncGridState();
-  };
-
-  getEl("gridRowsInput")?.addEventListener("input", () => {
-    syncGridState();
-    window.drawPreviewMap?.();
-  });
-  getEl("gridColsInput")?.addEventListener("input", () => {
-    syncGridState();
-    window.drawPreviewMap?.();
-  });
-
   // Override legacy inline setState to show/hide raw data section
   const legacySetState = window.setState?.bind(window);
   window.setState = (s) => {
@@ -878,14 +826,9 @@ export function initSetup() {
     window.setScenario?.(scenario);
     if (window.state) window.state.scenario = scenario;
     if (scenario === "sparse") {
-      const lineMode = task.line_interpolation === false ? "grid" : "line";
-      window.setLineMode?.(lineMode);
-      const rows = task.grid_rows || task.metadata?.grid_rows;
-      const cols = task.grid_cols || task.metadata?.grid_cols;
-      const rowsInput = getEl("gridRowsInput");
-      const colsInput = getEl("gridColsInput");
-      if (rowsInput && rows) rowsInput.value = rows;
-      if (colsInput && cols) colsInput.value = cols;
+      const pts = task.predicted_traverses || [];
+      window.state.predictedTraverses = pts;
+      renderPredictedTraverseList();
     }
     const dataState = task.data_state === "corrected" ? "corr" : "raw";
     window.setState?.(dataState);
@@ -910,3 +853,96 @@ export function initSetup() {
     }
   });
 }
+
+// Predicted traverse management (sparse scenario)
+window.state = window.state || {};
+window.state.predictedTraverses = window.state.predictedTraverses || [];
+
+window.addPredictedTraverse = function(type) {
+  if (!window.state) window.state = {};
+  if (!window.state.predictedTraverses) window.state.predictedTraverses = [];
+  const idx = window.state.predictedTraverses.length;
+  const label = `Predicted Traverse ${idx + 1}`;
+  const t = {
+    type: type || "offset",
+    label,
+    spacing: 10,
+    spacing_unit: "Metres",
+    distance: 50,
+    distance_unit: "Metres",
+    direction: 90,
+  };
+  window.state.predictedTraverses.push(t);
+  renderPredictedTraverseList();
+};
+
+window.removePredictedTraverse = function(idx) {
+  if (!window.state?.predictedTraverses) return;
+  window.state.predictedTraverses.splice(idx, 1);
+  // Re-label remaining traverses
+  window.state.predictedTraverses.forEach((t, i) => { t.label = `Predicted Traverse ${i + 1}`; });
+  renderPredictedTraverseList();
+};
+
+window.updatePredictedTraverse = function(idx, field, value) {
+  if (!window.state?.predictedTraverses?.[idx]) return;
+  window.state.predictedTraverses[idx][field] = value;
+};
+
+function renderPredictedTraverseList() {
+  const container = document.getElementById("predictedTraverseList");
+  if (!container) return;
+  const list = window.state?.predictedTraverses || [];
+  if (list.length === 0) {
+    container.innerHTML = `<div style="font-size:11px;color:var(--text4);padding:6px 0">No predicted traverses added yet.</div>`;
+    return;
+  }
+  container.innerHTML = list.map((t, i) => `
+    <div class="card" style="margin-bottom:8px;padding:10px 12px;position:relative">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:12px;font-weight:700;color:var(--text1)">${t.label}</span>
+        <button onclick="window.removePredictedTraverse(${i})" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:13px;padding:0 4px" title="Remove">✕</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button onclick="window.setPTType(${i},'offset')" class="pt-type-btn${t.type==='offset'?' selected':''}" style="flex:1;padding:4px;font-size:10.5px;border-radius:5px;border:1px solid var(--border);background:${t.type==='offset'?'var(--accent)':'var(--card)'};color:${t.type==='offset'?'#fff':'var(--text2)'};cursor:pointer">Offset traverse</button>
+        <button onclick="window.setPTType(${i},'infill')" class="pt-type-btn${t.type==='infill'?' selected':''}" style="flex:1;padding:4px;font-size:10.5px;border-radius:5px;border:1px solid var(--border);background:${t.type==='infill'?'var(--accent)':'var(--card)'};color:${t.type==='infill'?'#fff':'var(--text2)'};cursor:pointer">Infill spacing</button>
+      </div>
+      ${t.type === 'offset' ? `
+        <div class="g2" style="margin-bottom:6px">
+          <div>
+            <label class="fl" style="font-size:10.5px">Distance</label>
+            <div class="g2">
+              <input class="fi" type="number" min="1" value="${t.distance||50}" oninput="window.updatePredictedTraverse(${i},'distance',+this.value)" style="font-size:11px">
+              <select class="fsel" onchange="window.updatePredictedTraverse(${i},'distance_unit',this.value)" style="font-size:11px">
+                <option${t.distance_unit==='Metres'?' selected':''}>Metres</option>
+                <option${t.distance_unit==='Kilometres'?' selected':''}>Kilometres</option>
+                <option${t.distance_unit==='Feet'?' selected':''}>Feet</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="fl" style="font-size:10.5px">Direction (bearing °)</label>
+            <input class="fi" type="number" min="0" max="359" value="${t.direction||90}" oninput="window.updatePredictedTraverse(${i},'direction',+this.value)" style="font-size:11px" placeholder="0=N 90=E 180=S 270=W">
+          </div>
+        </div>
+      ` : ''}
+      <div>
+        <label class="fl" style="font-size:10.5px">Station spacing</label>
+        <div class="g2">
+          <input class="fi" type="number" min="0.1" step="0.1" value="${t.spacing||10}" oninput="window.updatePredictedTraverse(${i},'spacing',+this.value)" style="font-size:11px">
+          <select class="fsel" onchange="window.updatePredictedTraverse(${i},'spacing_unit',this.value)" style="font-size:11px">
+            <option${t.spacing_unit==='Metres'?' selected':''}>Metres</option>
+            <option${t.spacing_unit==='Kilometres'?' selected':''}>Kilometres</option>
+            <option${t.spacing_unit==='Feet'?' selected':''}>Feet</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  `).join("");
+}
+
+window.setPTType = function(idx, type) {
+  if (!window.state?.predictedTraverses?.[idx]) return;
+  window.state.predictedTraverses[idx].type = type;
+  renderPredictedTraverseList();
+};

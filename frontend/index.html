@@ -754,27 +754,18 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
               </div>
             </div>
 
-            <div id="lineModeRow" style="display:none;margin-bottom:14px">
-              <div class="sep" style="margin-top:0">Sparse interpolation mode</div>
-              <div class="card">
-                <div class="radio-group">
-                  <div class="radio-opt selected" id="lm-line" onclick="setLineMode('line')">
-                    <div class="radio-circle"><div class="radio-dot"></div></div>
-                    <div><div style="font-size:12.5px;font-weight:700">Along lines</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">Interpolate only within each survey traverse</div></div>
-                  </div>
-                  <div class="radio-opt" id="lm-grid" onclick="setLineMode('grid')">
-                    <div class="radio-circle"></div>
-                    <div><div style="font-size:12.5px;font-weight:700">Full grid</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">Predict over the entire bounding-box grid</div></div>
-                  </div>
-                </div>
-                <div id="gridModeRow" style="display:none;margin-top:12px">
-                  <label class="fl" style="margin-bottom:6px">Grid size</label>
-                  <div class="g2">
-                    <input class="fi" id="gridRowsInput" type="number" min="2" max="40" value="12" placeholder="Rows">
-                    <input class="fi" id="gridColsInput" type="number" min="2" max="40" value="8" placeholder="Columns">
-                  </div>
-                  <div style="font-size:10.5px;color:var(--text4);margin-top:6px;font-weight:500">Rows × columns for the prediction grid.</div>
-                </div>
+            <div id="predictedTraverseSection" style="display:none;margin-bottom:14px">
+              <div class="sep" style="margin-top:0">Predicted traverses</div>
+              <div id="predictedTraverseList" style="margin-bottom:8px">
+                <div style="font-size:11px;color:var(--text4);padding:6px 0">No predicted traverses added yet.</div>
+              </div>
+              <div style="display:flex;gap:8px">
+                <button class="btn-sm" onclick="window.addPredictedTraverse('offset')" style="flex:1;font-size:11px">+ Offset traverse</button>
+                <button class="btn-sm" onclick="window.addPredictedTraverse('infill')" style="flex:1;font-size:11px">+ Infill spacing</button>
+              </div>
+              <div style="font-size:10.5px;color:var(--text4);margin-top:8px;line-height:1.5">
+                <b>Offset:</b> parallel traverse at a set distance &amp; bearing from the original.<br>
+                <b>Infill:</b> denser predictions along the same traverse line.
               </div>
             </div>
 
@@ -935,11 +926,21 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
                 <div class="mcp-swatch mcp-swatch-pred" data-color="#e05c2e" style="background:#e05c2e" onclick="window.setPredictedColor?.('#e05c2e',this)"></div>
                 <div class="mcp-swatch mcp-swatch-pred" data-color="#fff" style="background:#fff;border:1px solid #ccc" onclick="window.setPredictedColor?.('#ffffff',this)"></div>
               </div>
+              <div style="margin-top:8px">
+                <div style="font-size:10.5px;color:var(--text3);margin-bottom:4px;font-weight:600">Base station</div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                  <div class="mcp-swatch mcp-swatch-bs" style="background:#e07b14" onclick="window.setBaseStationColor?.('#e07b14',this)"></div>
+                  <div class="mcp-swatch mcp-swatch-bs" style="background:#c0392b" onclick="window.setBaseStationColor?.('#c0392b',this)"></div>
+                  <div class="mcp-swatch mcp-swatch-bs" style="background:#8e44ad" onclick="window.setBaseStationColor?.('#8e44ad',this)"></div>
+                  <div class="mcp-swatch mcp-swatch-bs" style="background:#2980b9" onclick="window.setBaseStationColor?.('#2980b9',this)"></div>
+                  <div class="mcp-swatch mcp-swatch-bs" style="background:#f39c12" onclick="window.setBaseStationColor?.('#f39c12',this)"></div>
+                </div>
+              </div>
             </div>
             <div class="map-legend" id="mapLegend">
               <div class="map-legend-item"><div class="leg-dot" id="leg-measured-dot" style="background:#2daa52"></div>Measured stations</div>
               <div class="map-legend-item" id="leg-pred" style="display:none"><div class="leg-dot" id="leg-pred-dot" style="background:#5ba8d4;border:1px solid #1a5f8c"></div>Predicted stations</div>
-              <div class="map-legend-item" id="leg-base" style="display:none"><div class="leg-dot" style="background:rgba(168,94,14,0.6);border-radius:0"></div>Basemap overlay</div>
+              <div class="map-legend-item" id="leg-base" style="display:none"><div class="leg-dot" id="leg-base-dot" style="background:rgba(168,94,14,0.6);border-radius:0"></div>Base stations</div>
             </div>
             <div class="map-attribution">© Terracode Analytics · Google Maps</div>
           </div>
@@ -1283,22 +1284,21 @@ function setScenario(sc){
   var su=document.getElementById('spacingUnit');
   var sl=document.getElementById('spacingLabel');
   var sh=document.getElementById('spacingHint');
-  var lmr=document.getElementById('lineModeRow');
+  var pts=document.getElementById('predictedTraverseSection');
   if(sc==='explicit'){
     ex.classList.add('selected');ex.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
     sp.classList.remove('selected');sp.querySelector('.radio-circle').innerHTML='';
     si.disabled=true;su.disabled=true;
     sl.style.color='var(--disabled-text)';
     sh.textContent='Station spacing is not used in Explicit mode — the predict.csv defines locations.';
-    if(lmr)lmr.style.display='none';
+    if(pts)pts.style.display='none';
   }else{
     sp.classList.add('selected');sp.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
     ex.classList.remove('selected');ex.querySelector('.radio-circle').innerHTML='';
     si.disabled=false;su.disabled=false;
     sl.style.color='';
     sh.textContent='';
-    if(lmr)lmr.style.display='block';
-    if(window.setLineMode)window.setLineMode(window.state&&window.state.lineMode?window.state.lineMode:'line');
+    if(pts)pts.style.display='block';
   }
 }
 

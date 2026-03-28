@@ -1,10 +1,10 @@
 ﻿import {fetchPreview} from "../api.js";
 import {persistAnalysis} from "./analysis.js";
 import {renderWorkflowProgress} from "./progress.js";
-import {appState, setPredictedMarkerColor, setSurveyMarkerColor, setTask} from "../state.js";
+import {appState, setPredictedMarkerColor, setSurveyMarkerColor, setBaseStationMarkerColor, setTask} from "../state.js";
 import {titleCase} from "../shared/format.js";
 import {showGlobalNotice} from "../shared/notice.js";
-import {renderStationMap, recolorSurveyMarkers, recolorPredictedMarkers} from "./maps.js";
+import {renderStationMap, recolorSurveyMarkers, recolorPredictedMarkers, recolorBaseStationMarkers} from "./maps.js";
 
 // Human-readable labels for normalized backend IDs
 const CORRECTION_LABELS = {
@@ -95,8 +95,6 @@ function renderPreview(payload) {
   setVal("pv-addons", addOns);
   setVal("pv-runtime", estRuntime);
 
-  const legendBase = document.getElementById("leg-base");
-  if (legendBase) legendBase.style.display = task.basemap_file ? "flex" : "none";
   const legendPred = document.getElementById("leg-pred");
   if (legendPred) legendPred.style.display = "none";
 
@@ -131,6 +129,11 @@ export async function loadPreview() {
     // Show/hide predicted legend item
     const legPred = document.getElementById("leg-pred");
     if (legPred) legPred.style.display = predictedPoints.length ? "flex" : "none";
+
+    // Show/hide base station legend item
+    const legendBase = document.getElementById("leg-base");
+    const hasBasePoints = points.some((p) => p.is_base_station);
+    if (legendBase) legendBase.style.display = hasBasePoints ? "flex" : "none";
 
     setPreviewLoading(true, "Rendering map...");
     const host = ensurePreviewMapHost();
@@ -168,6 +171,14 @@ export async function loadPreview() {
         legDot.style.background = color;
         legDot.style.border = color === "#ffffff" ? "1px solid #1a5f8c" : "1px solid rgba(0,0,0,0.2)";
       }
+    };
+    window.setBaseStationColor = (color, swatchEl) => {
+      recolorBaseStationMarkers(color);
+      setBaseStationMarkerColor(color);
+      document.querySelectorAll(".mcp-swatch-bs").forEach((s) => s.classList.remove("active"));
+      swatchEl?.classList.add("active");
+      const legDot = document.getElementById("leg-base-dot");
+      if (legDot) { legDot.style.background = color; legDot.style.borderColor = color; }
     };
     document.querySelectorAll(".mcp-swatch-survey").forEach((swatch) => {
       swatch.classList.toggle("active", swatch.dataset.color?.toLowerCase() === appState.mapColors.survey.toLowerCase());

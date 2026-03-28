@@ -1,5 +1,6 @@
 const storedSurveyColor = localStorage.getItem("gaiaSurveyColor") || "#2daa52";
 const storedPredictedColor = localStorage.getItem("gaiaPredictedColor") || "#5ba8d4";
+const storedBaseStationColor = localStorage.getItem("gaiaBaseStationColor") || "#e07b14";
 
 export const appState = {
   project: null,
@@ -15,6 +16,7 @@ export const appState = {
   mapColors: {
     survey: storedSurveyColor,
     predicted: storedPredictedColor,
+    baseStation: storedBaseStationColor,
   },
 };
 
@@ -78,4 +80,9 @@ export function setSurveyMarkerColor(color) {
 export function setPredictedMarkerColor(color) {
   appState.mapColors.predicted = color;
   localStorage.setItem("gaiaPredictedColor", color);
+}
+
+export function setBaseStationMarkerColor(color) {
+  appState.mapColors.baseStation = color;
+  localStorage.setItem("gaiaBaseStationColor", color);
 }

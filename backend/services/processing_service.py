@@ -1102,11 +1102,80 @@ class ProcessingService:
                 train = train.iloc[: len(train) - n].reset_index(drop=True)
             detail = f"Explicit: {len(train)} measured stations train the model, predicting at {len(predict)} unmeasured locations"
         else:
+            # Sparse: all rows with magnetic values train the model
             train = frame.dropna(subset=["magnetic"]).reset_index(drop=True)
             if train.empty:
                 raise ValueError("No rows with magnetic field values found.")
-            predict = pd.DataFrame({"longitude": grid_x.ravel(), "latitude": grid_y.ravel()})
-            detail = f"Sparse: {len(train)} measured stations, predicting at {len(predict)} grid nodes"
+
+            predicted_traverses = task.get("predicted_traverses") or []
+            if predicted_traverses:
+                # User-defined predicted traverses: build exact prediction points
+                import math
+                predict_rows = []
+                meas_lats = train["latitude"].tolist()
+                meas_lons = train["longitude"].tolist()
+                lat_range = max(meas_lats) - min(meas_lats)
+                lon_range = max(meas_lons) - min(meas_lons)
+
+                for tidx, trav in enumerate(predicted_traverses):
+                    ttype = trav.get("type", "offset")
+                    spacing_val = float(trav.get("spacing") or 10)
+                    spacing_unit = (trav.get("spacing_unit") or "Metres").lower()
+                    spacing_m = spacing_val * (1000 if "kilo" in spacing_unit else 0.3048 if "feet" in spacing_unit else 1)
+                    spacing_deg = max(spacing_m / 111_320, 0.000001)
+                    tol = max(spacing_deg * 3, 0.001)
+
+                    groups = {}
+                    for _, row in train.iterrows():
+                        k = round(float(row["latitude"]) / tol) if lon_range >= lat_range else round(float(row["longitude"]) / tol)
+                        groups.setdefault(k, []).append((float(row["latitude"]), float(row["longitude"])))
+
+                    if ttype == "infill":
+                        for pts in groups.values():
+                            if len(pts) < 2: continue
+                            if lon_range >= lat_range:
+                                pts.sort(key=lambda p: p[1])
+                                lat_m = sum(p[0] for p in pts) / len(pts)
+                                lons_new = np.arange(pts[0][1], pts[-1][1] + spacing_deg * 0.5, spacing_deg)
+                                for lon in lons_new:
+                                    predict_rows.append({"latitude": lat_m, "longitude": float(lon)})
+                            else:
+                                pts.sort(key=lambda p: p[0])
+                                lon_m = sum(p[1] for p in pts) / len(pts)
+                                lats_new = np.arange(pts[0][0], pts[-1][0] + spacing_deg * 0.5, spacing_deg)
+                                for lat in lats_new:
+                                    predict_rows.append({"latitude": float(lat), "longitude": lon_m})
+                    else:
+                        distance_val = float(trav.get("distance") or 50)
+                        distance_unit = (trav.get("distance_unit") or "Metres").lower()
+                        distance_m = distance_val * (1000 if "kilo" in distance_unit else 0.3048 if "feet" in distance_unit else 1)
+                        bearing_rad = math.radians(float(trav.get("direction") or 90))
+                        lat_mid = sum(meas_lats) / len(meas_lats)
+                        cos_lat = max(abs(math.cos(math.radians(lat_mid))), 1e-6)
+                        dlat = (distance_m / 111_320) * math.cos(bearing_rad)
+                        dlon = (distance_m / 111_320) * math.sin(bearing_rad) / cos_lat
+                        for pts in groups.values():
+                            if len(pts) < 2: continue
+                            if lon_range >= lat_range:
+                                pts.sort(key=lambda p: p[1])
+                                lat_m = sum(p[0] for p in pts) / len(pts) + dlat
+                                lons_new = np.arange(pts[0][1] + dlon, pts[-1][1] + dlon + spacing_deg * 0.5, spacing_deg)
+                                for lon in lons_new:
+                                    predict_rows.append({"latitude": float(lat_m), "longitude": float(lon)})
+                            else:
+                                pts.sort(key=lambda p: p[0])
+                                lon_m = sum(p[1] for p in pts) / len(pts) + dlon
+                                lats_new = np.arange(pts[0][0] + dlat, pts[-1][0] + dlat + spacing_deg * 0.5, spacing_deg)
+                                for lat in lats_new:
+                                    predict_rows.append({"latitude": float(lat), "longitude": float(lon_m)})
+
+                predict = pd.DataFrame(predict_rows) if predict_rows else pd.DataFrame({"latitude": [], "longitude": []})
+                detail = f"Sparse: {len(train)} measured stations, {len(predicted_traverses)} predicted traverse(s), {len(predict)} predicted points"
+            else:
+                # Legacy: use grid
+                grid_x, grid_y = self._build_grid(task, train)
+                predict = pd.DataFrame({"longitude": grid_x.ravel(), "latitude": grid_y.ravel()})
+                detail = f"Sparse: {len(train)} measured stations, predicting at {len(predict)} grid nodes"
 
         return {
             "frame": train,

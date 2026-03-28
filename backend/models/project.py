@@ -75,6 +75,7 @@ class TaskCreatePayload(GaiaModel):
     line_interpolation: bool = True
     grid_rows: int | None = None
     grid_cols: int | None = None
+    predicted_traverses: list[dict] = Field(default_factory=list)
     corrected_corrections: list[str] = Field(default_factory=list)
     column_mapping: ColumnMapping
     metadata: dict[str, Any] = Field(default_factory=dict)

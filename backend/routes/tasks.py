@@ -29,13 +29,20 @@ def _build_task_payload(
     line_interpolation: str | None,
     grid_rows: int | None,
     grid_cols: int | None,
+    predicted_traverses_json: str | None,
     corrected_corrections: str,
     column_mapping: str,
     metadata: str,
 ) -> TaskCreatePayload:
+    import json as _json
     line_interp_val = True
     if line_interpolation is not None:
         line_interp_val = str(line_interpolation).lower() in {"1", "true", "yes", "y"}
+    predicted_traverses_raw = predicted_traverses_json or "[]"
+    try:
+        predicted_traverses = _json.loads(predicted_traverses_raw)
+    except Exception:
+        predicted_traverses = []
     return TaskCreatePayload(
         name=name,
         description=description,
@@ -48,6 +55,7 @@ def _build_task_payload(
         line_interpolation=line_interp_val,
         grid_rows=grid_rows,
         grid_cols=grid_cols,
+        predicted_traverses=predicted_traverses,
         corrected_corrections=json.loads(corrected_corrections or "[]"),
         column_mapping=ColumnMapping(**json.loads(column_mapping)),
         metadata=json.loads(metadata or "{}"),
@@ -73,6 +81,7 @@ async def create_task(
     line_interpolation: str | None = Form(None),
     grid_rows: int | None = Form(None),
     grid_cols: int | None = Form(None),
+    predicted_traverses_json: str | None = Form(None),
     corrected_corrections: str = Form("[]"),
     column_mapping: str = Form(...),
     metadata: str = Form("{}"),
@@ -93,6 +102,7 @@ async def create_task(
             line_interpolation=line_interpolation,
             grid_rows=grid_rows,
             grid_cols=grid_cols,
+            predicted_traverses_json=predicted_traverses_json,
             corrected_corrections=corrected_corrections,
             column_mapping=column_mapping,
             metadata=metadata,
@@ -133,6 +143,7 @@ async def update_task(
     line_interpolation: str | None = Form(None),
     grid_rows: int | None = Form(None),
     grid_cols: int | None = Form(None),
+    predicted_traverses_json: str | None = Form(None),
     corrected_corrections: str = Form("[]"),
     column_mapping: str = Form(...),
     metadata: str = Form("{}"),
@@ -156,6 +167,7 @@ async def update_task(
             line_interpolation=line_interpolation,
             grid_rows=grid_rows,
             grid_cols=grid_cols,
+            predicted_traverses_json=predicted_traverses_json,
             corrected_corrections=corrected_corrections,
             column_mapping=column_mapping,
             metadata=metadata,
