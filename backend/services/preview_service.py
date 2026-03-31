@@ -69,7 +69,9 @@ class PreviewService:
         cross-line spacing) to count distinct lines.
         """
         if not points:
-            return 0, 0
+            return 0, int(len(task.get("predicted_traverses") or []))
+
+        uploaded_count = int(len(task.get("survey_files") or [])) if task.get("processing_mode") == "multi" else 0
 
         spacing_value = float(task.get("station_spacing") or 20)
         spacing_unit = (task.get("station_spacing_unit") or "Metres").lower()
@@ -90,8 +92,11 @@ class PreviewService:
             groups = {round(lat / tol) for lat in lats}
         else:
             groups = {round(lon / tol) for lon in lons}
-        survey_count = len(groups)
+        survey_count = max(len(groups), uploaded_count)
 
+        configured_predicted = task.get("predicted_traverses") or []
+        if configured_predicted:
+            return survey_count, int(len(configured_predicted))
         if not predicted_points:
             return survey_count, 0
         pred_labels = {p.get("traverse_label") for p in predicted_points if p.get("traverse_label")}

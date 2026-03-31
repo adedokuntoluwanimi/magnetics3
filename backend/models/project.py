@@ -68,7 +68,7 @@ class TaskCreatePayload(GaiaModel):
     description: str = Field(min_length=10, max_length=4000)
     platform: Platform
     data_state: DataState
-    scenario: Scenario
+    scenario: Scenario | None = None
     processing_mode: ProcessingMode
     station_spacing: float | None = None
     station_spacing_unit: str | None = None
@@ -99,5 +99,6 @@ class TaskRecord(TaskCreatePayload):
     analysis_config: dict[str, Any] = Field(default_factory=dict)
     processing_run_id: str | None = None
     export_jobs: list[dict[str, Any]] = Field(default_factory=list)
+    results: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

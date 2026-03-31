@@ -195,7 +195,7 @@ export async function renderStationMap(
     const valueUnit = point.display_unit || "nT";
     const displayValue = Number.isFinite(Number(point.display_value))
       ? Number(point.display_value)
-      : (point.magnetic != null ? Number(point.magnetic) : null);
+      : (point.predicted_magnetic != null ? Number(point.predicted_magnetic) : (point.magnetic != null ? Number(point.magnetic) : null));
     const showValue = displayValue != null && point.hide_value !== true;
     const pointKind = point.point_kind || (isBase ? "Base station" : "Measured data");
 

@@ -418,13 +418,13 @@ class AIService:
         ref_text = self._extract_reference_text(task)
 
         prompt = (
-            "You are a senior geophysical magnetics analyst with expertise in survey QC, "
-            "potential-field interpretation, and Kriging/ML-based magnetic modelling. "
-            "You are embedded as an AI assistant inside GAIA Magnetics, a geophysical "
-            "workflow platform. Ground every answer in the project data below. "
-            "Be conversational, precise, and domain aware. Answer follow-up questions "
-            "naturally using the context you already have. Do not refer to yourself by "
-            "any product name.\n\n"
+            "You are Aurora AI, a practical magnetic-survey assistant focused on setup, QA, processing outputs, and delivery choices. "
+            "Keep answers direct, plain-language, and operational unless the user explicitly asks for technical depth. "
+            "Do not add geology interpretation, structural speculation, or region descriptions unless the user explicitly asks for them. "
+            "Avoid jargon where a simpler phrase will do. "
+            "Ground every answer in the project data below. "
+            "Be conversational, precise, and easy to follow. Answer follow-up questions "
+            "naturally using the context you already have.\n\n"
             "--- PROJECT CONTEXT ---\n"
             f"Project: {project.get('name', '')} — {project.get('context', '')}\n"
             f"Task: {task.get('name', '')} — {task.get('description', '')}\n"
@@ -689,24 +689,20 @@ class AIService:
             magnetic_range = float(stats["max"]) - float(stats["min"])
         corrections = ", ".join(task.get("analysis_config", {}).get("corrections") or []) or "no explicit corrections"
         add_ons = ", ".join(task.get("analysis_config", {}).get("add_ons") or []) or "no add-ons"
-        project_context = project.get("context", "").strip()
-        project_sentence = project_context.split(".")[0].strip() if project_context else "Project context is available."
         lines = [
-            f"{project_sentence} This {location} assessment is grounded in {point_count} magnetic observations "
-            f"and a {task.get('analysis_config', {}).get('model', 'configured')} workflow.",
-            f"Configured corrections: {corrections}. Selected add-ons: {add_ons}.",
+            f"This {location} view is based on {point_count} survey points.",
+            f"Enabled corrections: {corrections}. Enabled outputs: {add_ons}.",
         ]
         if magnetic_mean is not None:
             lines.append(
-                f"Processed magnetic response centres around {float(magnetic_mean):.2f} nT "
-                f"with a working spread of about {float(magnetic_range or 0):.2f} nT."
+                f"Typical value is about {float(magnetic_mean):.2f} nT, with a spread of about {float(magnetic_range or 0):.2f} nT."
             )
         if location == "preview":
-            lines.append("Watch for sparse edge control near survey boundaries — interpolation uncertainty typically rises there.")
+            lines.append("Use this screen to check the uploaded survey lines, predicted traverses, and whether the setup matches your plan.")
         elif location == "visualisation":
-            lines.append("Prioritise coherent amplitude highs, strong analytic-signal ridges, and consistent spatial clustering before inferring structure.")
+            lines.append("Focus on where values change, where they stay consistent, and where uncertainty is higher.")
         elif location == "export":
-            lines.append("Keep the delivery focused on model assumptions, uncertainty surface, and correction limitations so the interpretation remains auditable.")
+            lines.append("Use this screen to decide which files to deliver and what each one contains.")
         if question:
-            lines.append(f"Question focus: {question}")
+            lines.append(f"Question: {question}")
         return "\n".join(lines)

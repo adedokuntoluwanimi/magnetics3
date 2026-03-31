@@ -16,7 +16,7 @@ const ADD_ON_MAP = {
   "Analytic signal": "analytic_signal",
   "First Vertical Derivative": "first_vertical_derivative",
   "Horizontal Derivative": "horizontal_derivative",
-  "EMAG2 comparison": "emag2",
+  "Regional residual": "emag2",
   "Uncertainty quantification": "uncertainty",
 };
 

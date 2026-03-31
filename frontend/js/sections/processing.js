@@ -1,23 +1,26 @@
 ﻿import {fetchProcessingRun, fetchTask, startProcessing} from "../api.js";
 import {renderWorkflowProgress} from "./progress.js";
-import {appState, setProcessingRun, setTask} from "../state.js";
+import {appState, clearTaskResults, setProcessingRun, setTask} from "../state.js";
 import {ensureElement} from "../shared/dom.js";
 import {formatNumber, titleCase} from "../shared/format.js";
 
 let pollHandle = null;
 let startPromise = null;
 const IDLE_STEPS = [
-  {name: "Data loading", detail: "Waiting for you to start processing."},
-  {name: "Data cleaning", detail: "Queued"},
-  {name: "Corrections", detail: "Queued"},
-  {name: "Station grid", detail: "Queued"},
-  {name: "Modelling", detail: "Queued"},
-  {name: "Derived layers", detail: "Queued"},
+  {name: "Load and validate", detail: "Waiting for you to start processing."},
+  {name: "Clean and standardize", detail: "Queued"},
+  {name: "Line-domain corrections", detail: "Queued"},
+  {name: "Leveling and crossover", detail: "Queued"},
+  {name: "Prediction target preparation", detail: "Queued"},
+  {name: "Modelling and interpolation", detail: "Queued"},
+  {name: "Grid-domain transforms", detail: "Queued"},
+  {name: "Uncertainty synthesis", detail: "Queued"},
+  {name: "QA report", detail: "Queued"},
   {name: "Save results", detail: "Queued"},
 ];
 
 // Approximate ETA per step in seconds (shown while queued/running)
-const STEP_ETA = [5, 4, 6, 8, 45, 12, 6];
+const STEP_ETA = [6, 5, 8, 10, 8, 45, 12, 8, 5, 6];
 
 const CORRECTION_LABELS = {
   diurnal: "Diurnal correction", igrf: "IGRF removal",
@@ -28,7 +31,7 @@ const ADD_ON_LABELS = {
   analytic_signal: "Analytic signal",
   first_vertical_derivative: "First vertical derivative",
   horizontal_derivative: "Horizontal derivative",
-  emag2: "EMAG2 comparison",
+  emag2: "Regional residual",
   uncertainty: "Uncertainty",
 };
 const MODEL_LABELS = {kriging: "Kriging", ml: "Machine learning", hybrid: "Hybrid", none: "No modelling"};
@@ -43,6 +46,23 @@ function getRoots() {
     completeCTA: document.getElementById("completeCTA"),
     sideRows,
   };
+}
+
+function simplifyProcessingDetail(detail, stepName = "") {
+  const raw = String(detail || "").trim();
+  if (!raw) return "Working...";
+  const step = String(stepName || "").toLowerCase();
+  if (step.includes("line-domain corrections")) return "Corrections checked and applied where data support was available.";
+  if (/igrf failed|pyigrf unavailable/i.test(raw)) {
+    return raw
+      .replace(/IGRF FAILED\s*[—-]?\s*/i, "IGRF could not run. ")
+      .replace(/\(output not geophysically corrected\)/i, "The data stayed unchanged for that step.")
+      .replace(/diurnal correction via base station CubicSpline/gi, "Diurnal correction used base-station interpolation")
+      .replace(/low-pass FFT filter/gi, "Low-pass filter")
+      .trim();
+  }
+  if (/requested help:|geologically|configured corrections|selected add-ons/i.test(raw)) return "Aurora AI can explain this screen in plain language if you need it.";
+  return raw;
 }
 
 function statusBadge(status) {
@@ -80,7 +100,7 @@ function renderPipeline(run) {
         <div class="pipe-icon-wrap" style="font-size:12px;font-weight:700;font-family:'Roboto',sans-serif;color:var(--g600)">${String(displayIndex + 1).padStart(2, "0")}</div>
         <div class="pipe-text">
           <div class="pipe-name">${titleCase(step.name)}</div>
-          <div class="pipe-detail">${step.detail || titleCase(step.status)}</div>
+          <div class="pipe-detail">${simplifyProcessingDetail(step.detail || titleCase(step.status), step.name)}</div>
           ${etaHtml}
           ${progressBar}
         </div>
@@ -116,7 +136,7 @@ function renderLogs(run) {
       ${logs.length ? logs.map((entry) => `
         <div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--g100)">
           <div style="font-size:10px;color:var(--text4);font-family:'JetBrains Mono',monospace;min-width:60px">${new Date(entry.timestamp).toLocaleTimeString()}</div>
-          <div style="font-size:11px;color:var(--text3);flex:1"><strong style="color:var(--text)">${titleCase(entry.step)}</strong> · ${entry.detail}</div>
+          <div style="font-size:11px;color:var(--text3);flex:1"><strong style="color:var(--text)">${titleCase(entry.step)}</strong> · ${simplifyProcessingDetail(entry.detail, entry.step)}</div>
         </div>
       `).join("") : "<div style='font-size:11px;color:var(--text3)'>No processing logs yet.</div>"}
     </div>
@@ -138,7 +158,7 @@ function renderConfigSummary(task) {
   const corrections = (config.corrections || []).map((c) => CORRECTION_LABELS[c] || c);
   const addOns = (config.add_ons || []).map((a) => ADD_ON_LABELS[a] || a);
   const model = MODEL_LABELS[config.model] || config.model || "Machine learning";
-  const scenario = task?.scenario || "sparse";
+  const scenario = task?.scenario || "automatic";
   const spacing = task?.station_spacing
     ? `${task.station_spacing} ${task.station_spacing_unit || "m"}`
     : null;
@@ -148,7 +168,7 @@ function renderConfigSummary(task) {
     `<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10.5px;font-weight:700;background:var(--${color}-bg,var(--bg2));color:var(--${color},var(--text2));margin:2px 3px 2px 0">${text}</span>`;
 
   const rows = [
-    ["Scenario", badge(titleCase(scenario), "g5")],
+    ["Scenario", badge(scenario === "automatic" ? "Optional / automatic" : titleCase(scenario), "g5")],
     ...(spacing ? [["Grid spacing", badge(spacing, "blue")]] : []),
     ["Model", badge(model, runPrediction ? "amber" : "text4")],
     corrections.length ? ["Corrections", corrections.map((c) => badge(c, "g5")).join("")] : null,
@@ -209,6 +229,7 @@ async function pollRun(runId) {
 
   const cta = getRoots().completeCTA;
   if (run.status === "completed") {
+    clearTaskResults();
     await refreshTask();
     cta.style.display = "block";
     cta.innerHTML = `

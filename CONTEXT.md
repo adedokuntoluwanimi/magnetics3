@@ -1,11 +1,11 @@
 # GAIA Magnetics Context
 
-Last updated: `2026-03-28`
+Last updated: `2026-03-31`
 
 ## Purpose
 
 This file captures the current working context for `gaia-magnetics`.
-`Instructions.txt` in the parent workspace remains the single source of truth.
+`Instructions.txt` in the parent workspace remains the higher-level project instruction set.
 
 ## Workspace
 
@@ -22,8 +22,8 @@ This file captures the current working context for `gaia-magnetics`.
   `https://gaia-magnetics-348555315681.us-central1.run.app`
 - Cloud Run service:
   `gaia-magnetics`
-- Latest ready revision:
-  `gaia-magnetics-00060-rtr` 
+- Latest live revision:
+  `gaia-magnetics-00065-zkf`
 - Region:
   `us-central1`
 - Infra project:
@@ -35,144 +35,92 @@ This file captures the current working context for `gaia-magnetics`.
 
 ## Standing Constraints
 
-- Preserve folder structure.
-- Use `frontend/index.html` as the UI reference.
-- Do not reintroduce dummy data.
+- Preserve the existing folder structure.
+- Use `frontend/index.html` as the shared UI shell.
 - Keep integrations real:
-  Firestore, Cloud Storage, Cloud Run, Cloud Run Jobs, Google Maps, Vertex AI.
-- All AI paths must use Claude Sonnet 4.6 via Vertex AI Marketplace in project `app-01-488817-ai`.
-  The `VertexAIClient` in `backend/gcp/vertex_ai.py` uses `ai_project_id` (not `infra_project_id`).
-- Theme toggle should remain symbol-based, not text-based.
-- No "Aurora" branding anywhere in user-visible surfaces. Use "GAIA AI".
+  Firestore, Cloud Storage, Cloud Run, Google Maps, Vertex AI.
+- Do not reintroduce dummy data or misleading labels.
+- User-visible assistant branding should remain `Aurora AI`.
+- The frontend currently mixes static shell markup and modular JS; changes often need both.
 
 ## Current Functional Shape
 
 ### Navigation and project flow
 
-- Top nav shows `Projects`.
-- Home-page project actions route into the projects hub.
-- Setup routing uses direct `setup` screen navigation.
-- Directory/project actions include:
-  `Open project`, `Edit project`, `+ New task`
+- Top navigation is project-centric.
+- Core route sequence is:
+  `Home -> Projects -> Setup -> Analysis -> Preview -> Processing -> Visualisation -> Export`
+- Sidebar project controls and project/task launch actions are active.
 
 ### Setup
 
-- Two-step flow: `Project details -> Task setup`
-- Survey upload supports CSV/XLSX.
-- Coordinate system supports WGS84 and UTM.
-- Coordinate outliers detected before upload; user can discard or keep.
-- Base stations auto-detected from repeated coordinates; xlsx bold-row support.
-- Existing tasks can be loaded back into setup for editing.
-- Reference file upload (PDF, DOCX, TXT, KML, KMZ, GeoJSON, ZIP) stored in GCS
-  as `task.basemap_file`. Text is extracted and injected into every AI prompt.
-- Backend supports full task updates through:
-  `PUT /api/projects/{project_id}/tasks/{task_id}`
-
-### Analysis
-
-- Analysis persists normalised backend IDs.
-- Processing add-ons:
-  `rtp`, `analytic_signal`, `first_vertical_derivative`, `horizontal_derivative`,
-  `emag2`, `uncertainty`
+- Two-step setup flow:
+  `Project details -> Task setup`
+- Scenario selection is optional.
+- Prediction mode now expects one selected predicted-traverse type:
+  `infill` or `offset`.
+- Old generic station-spacing handling was reduced so generated traverses depend on the chosen prediction mode.
+- Survey upload supports CSV/XLSX with coordinate mapping, raw-data mapping, and base-station handling.
 
 ### Preview
 
 - Preview renders Google Maps-backed station maps.
-- No connecting station lines.
-- Stores and reuses chosen measured/predicted marker colours.
-- Basemaps: `Terrain`, `Satellite`, `Map`
-- **AI chat panel** on the right side auto-loads on every `loadPreview()` call.
-  Users can ask follow-up questions.
+- Summary cards show survey traverses and predicted traverses separately.
+- Predicted traverse counts now reflect configured traverses more accurately.
+- Assistant surface uses `Aurora AI`.
+
+### Processing
+
+- Processing pipeline persists richer metadata and predicted-station magnetic values.
+- User-facing step descriptions were simplified where needed, especially around fallback wording.
+- Result loading in the frontend is cached more aggressively to reduce repeat fetch delays.
 
 ### Visualisation
 
-- Layer-driven: TMF, Filtered surface, RTP, Analytic signal, FVD, Horizontal derivative,
-  EMAG2 residual, Uncertainty.
-- Selected layer drives stats, scale bar, hover values, heatmap/contour/3D, line profiles.
-- Line profiles support stacking.
-- **AI chat input** at the bottom of the right stats panel.
-  `renderInterpretation` auto-fires a layer-specific AI question on every layer change.
-  Chat body (`visAIBody`) persists; only the layer metadata card refreshes.
+- Combined surface presentation remains heatmap plus contour.
+- Users can now choose to view all traverses together or focus on a selected traverse.
+- Layer-driven views and maps remain powered by the processed task results.
+- Assistant surface uses `Aurora AI`.
 
 ### Export
 
-- **AI chat panel** on the right side.
-  Auto-loads on `loadExportView()` with export guidance.
-  Users can ask follow-up questions about formats and deliverables.
-- AI-generated content (Claude Sonnet 4.6) embedded in PDF, DOCX, PPTX.
-- PDF uses `SimpleDocTemplate` with stats table and AI sections.
-- DOCX has config summary, stats table, and full AI analysis.
-- PPTX is a 6-slide deck: Title, Survey Summary, Key Findings, Config, Stats, Limitations.
-- Data exports (CSV, GeoJSON, KML/KMZ, GDB, PNG/JPG) are pure data transforms,
-  no AI involved.
-
-### AI service
-
-- Model: `claude-sonnet-4-6` (default set in `config.py`; overridable via `GAIA_AURORA_MODEL`
-  or `CLAUDE_MODEL` env vars).
-- Client: `VertexAIClient` in `backend/gcp/vertex_ai.py` via `AnthropicVertex`.
-- Every AI call receives:
-  project name + context, task name + description, processing config, magnetic stats,
-  30-point station sample, and reference file text (if uploaded).
-- Export call uses 3000 tokens and a structured prompt requesting labelled sections.
-- `_parse_response` in `ai_service.py` extracts sections into `summary` + `highlights`.
-- Falls back to a deterministic text response if the Vertex AI call fails.
-
-### Shared AI chat module
-
-- `frontend/js/shared/ai_chat.js`
-- `initAIChat(bodyEl, inputEl, sendEl, {location})` → returns `{autoLoad, clear}`.
-- `autoLoad(question?)` clears the body and fires an initial AI call.
-- Enter to send, Shift+Enter for newline.
-- Disabled during pending calls.
-
-### Processing backend
-
-- Full results in GCS `results.json`; lightweight metadata in Firestore.
-- Derived layers: `first_vertical_derivative`, `horizontal_derivative`
-- Prediction scenarios:
-  `explicit` — rows with values train, rows without are predicted.
-  `sparse` — all measured rows train; user-defined predicted traverses or grid nodes.
+- Export view retains the assistant panel and plain-language export guidance.
+- Assistant surface uses `Aurora AI`.
 
 ## Important Files
 
 ### Backend
 
-- `backend/config.py` — model default and all env var settings
-- `backend/gcp/vertex_ai.py` — `VertexAIClient` (Claude via AnthropicVertex)
-- `backend/services/ai_service.py` — prompt construction, reference file extraction, response parsing
-- `backend/services/export_service.py` — PDF/DOCX/PPTX builders, export AI call
-- `backend/services/container.py` — dependency wiring
-- `backend/services/processing_service.py`
-- `backend/services/task_service.py`
 - `backend/routes/tasks.py`
-- `backend/routes/ai.py`
-- `backend/routes/exports.py`
+- `backend/models/__init__.py`
+- `backend/models/processing.py`
+- `backend/models/project.py`
+- `backend/services/ai_service.py`
+- `backend/services/preview_service.py`
+- `backend/services/processing_service.py`
 
 ### Frontend
 
 - `frontend/index.html`
-- `frontend/js/shared/ai_chat.js` — shared chat component
-- `frontend/js/sections/preview.js`
-- `frontend/js/sections/visualisation.js`
-- `frontend/js/sections/export.js`
 - `frontend/js/state.js`
-- `frontend/js/api.js`
+- `frontend/js/sections/analysis.js`
+- `frontend/js/sections/setup.js`
+- `frontend/js/sections/preview.js`
+- `frontend/js/sections/processing.js`
+- `frontend/js/sections/visualisation.js`
+- `frontend/js/sections/maps.js`
+- `frontend/js/sections/export.js`
 
 ## Known Follow-Up Areas
 
-1. Deploy to Cloud Run to make AI/chat changes live.
-2. Verify `vet-dev-backend@app-01-488817.iam.gserviceaccount.com` has
-   `roles/aiplatform.user` on `app-01-488817-ai`.
-3. Full browser click-through on latest UI flows after deploy.
-4. Investigate why live processing times out during smoke polling.
-5. Persist explicit predicted values per predicted station (currently sampled from surface grid).
-6. Implement export Cloud Run Job to move exports out of the request path.
-7. Additional visualisations: anomaly masks, histograms, uncertainty overlays,
-   directional derivatives, crossover/profile QC.
+1. Manual browser QA on the newest deploy.
+2. Confirm predicted overlay behavior on a real dataset end to end.
+3. Revisit per-traverse surface rendering if the current traverse filter is not sufficient.
+4. Keep an eye on live processing latency and export response time.
+5. Continue reducing stale wording in docs and UI where older assumptions remain.
 
 ## Deployment Note
 
 ```powershell
-gcloud run deploy gaia-magnetics --source gaia-magnetics --region=us-central1 --project=app-01-488817 --quiet
+gcloud run deploy gaia-magnetics --source . --region=us-central1 --project=app-01-488817 --quiet
 ```

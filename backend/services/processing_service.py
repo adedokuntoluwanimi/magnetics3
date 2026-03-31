@@ -8,27 +8,90 @@ import io
 import json
 import math
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 from scipy.fft import rfft, irfft, rfftfreq
 from scipy.interpolate import CubicSpline, RBFInterpolator, griddata, interp1d
+from scipy.ndimage import gaussian_filter, median_filter
 from scipy.optimize import curve_fit
-from scipy.signal import correlate
-from scipy.spatial import KDTree
+from scipy.signal import correlate, windows
+from scipy.spatial import KDTree, cKDTree
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
 from backend.logging_utils import log_event
-from backend.models import PipelineRun, PipelineStep
+from backend.models import (
+    MetricSummary,
+    PipelineRun,
+    PipelineStep,
+    ProcessingFallbackEvent,
+    ProcessingStageSummary,
+    QAReport,
+    ValidationIssue,
+    ValidationSummary,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass
+class ProcessingRuntime:
+    validation_summary: dict = field(default_factory=dict)
+    stage_reports: list[dict] = field(default_factory=list)
+    fallback_events: list[dict] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
+    correction_path: list[str] = field(default_factory=list)
+
+
+def _safe_float(value: float | int | None) -> float | None:
+    if value is None:
+        return None
+    number = float(value)
+    if math.isnan(number) or math.isinf(number):
+        return None
+    return number
+
+
+def _metric_summary(arr: np.ndarray, affected_count: int = 0) -> dict:
+    values = np.asarray(arr, dtype=np.float64).ravel()
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return MetricSummary(affected_count=affected_count).model_dump(mode="json")
+    return MetricSummary(
+        min=float(np.min(finite)),
+        max=float(np.max(finite)),
+        mean=float(np.mean(finite)),
+        std=float(np.std(finite)),
+        point_count=int(finite.size),
+        affected_count=int(affected_count),
+    ).model_dump(mode="json")
+
+
+def _decimal_year_from_datetime(dt: datetime) -> float:
+    dt_utc = dt.astimezone(timezone.utc)
+    start = datetime(dt_utc.year, 1, 1, tzinfo=timezone.utc)
+    end = datetime(dt_utc.year + 1, 1, 1, tzinfo=timezone.utc)
+    return dt_utc.year + ((dt_utc - start).total_seconds() / max((end - start).total_seconds(), 1.0))
+
+
+def _mad(values: np.ndarray) -> float:
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return 0.0
+    median = np.median(finite)
+    return float(np.median(np.abs(finite - median)))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -139,10 +202,13 @@ def _apply_fft_filter(
     valid = ~np.isnan(mag)
     mag_filled = mag.copy()
     mag_filled[~valid] = float(np.nanmean(mag[valid])) if valid.any() else 0.0
+    demeaned = mag_filled - float(np.mean(mag_filled))
+    taper = windows.hann(n, sym=False) if n > 4 else np.ones(n, dtype=np.float64)
+    tapered = demeaned * taper
 
-    energy_before = _spectral_energy(mag_filled)
+    energy_before = _spectral_energy(tapered)
 
-    spectrum = rfft(mag_filled)
+    spectrum = rfft(tapered)
     freqs = rfftfreq(n, d=sample_spacing)
     filt = np.zeros(len(spectrum), dtype=complex)
 
@@ -156,7 +222,8 @@ def _apply_fft_filter(
     else:
         return mag.copy(), {"warning": "Missing cutoff parameters; filter not applied."}
 
-    filtered = irfft(filt, n=n).astype(np.float64)
+    filtered = (irfft(filt, n=n) / np.where(taper > 1e-6, taper, 1.0)).astype(np.float64)
+    filtered = filtered + float(np.mean(mag_filled))
     filtered[~valid] = np.nan
     energy_after = _spectral_energy(filtered[valid]) if valid.any() else 0.0
 
@@ -448,6 +515,88 @@ class ProcessingService:
         self._store = store
         self._storage = storage_backend
 
+    @staticmethod
+    def _build_default_steps() -> list[PipelineStep]:
+        return [
+            PipelineStep(name="Load and validate", status="queued", detail="Waiting to start"),
+            PipelineStep(name="Clean and standardize", status="queued", detail="Queued"),
+            PipelineStep(name="Line-domain corrections", status="queued", detail="Queued"),
+            PipelineStep(name="Leveling and crossover", status="queued", detail="Queued"),
+            PipelineStep(name="Prediction target preparation", status="queued", detail="Queued"),
+            PipelineStep(name="Modelling and interpolation", status="queued", detail="Queued"),
+            PipelineStep(name="Grid-domain transforms", status="queued", detail="Queued"),
+            PipelineStep(name="Uncertainty synthesis", status="queued", detail="Queued"),
+            PipelineStep(name="QA report", status="queued", detail="Queued"),
+            PipelineStep(name="Save results", status="queued", detail="Queued"),
+        ]
+
+    def _push_stage_report(
+        self,
+        runtime: ProcessingRuntime,
+        *,
+        name: str,
+        status: str,
+        detail: str,
+        metrics: dict | None = None,
+        warnings: list[str] | None = None,
+        fallbacks: list[dict] | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        runtime.stage_reports.append(
+            ProcessingStageSummary(
+                name=name,
+                status=status,
+                detail=detail,
+                metrics=MetricSummary(**metrics) if metrics else None,
+                warnings=warnings or [],
+                fallbacks=[ProcessingFallbackEvent(**item) for item in (fallbacks or [])],
+                metadata=metadata or {},
+            ).model_dump(mode="json")
+        )
+
+    def _push_fallback(
+        self,
+        runtime: ProcessingRuntime,
+        *,
+        stage: str,
+        requested: str,
+        actual: str,
+        reason: str,
+        severity: str = "warning",
+    ) -> None:
+        event = ProcessingFallbackEvent(
+            stage=stage,
+            requested=requested,
+            actual=actual,
+            reason=reason,
+            severity=severity,
+        ).model_dump(mode="json")
+        runtime.fallback_events.append(event)
+        if severity in {"warning", "critical"}:
+            runtime.warnings.append(f"{stage}: {reason}")
+
+    def _resolve_survey_datetime(self, task: dict) -> datetime:
+        analysis = task.get("analysis_config") or {}
+        metadata = task.get("metadata") or {}
+        candidates = [
+            analysis.get("survey_date"),
+            metadata.get("survey_date"),
+            metadata.get("acquisition_date"),
+            task.get("updated_at"),
+            task.get("created_at"),
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            if isinstance(candidate, datetime):
+                return candidate if candidate.tzinfo else candidate.replace(tzinfo=timezone.utc)
+            try:
+                parsed = datetime.fromisoformat(str(candidate).replace("Z", "+00:00"))
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
+        return datetime.now(timezone.utc)
+
     def start_run(self, task_id: str) -> dict:
         task = self._store.get_task(task_id)
         if not task:
@@ -456,18 +605,9 @@ class ProcessingService:
         run = PipelineRun(
             task_id=task_id,
             status="queued",
-            steps=[
-                PipelineStep(name="Data loading", status="queued", detail="Waiting to start"),
-                PipelineStep(name="Data cleaning", status="queued", detail="Queued"),
-                PipelineStep(name="Corrections", status="queued", detail="Queued"),
-                PipelineStep(name="Station grid", status="queued", detail="Queued"),
-                PipelineStep(name="Modelling", status="queued", detail="Queued"),
-                PipelineStep(name="Derived layers", status="queued", detail="Queued"),
-                PipelineStep(name="Save results", status="queued", detail="Queued"),
-            ],
+            steps=self._build_default_steps(),
         )
         payload = run.model_dump(mode="json")
-        payload["logs"] = []
         persisted = self._store.create_processing_run(payload)
         self._store.update_task(
             task_id,
@@ -488,51 +628,135 @@ class ProcessingService:
         if not task:
             raise ValueError("Task not found.")
 
+        runtime = ProcessingRuntime()
+
         try:
-            self._update_run(run_id, 0, "running", "Checking your uploaded survey data...")
-            frame = self._load_dataframe(task)
-            frame, n_removed = self._remove_coordinate_outliers(frame)
-            removed_msg = f" ({n_removed} out-of-area points removed)" if n_removed > 0 else ""
-            self._update_run(run_id, 0, "completed", f"{len(frame)} survey readings loaded{removed_msg}")
+            self._update_run(run_id, 0, "running", "Loading and validating uploaded survey data...")
+            raw_frame = self._load_dataframe(task)
+            runtime.validation_summary = self._validate_loaded_frame(task, raw_frame)
+            frame, n_removed = self._remove_coordinate_outliers(raw_frame)
+            validation_detail = f"{len(frame)} rows validated"
+            if n_removed > 0:
+                validation_detail += f" ({n_removed} out-of-area points removed)"
+            self._update_run(run_id, 0, "completed", validation_detail)
+            self._push_stage_report(
+                runtime,
+                name="Load and validate",
+                status="completed",
+                detail=validation_detail,
+                metrics=_metric_summary(frame["magnetic"].to_numpy(dtype=np.float64), n_removed),
+                warnings=list(runtime.validation_summary.get("warnings") or []),
+                metadata={"validation_summary": runtime.validation_summary},
+            )
 
-            self._update_run(run_id, 1, "running", "Removing duplicates and sorting data...")
+            self._update_run(run_id, 1, "running", "Cleaning duplicates, line IDs, and survey ordering...")
             cleaned = self._clean_dataframe(frame)
-            self._update_run(run_id, 1, "completed", f"{len(cleaned)} readings ready after cleaning")
+            clean_report = cleaned.attrs.get("cleaning_report", {})
+            clean_detail = clean_report.get("detail") or f"{len(cleaned)} readings ready after cleaning"
+            self._update_run(run_id, 1, "completed", clean_detail)
+            self._push_stage_report(
+                runtime,
+                name="Clean and standardize",
+                status="completed",
+                detail=clean_detail,
+                metrics=_metric_summary(cleaned["magnetic"].to_numpy(dtype=np.float64), int(clean_report.get("duplicates_removed", 0))),
+                warnings=list(clean_report.get("warnings") or []),
+                metadata=clean_report,
+            )
 
-            self._update_run(run_id, 2, "running", "Applying your selected magnetic corrections...")
+            self._update_run(run_id, 2, "running", "Applying line-domain corrections...")
             corrected, correction_summary = self._apply_corrections(task, cleaned)
+            correction_report = corrected.attrs.get("correction_report", {})
+            runtime.correction_path = list(correction_report.get("applied_order") or [])
+            for fallback in correction_report.get("fallbacks") or []:
+                self._push_fallback(runtime, **fallback)
             self._update_run(run_id, 2, "completed", correction_summary)
+            self._push_stage_report(
+                runtime,
+                name="Line-domain corrections",
+                status="completed",
+                detail=correction_summary,
+                metrics=_metric_summary(corrected["magnetic"].to_numpy(dtype=np.float64), int(correction_report.get("affected_points", 0))),
+                warnings=list(correction_report.get("warnings") or []),
+                fallbacks=list(correction_report.get("fallbacks") or []),
+                metadata=correction_report,
+            )
+
+            self._update_run(run_id, 3, "running", "Running crossover checks and leveling...")
+            leveled, leveling_summary = self._apply_leveling_and_crossover(task, corrected)
+            leveling_report = leveled.attrs.get("leveling_report", {})
+            for fallback in leveling_report.get("fallbacks") or []:
+                self._push_fallback(runtime, **fallback)
+            self._update_run(run_id, 3, "completed", leveling_summary)
+            self._push_stage_report(
+                runtime,
+                name="Leveling and crossover",
+                status=leveling_report.get("status", "completed"),
+                detail=leveling_summary,
+                metrics=_metric_summary(leveled["magnetic"].to_numpy(dtype=np.float64), int(leveling_report.get("affected_points", 0))),
+                warnings=list(leveling_report.get("warnings") or []),
+                fallbacks=list(leveling_report.get("fallbacks") or []),
+                metadata=leveling_report,
+            )
 
             config = task.get("analysis_config") or {}
             run_prediction = config.get("run_prediction", True)
 
             if run_prediction:
-                self._update_run(run_id, 3, "running", "Preparing station data for modelling...")
-                prep = self._prepare_prediction_inputs(task, corrected)
-                self._update_run(run_id, 3, "completed", prep["detail"])
+                self._update_run(run_id, 4, "running", "Preparing prediction targets from the survey geometry...")
+                prep = self._prepare_prediction_inputs(task, leveled)
+                self._update_run(run_id, 4, "completed", prep["detail"])
+                self._push_stage_report(
+                    runtime,
+                    name="Prediction target preparation",
+                    status="completed",
+                    detail=prep["detail"],
+                    metadata=prep.get("metadata") or {},
+                )
 
-                self._update_run(run_id, 4, "running", "Running the magnetic field model...")
+                self._update_run(run_id, 5, "running", "Running the interpolation and modelling path...")
                 results = self._generate_surfaces(task, prep)
-                self._update_run(run_id, 4, "completed", f"Model complete - used {results['model_used']} approach")
+                model_detail = f"Model complete - used {results['model_used']} approach"
+                self._update_run(run_id, 5, "completed", model_detail)
+                self._push_stage_report(
+                    runtime,
+                    name="Modelling and interpolation",
+                    status="completed",
+                    detail=model_detail,
+                    metrics=_metric_summary(results["surface"]),
+                    warnings=list((results.get("model_metadata") or {}).get("warnings") or []),
+                    metadata=results.get("model_metadata") or {},
+                )
 
-                self._update_run(run_id, 5, "running", "Calculating derived layers...")
+                self._update_run(run_id, 6, "running", "Calculating derived grid-domain layers...")
                 add_on_payload = self._apply_add_ons(task, results)
-                self._update_run(run_id, 5, "completed", add_on_payload["detail"])
+                for fallback in (add_on_payload.get("metadata") or {}).get("fallbacks") or []:
+                    self._push_fallback(runtime, **fallback)
+                self._update_run(run_id, 6, "completed", add_on_payload["detail"])
+                self._push_stage_report(
+                    runtime,
+                    name="Grid-domain transforms",
+                    status="completed",
+                    detail=add_on_payload["detail"],
+                    warnings=list((add_on_payload.get("metadata") or {}).get("warnings") or []),
+                    fallbacks=list((add_on_payload.get("metadata") or {}).get("fallbacks") or []),
+                    metadata=add_on_payload.get("metadata") or {},
+                )
             else:
-                self._update_run(run_id, 3, "completed", "Prediction modelling disabled - skipped")
                 self._update_run(run_id, 4, "completed", "Prediction modelling disabled - skipped")
-                self._update_run(run_id, 5, "completed", "No derived layers - modelling was disabled")
-                grid_x, grid_y = self._build_grid(task, corrected)
+                self._update_run(run_id, 5, "completed", "Prediction modelling disabled - skipped")
+                self._update_run(run_id, 6, "completed", "Grid-domain transforms skipped - prediction disabled")
+                grid_x, grid_y = self._build_grid(task, leveled)
                 surface = self._nearest_surface(
-                    corrected["longitude"].to_numpy(),
-                    corrected["latitude"].to_numpy(),
-                    corrected["magnetic"].to_numpy(),
+                    leveled["longitude"].to_numpy(),
+                    leveled["latitude"].to_numpy(),
+                    leveled["magnetic"].to_numpy(),
                     grid_x,
                     grid_y,
                 )
                 uncertainty = self._uncertainty_surface(
-                    corrected["longitude"].to_numpy(),
-                    corrected["latitude"].to_numpy(),
+                    leveled["longitude"].to_numpy(),
+                    leveled["latitude"].to_numpy(),
                     grid_x,
                     grid_y,
                     np.zeros_like(surface),
@@ -543,16 +767,21 @@ class ProcessingService:
                     "surface": surface,
                     "uncertainty": uncertainty,
                     "model_used": "none",
-                    "points": corrected[["latitude", "longitude", "magnetic"]
-                        + (["__is_base_station__"] if "__is_base_station__" in corrected.columns else [])
-                        + (["_line_id"] if "_line_id" in corrected.columns else [])
+                    "points": leveled[["latitude", "longitude", "magnetic"]
+                        + (["__is_base_station__"] if "__is_base_station__" in leveled.columns else [])
+                        + (["_line_id"] if "_line_id" in leveled.columns else [])
                     ].rename(columns={"__is_base_station__": "is_base_station", "_line_id": "line_id"}).to_dict(orient="records"),
                     "stats": {
-                        "min": float(corrected["magnetic"].min()), "max": float(corrected["magnetic"].max()),
-                        "mean": float(corrected["magnetic"].mean()), "std": float(corrected["magnetic"].std()),
-                        "point_count": len(corrected), "anomaly_count": 0,
+                        "min": float(leveled["magnetic"].min()), "max": float(leveled["magnetic"].max()),
+                        "mean": float(leveled["magnetic"].mean()), "std": float(leveled["magnetic"].std()),
+                        "point_count": len(leveled), "anomaly_count": 0,
                     },
                     "predicted_points": [],
+                    "model_metadata": {
+                        "algorithm": "observed_data_surface",
+                        "warnings": ["Prediction disabled; output is a nearest-neighbour observed-data surface."],
+                    },
+                    "uncertainty_metadata": {"algorithm": "distance_only", "detail": "Distance-based uncertainty prepared"},
                 }
                 add_on_payload = {
                     "analytic_signal": [],
@@ -560,26 +789,69 @@ class ProcessingService:
                     "horizontal_derivative": [],
                     "filtered_surface": [],
                     "emag2_residual": [],
+                    "regional_residual": [],
                     "rtp_surface": [],
                     "selected_add_ons": [],
-                    "detail": "No add-ons — modelling disabled",
+                    "detail": "No add-ons - modelling was disabled",
+                    "metadata": {"warnings": ["Grid-domain add-ons were skipped because prediction modelling was disabled."]},
                 }
                 prep = {
-                    "frame": corrected,
-                    "train_frame": corrected,
+                    "frame": leveled,
+                    "train_frame": leveled,
                     "predict_frame": pd.DataFrame({"latitude": [], "longitude": []}),
                     "grid_x": grid_x,
                     "grid_y": grid_y,
+                    "detail": "Prediction disabled",
+                    "scenario": (task.get("scenario") or "explicit").lower(),
+                    "metadata": {"run_prediction": False},
                 }
+                self._push_stage_report(
+                    runtime,
+                    name="Prediction target preparation",
+                    status="completed",
+                    detail="Prediction disabled - existing observed data carried forward",
+                    metadata=prep["metadata"],
+                )
 
-            self._update_run(run_id, 6, "running", "Saving results to your project...")
-            stored = self._persist_outputs(task, prep, results, add_on_payload)
-            self._update_run(run_id, 6, "completed", "Saved outputs, visual assets, and grid artifacts")
+            self._update_run(run_id, 7, "running", "Synthesizing uncertainty and support confidence...")
+            uncertainty_detail = (results.get("uncertainty_metadata") or {}).get("detail") or "Uncertainty surface prepared"
+            self._update_run(run_id, 7, "completed", uncertainty_detail)
+            self._push_stage_report(
+                runtime,
+                name="Uncertainty synthesis",
+                status="completed",
+                detail=uncertainty_detail,
+                metrics=_metric_summary(results["uncertainty"]),
+                warnings=list((results.get("uncertainty_metadata") or {}).get("warnings") or []),
+                metadata=results.get("uncertainty_metadata") or {},
+            )
+
+            self._update_run(run_id, 8, "running", "Building the QA report and scientific provenance...")
+            qa_report = self._build_qa_report(task, prep, results, add_on_payload, runtime)
+            self._update_run(run_id, 8, "completed", f"QA status: {qa_report['status']}")
+            self._push_stage_report(
+                runtime,
+                name="QA report",
+                status="completed",
+                detail=f"QA status: {qa_report['status']}",
+                warnings=list(qa_report.get("warnings") or []),
+                metadata=qa_report,
+            )
+
+            self._update_run(run_id, 9, "running", "Saving results, QA metadata, and artifacts...")
+            stored = self._persist_outputs(task, prep, results, add_on_payload, qa_report, runtime.validation_summary)
+            self._update_run(run_id, 9, "completed", "Saved outputs, QA report, and grid artifacts")
 
             self._store.update_processing_run(
                 run_id,
                 {
                     "status": "completed",
+                    "qa_status": qa_report["status"],
+                    "validation_summary": runtime.validation_summary,
+                    "qa_report": qa_report,
+                    "stage_reports": runtime.stage_reports,
+                    "warnings": runtime.warnings[-100:],
+                    "metadata": runtime.metadata,
                     "updated_at": utc_now(),
                 },
             )
@@ -600,6 +872,9 @@ class ProcessingService:
                     "status": "failed",
                     "updated_at": utc_now(),
                     "error": str(exc),
+                    "validation_summary": runtime.validation_summary or None,
+                    "stage_reports": runtime.stage_reports,
+                    "warnings": runtime.warnings[-100:],
                 },
             )
             self._store.update_task(
@@ -616,6 +891,63 @@ class ProcessingService:
         return self._store.get_processing_run(run_id)
 
     # ── Data loading (unchanged) ────────────────────────────────────────────
+
+    def _validate_loaded_frame(self, task: dict, frame: pd.DataFrame) -> dict:
+        mapping = task.get("column_mapping") or {}
+        issues: list[ValidationIssue] = []
+        warnings: list[str] = []
+        coord_sys = (mapping.get("coordinate_system") or "wgs84").lower()
+        survey_date = self._resolve_survey_datetime(task)
+        duplicate_timestamp_count = 0
+
+        if coord_sys == "utm":
+            zone = mapping.get("utm_zone")
+            hemi = (mapping.get("utm_hemisphere") or "").upper() or None
+            if zone is None or not (1 <= int(zone) <= 60):
+                issues.append(ValidationIssue(code="utm_zone_missing", severity="warning", message="UTM zone was missing or outside 1-60."))
+            if hemi not in {None, "N", "S"}:
+                issues.append(ValidationIssue(code="utm_hemisphere_invalid", severity="warning", message="UTM hemisphere was not N or S."))
+
+        lat = frame.get("latitude", pd.Series(dtype=float)).to_numpy(dtype=np.float64)
+        lon = frame.get("longitude", pd.Series(dtype=float)).to_numpy(dtype=np.float64)
+        impossible_mask = (
+            (~np.isfinite(lat)) | (~np.isfinite(lon))
+            | (lat < -90.0) | (lat > 90.0)
+            | (lon < -180.0) | (lon > 180.0)
+        )
+        impossible_count = int(np.count_nonzero(impossible_mask))
+        if impossible_count:
+            issues.append(ValidationIssue(code="impossible_coordinates", severity="critical", message="Some coordinates fall outside valid geographic bounds.", count=impossible_count))
+
+        if {"_hour", "_minute"}.issubset(frame.columns):
+            sec = frame["_second"] if "_second" in frame.columns else 0.0
+            times = (frame["_hour"].fillna(0) * 3600.0 + frame["_minute"].fillna(0) * 60.0 + sec).to_numpy(dtype=np.float64)
+            duplicate_timestamp_count = int(pd.Series(times).duplicated().sum())
+            if duplicate_timestamp_count:
+                warnings.append(f"{duplicate_timestamp_count} duplicate timestamps detected across the survey rows.")
+
+        status = "valid"
+        if any(issue.severity == "critical" for issue in issues):
+            status = "degraded"
+        elif issues or warnings:
+            status = "valid_with_warnings"
+
+        return ValidationSummary(
+            status=status,
+            row_count=int(len(frame)),
+            valid_row_count=int(len(frame) - impossible_count),
+            dropped_row_count=0,
+            coordinate_system=coord_sys,
+            utm_zone=mapping.get("utm_zone"),
+            utm_hemisphere=mapping.get("utm_hemisphere"),
+            survey_date=survey_date,
+            line_count=int(frame["_line_id"].nunique()) if "_line_id" in frame.columns else 0,
+            base_station_count=int(frame["__is_base_station__"].sum()) if "__is_base_station__" in frame.columns else 0,
+            duplicate_timestamp_count=duplicate_timestamp_count,
+            non_monotonic_line_count=0,
+            issues=issues,
+            warnings=warnings,
+        ).model_dump(mode="json")
 
     def _load_dataframe(self, task: dict) -> pd.DataFrame:
         mapping = task["column_mapping"]
@@ -647,31 +979,29 @@ class ProcessingService:
 
             coord_sys = (mapping.get("coordinate_system") or "wgs84").lower()
             if coord_sys == "utm":
-                from pyproj import Proj, Transformer
+                from pyproj import CRS, Transformer
+
                 utm_zone = mapping.get("utm_zone")
-                utm_hemi = mapping.get("utm_hemisphere") or "N"
+                utm_hemi = (mapping.get("utm_hemisphere") or "N").upper()
                 if not utm_zone:
                     first_n = float(frame["_raw_lat"].iloc[0])
                     utm_zone = 32
                     utm_hemi = "N" if first_n < 5_000_000 else "S"
-                south = str(utm_hemi).upper() == "S"
-                utm_proj = Proj(proj="utm", zone=int(utm_zone), ellps="WGS84", south=south)
-                wgs84_proj = Proj(proj="latlong", ellps="WGS84")
-                transformer = Transformer.from_proj(utm_proj, wgs84_proj, always_xy=True)
-                lats, lons = [], []
-                for _, row in frame.iterrows():
-                    try:
-                        lon, lat = transformer.transform(float(row["_raw_lon"]), float(row["_raw_lat"]))
-                        lats.append(lat)
-                        lons.append(lon)
-                    except Exception:
-                        lats.append(None)
-                        lons.append(None)
-                frame["latitude"] = lats
-                frame["longitude"] = lons
+                if not 1 <= int(utm_zone) <= 60:
+                    raise ValueError(f"Invalid UTM zone: {utm_zone}")
+                epsg = 32600 + int(utm_zone) if utm_hemi != "S" else 32700 + int(utm_zone)
+                transformer = Transformer.from_crs(CRS.from_epsg(epsg), CRS.from_epsg(4326), always_xy=True)
+                easting = frame["_raw_lon"].to_numpy(dtype=np.float64)
+                northing = frame["_raw_lat"].to_numpy(dtype=np.float64)
+                lon_vals, lat_vals = transformer.transform(easting, northing, errcheck=False)
+                frame["latitude"] = np.asarray(lat_vals, dtype=np.float64)
+                frame["longitude"] = np.asarray(lon_vals, dtype=np.float64)
             else:
                 frame["latitude"] = frame["_raw_lat"]
                 frame["longitude"] = frame["_raw_lon"]
+
+            if "__is_base_station__" in frame.columns:
+                frame["__is_base_station__"] = pd.to_numeric(frame["__is_base_station__"], errors="coerce").fillna(0).astype(int)
 
             frame = frame.dropna(subset=["latitude", "longitude"])
             if not frame.empty:
@@ -685,17 +1015,31 @@ class ProcessingService:
     @staticmethod
     def _remove_coordinate_outliers(frame: pd.DataFrame) -> tuple[pd.DataFrame, int]:
         original_len = len(frame)
+        if frame.empty:
+            return frame.reset_index(drop=True), 0
+
+        frame = frame[np.isfinite(frame["latitude"]) & np.isfinite(frame["longitude"])].copy()
+        frame = frame[
+            frame["latitude"].between(-90.0, 90.0)
+            & frame["longitude"].between(-180.0, 180.0)
+        ]
+
+        keep_mask = np.ones(len(frame), dtype=bool)
         for col in ("latitude", "longitude"):
-            if col not in frame.columns or frame.empty:
-                continue
-            q1 = frame[col].quantile(0.25)
-            q3 = frame[col].quantile(0.75)
+            vals = frame[col].to_numpy(dtype=np.float64)
+            med = np.nanmedian(vals)
+            mad = _mad(vals)
+            if mad > 0:
+                robust_z = 0.6745 * (vals - med) / mad
+                keep_mask &= np.abs(robust_z) <= 6.0
+            q1 = np.nanpercentile(vals, 25)
+            q3 = np.nanpercentile(vals, 75)
             iqr = q3 - q1
-            if iqr == 0:
-                continue
-            lo = q1 - 3 * iqr
-            hi = q3 + 3 * iqr
-            frame = frame[(frame[col] >= lo) & (frame[col] <= hi)]
+            if iqr > 0:
+                lo = q1 - 3.0 * iqr
+                hi = q3 + 3.0 * iqr
+                keep_mask &= (vals >= lo) & (vals <= hi)
+        frame = frame.loc[keep_mask]
         return frame.reset_index(drop=True), original_len - len(frame)
 
     @staticmethod
@@ -716,6 +1060,7 @@ class ProcessingService:
 
     def _clean_dataframe(self, frame: pd.DataFrame) -> pd.DataFrame:
         cleaned = frame.copy()
+        warnings: list[str] = []
 
         # Tolerance-based spatial deduplication
         xy = cleaned[["longitude", "latitude"]].to_numpy(dtype=np.float64)
@@ -738,14 +1083,16 @@ class ProcessingService:
         if len(xy2) >= 2:
             dists = np.linalg.norm(np.diff(xy2, axis=0), axis=1)
             pos_dists = dists[dists > 0]
+            n_jumps = 0
             if pos_dists.size > 0:
                 median_dist = float(np.median(pos_dists))
                 n_jumps = int(np.sum(dists > median_dist * 10.0))
-                if n_jumps > 0:
-                    logger.warning(
-                        "Stage 2.clean: %d unrealistic spatial jumps detected (threshold=%.4f)",
-                        n_jumps, median_dist * 10.0,
-                    )
+            if pos_dists.size > 0 and n_jumps > 0:
+                logger.warning(
+                    "Stage 2.clean: %d unrealistic spatial jumps detected (threshold=%.4f)",
+                    n_jumps, median_dist * 10.0,
+                )
+                warnings.append(f"{n_jumps} large spatial jumps were detected during cleaning.")
 
         # Build time_s for time-aware corrections
         if "_hour" in cleaned.columns and "_minute" in cleaned.columns:
@@ -755,11 +1102,51 @@ class ProcessingService:
                 + cleaned["_minute"].fillna(0) * 60.0
                 + _sec
             ).astype(np.float64)
-            cleaned = cleaned.sort_values("time_s", na_position="last").reset_index(drop=True)
         else:
             cleaned["time_s"] = np.arange(len(cleaned), dtype=np.float64)
 
+        lat_range = float(cleaned["latitude"].max() - cleaned["latitude"].min()) if len(cleaned) else 0.0
+        lon_range = float(cleaned["longitude"].max() - cleaned["longitude"].min()) if len(cleaned) else 0.0
+        group_by_lat = lat_range < lon_range
+        grouping_col = "latitude" if group_by_lat else "longitude"
+        along_col = "longitude" if group_by_lat else "latitude"
+
+        step = np.median(np.abs(np.diff(np.sort(cleaned[grouping_col].to_numpy(dtype=np.float64))))) if len(cleaned) > 2 else 0.0
+        step = float(step) if np.isfinite(step) and step > 0 else max((lat_range if group_by_lat else lon_range) / max(math.sqrt(max(len(cleaned), 1)), 1.0), 0.0001)
+        tol_group = max(step * 2.5, 0.0001)
+        cleaned["_line_id"] = np.round(cleaned[grouping_col].to_numpy(dtype=np.float64) / tol_group).astype(int)
+        cleaned = cleaned.sort_values(["_line_id", "time_s", along_col], na_position="last").reset_index(drop=True)
+
+        along_m = np.zeros(len(cleaned), dtype=np.float64)
+        for line_id, idx in cleaned.groupby("_line_id").groups.items():
+            line = cleaned.loc[idx]
+            lon = line["longitude"].to_numpy(dtype=np.float64)
+            lat = line["latitude"].to_numpy(dtype=np.float64)
+            if len(line) <= 1:
+                continue
+            dlat = np.diff(lat) * 111_320.0
+            dlon = np.diff(lon) * 111_320.0 * np.cos(np.radians(np.nanmean(lat)))
+            cumulative = np.concatenate([[0.0], np.cumsum(np.sqrt(dlat ** 2 + dlon ** 2))])
+            along_m[np.asarray(idx)] = cumulative
+        cleaned["along_line_m"] = along_m
+
+        non_monotonic_lines = 0
+        if "time_s" in cleaned.columns:
+            for _line_id, line in cleaned.groupby("_line_id"):
+                t = line["time_s"].to_numpy(dtype=np.float64)
+                if len(t) > 1 and np.any(np.diff(t) < 0):
+                    non_monotonic_lines += 1
+        if non_monotonic_lines:
+            warnings.append(f"{non_monotonic_lines} inferred line(s) have non-monotonic time ordering.")
+
         _proc_log("2.clean/magnetic", cleaned["magnetic"].to_numpy(dtype=np.float64))
+        cleaned.attrs["cleaning_report"] = {
+            "duplicates_removed": int(n_removed),
+            "warnings": warnings,
+            "line_count": int(cleaned["_line_id"].nunique()) if "_line_id" in cleaned.columns else 0,
+            "grouping_axis": grouping_col,
+            "detail": f"{len(cleaned)} readings ready after cleaning across {int(cleaned['_line_id'].nunique()) if '_line_id' in cleaned.columns else 0} inferred line(s)",
+        }
         return cleaned
 
     # ── Stage 3: Corrections (upgraded) ─────────────────────────────────────
@@ -774,27 +1161,23 @@ class ProcessingService:
         selected = {item.lower() for item in (task.get("analysis_config", {}).get("corrections") or [])}
         config = task.get("analysis_config", {})
         notes: list[str] = []
+        warnings: list[str] = []
+        fallbacks: list[dict] = []
         igrf_applied = False
+        affected_points = 0
 
         mag_before = out["magnetic"].to_numpy(dtype=np.float64).copy()
 
-        # Compute decimal year from time columns or current year
-        decimal_yr = float(datetime.now(timezone.utc).year)
-        if "time_s" in out.columns and "_hour" in out.columns:
-            try:
-                now = datetime.now(timezone.utc)
-                yr = now.year
-                start = datetime(yr, 1, 1, tzinfo=timezone.utc)
-                end = datetime(yr + 1, 1, 1, tzinfo=timezone.utc)
-                decimal_yr = yr + (now - start).total_seconds() / (end - start).total_seconds()
-            except Exception:
-                pass
+        survey_dt = self._resolve_survey_datetime(task)
+        decimal_yr = _decimal_year_from_datetime(survey_dt)
 
         # ── 3.0 Spike removal ───────────────────────────────────────────────
         if "filtering" in selected or True:  # always run spike check
             out, spike_note = self._apply_spike_removal(out)
             if spike_note:
                 notes.append(spike_note)
+            spike_report = out.attrs.get("spike_report", {})
+            affected_points += int(spike_report.get("removed_count", 0))
 
         # ── 3.1 IGRF correction ──────────────────────────────────────────────
         if "igrf" in selected:
@@ -804,36 +1187,58 @@ class ProcessingService:
             if igrf_vals is not None:
                 valid_igrf = ~np.isnan(igrf_vals)
                 if valid_igrf.sum() > 0:
+                    igrf_min = float(np.nanmin(igrf_vals))
+                    igrf_max = float(np.nanmax(igrf_vals))
+                    if igrf_min < 20000 or igrf_max > 70000:
+                        warnings.append("IGRF values fell outside the expected geomagnetic total-field range.")
                     igrf_mean = float(np.nanmean(igrf_vals))
                     out["magnetic"] = out["magnetic"] - igrf_vals
                     igrf_applied = True
                     logger.info(
                         "IGRF applied: mean_field=%.2f nT, min=%.2f, max=%.2f",
-                        igrf_mean, float(np.nanmin(igrf_vals)), float(np.nanmax(igrf_vals)),
+                        igrf_mean, igrf_min, igrf_max,
                     )
                     notes.append(f"IGRF-13 correction (mean ref={igrf_mean:.1f} nT)")
                     _proc_log("3.1.igrf", out["magnetic"].to_numpy(dtype=np.float64))
             else:
-                logger.critical(
-                    "IGRF correction requested but pyIGRF unavailable. "
-                    "Output is NOT geophysically corrected. Run status: incomplete_physical_model."
+                logger.critical("IGRF correction requested but pyIGRF was unavailable.")
+                notes.append("IGRF requested but unavailable - output kept without IGRF removal")
+                fallbacks.append(
+                    {
+                        "stage": "igrf",
+                        "requested": "igrf",
+                        "actual": "uncorrected_field",
+                        "reason": "pyIGRF was unavailable, so true IGRF removal could not be applied.",
+                        "severity": "critical",
+                    }
                 )
-                notes.append("IGRF FAILED — pyIGRF unavailable (output not geophysically corrected)")
 
         # ── 3.2 Diurnal correction ───────────────────────────────────────────
         if "diurnal" in selected:
             out, diurnal_note = self._apply_diurnal_correction(out, task)
             notes.append(diurnal_note)
+            diurnal_report = out.attrs.get("diurnal_report", {})
+            warnings.extend(diurnal_report.get("warnings") or [])
+            fallbacks.extend(diurnal_report.get("fallbacks") or [])
+            affected_points += int(diurnal_report.get("affected_points", 0))
 
         # ── 3.3 Lag correction ───────────────────────────────────────────────
         if "lag" in selected and len(out) > 3:
             out, lag_note = self._apply_lag_correction(out)
             notes.append(lag_note)
+            lag_report = out.attrs.get("lag_report", {})
+            warnings.extend(lag_report.get("warnings") or [])
+            fallbacks.extend(lag_report.get("fallbacks") or [])
+            affected_points += int(lag_report.get("affected_points", 0))
 
         # ── 3.4 Heading correction ───────────────────────────────────────────
         if "heading" in selected and len(out) > 3:
             out, heading_note = self._apply_heading_correction(out)
             notes.append(heading_note)
+            heading_report = out.attrs.get("heading_report", {})
+            warnings.extend(heading_report.get("warnings") or [])
+            fallbacks.extend(heading_report.get("fallbacks") or [])
+            affected_points += int(heading_report.get("affected_points", 0))
 
         # ── 3.5 FFT filter (last) ────────────────────────────────────────────
         if "filtering" in selected:
@@ -854,6 +1259,8 @@ class ProcessingService:
                 out["magnetic"] = filtered
                 energy_ratio = energy_rep.get("energy_ratio", 1.0)
                 notes.append(f"{filter_type} FFT filter (energy retained: {energy_ratio:.1%})")
+                if energy_ratio < 0.15:
+                    warnings.append("FFT filter retained less than 15% of the original signal energy.")
                 _proc_log(f"3.5.fft_{fft_type}", out["magnetic"].to_numpy(dtype=np.float64))
 
         mag_after = out["magnetic"].to_numpy(dtype=np.float64)
@@ -861,6 +1268,19 @@ class ProcessingService:
         logger.info("Corrections complete: igrf_applied=%s, steps=%s", igrf_applied, notes)
 
         detail = ", ".join(notes) if notes else "No additional corrections were requested"
+        out.attrs["correction_report"] = {
+            "applied_order": notes,
+            "warnings": warnings,
+            "fallbacks": fallbacks,
+            "affected_points": int(affected_points),
+            "igrf_applied": bool(igrf_applied),
+            "survey_date": survey_dt.isoformat(),
+            "decimal_year": decimal_yr,
+            "spike": out.attrs.get("spike_report", {}),
+            "diurnal": out.attrs.get("diurnal_report", {}),
+            "lag": out.attrs.get("lag_report", {}),
+            "heading": out.attrs.get("heading_report", {}),
+        }
         return out, detail
 
     def _apply_spike_removal(self, frame: pd.DataFrame) -> tuple[pd.DataFrame, str]:
@@ -945,36 +1365,85 @@ class ProcessingService:
             n_stat, n_removed, n_preserved,
         )
         note = f"spike removal ({n_removed} removed, {n_preserved} real anomalies preserved)" if n_removed > 0 else ""
+        out.attrs["spike_report"] = {
+            "candidate_count": int(n_stat),
+            "removed_count": int(n_removed),
+            "preserved_anomaly_count": int(n_preserved),
+        }
         return out, note
 
     def _apply_diurnal_correction(self, frame: pd.DataFrame, task: dict) -> tuple[pd.DataFrame, str]:
-        """CubicSpline base-station correction; FFT physical fallback."""
+        """Base-station diurnal correction with explicit fallback reporting."""
         out = frame.copy()
         bs_col = "__is_base_station__"
         has_bs = bs_col in frame.columns and frame[bs_col].sum() > 0
         has_time = "time_s" in frame.columns
+        report = {
+            "status": "skipped",
+            "algorithm": "none",
+            "quality": 0.0,
+            "warnings": [],
+            "fallbacks": [],
+            "affected_points": 0,
+        }
 
         if has_bs and has_time:
             bs = out[out[bs_col] == 1].dropna(subset=["time_s", "magnetic"])
             survey = out[out[bs_col] != 1].copy()
             if not bs.empty and not survey.empty:
-                bs_sorted = bs.sort_values("time_s")
+                bs_sorted = bs.sort_values("time_s").reset_index(drop=True)
+                bs_sorted = bs_sorted[np.isfinite(bs_sorted["time_s"].to_numpy(dtype=np.float64))]
+                bs_sorted = bs_sorted.groupby("time_s", as_index=False)["magnetic"].median()
                 t_bs = bs_sorted["time_s"].to_numpy(dtype=np.float64)
                 m_bs = bs_sorted["magnetic"].to_numpy(dtype=np.float64)
+                survey_t = survey["time_s"].fillna(t_bs[0]).to_numpy(dtype=np.float64)
+                gaps = np.diff(t_bs)
+                max_gap = float(np.max(gaps)) if gaps.size else 0.0
+                overlap_mask = (survey_t >= float(np.min(t_bs))) & (survey_t <= float(np.max(t_bs)))
+                overlap_ratio = float(np.mean(overlap_mask)) if survey_t.size else 0.0
+                extrapolated = int(np.count_nonzero(~overlap_mask))
+                report.update(
+                    {
+                        "status": "completed",
+                        "algorithm": "base_station_cubic_spline",
+                        "overlap_ratio": overlap_ratio,
+                        "max_gap_seconds": max_gap,
+                        "extrapolated_points": extrapolated,
+                        "affected_points": int(len(survey)),
+                    }
+                )
                 try:
                     cs = CubicSpline(t_bs, m_bs, extrapolate=True)
-                    diurnal_at_survey = cs(survey["time_s"].fillna(t_bs[0]).to_numpy(dtype=np.float64))
+                    diurnal_at_survey = cs(survey_t)
                 except Exception:
-                    diurnal_at_survey = np.interp(
-                        survey["time_s"].fillna(t_bs[0]).to_numpy(dtype=np.float64),
-                        t_bs, m_bs,
+                    diurnal_at_survey = np.interp(survey_t, t_bs, m_bs)
+                    report["algorithm"] = "base_station_linear_interpolation"
+                    report["fallbacks"].append(
+                        {
+                            "stage": "diurnal",
+                            "requested": "base_station_cubic_spline",
+                            "actual": "base_station_linear_interpolation",
+                            "reason": "CubicSpline failed, so linear interpolation was used.",
+                            "severity": "warning",
+                        }
                     )
                 bs_mean = float(np.mean(m_bs))
+                before = survey["magnetic"].to_numpy(dtype=np.float64)
                 survey = survey.copy()
-                survey["magnetic"] = survey["magnetic"] - diurnal_at_survey + bs_mean
+                survey["magnetic"] = before - diurnal_at_survey + bs_mean
                 out = pd.concat([bs, survey]).sort_values("time_s").reset_index(drop=True)
+                residual_before = float(np.nanstd(before - bs_mean))
+                residual_after = float(np.nanstd(survey["magnetic"].to_numpy(dtype=np.float64) - bs_mean))
+                report["residual_drift_before"] = residual_before
+                report["residual_drift_after"] = residual_after
+                report["quality"] = float(max(0.0, min(1.0, (overlap_ratio * 0.7) + (0.3 if residual_after <= residual_before else 0.1))))
+                if max_gap > 3600.0 * 2:
+                    report["warnings"].append("Base-station data contain gaps larger than two hours.")
+                if extrapolated:
+                    report["warnings"].append(f"{extrapolated} survey points were extrapolated outside the base-station time range.")
                 _proc_log("3.2.diurnal", out["magnetic"].to_numpy(dtype=np.float64))
-                return out, "diurnal correction via base station CubicSpline"
+                out.attrs["diurnal_report"] = report
+                return out, "diurnal correction via base-station interpolation"
 
         # FFT physical fallback
         if has_time:
@@ -983,18 +1452,65 @@ class ProcessingService:
             trend = _diurnal_fft_fallback(mag, t, min_period_s=3600.0)
             trend_mean = float(np.nanmean(trend))
             out["magnetic"] = out["magnetic"] - trend + trend_mean
+            report.update(
+                {
+                    "status": "completed",
+                    "algorithm": "fft_trend_removal",
+                    "quality": 0.35,
+                    "affected_points": int(len(out)),
+                    "fallbacks": [
+                        {
+                            "stage": "diurnal",
+                            "requested": "base_station_diurnal_correction",
+                            "actual": "fft_trend_removal",
+                            "reason": "No valid overlapping base-station data were available.",
+                            "severity": "warning",
+                        }
+                    ],
+                }
+            )
             _proc_log("3.2.diurnal_fft", out["magnetic"].to_numpy(dtype=np.float64))
-            return out, "diurnal trend removal via FFT low-pass (physical timescale, no base station)"
+            out.attrs["diurnal_report"] = report
+            return out, "diurnal trend removal via FFT low-pass fallback"
 
         # Last resort: median normalisation
         out["magnetic"] = out["magnetic"] - out["magnetic"].median()
-        return out, "diurnal normalisation (median, no time data)"
+        report.update(
+            {
+                "status": "completed",
+                "algorithm": "median_normalisation",
+                "quality": 0.1,
+                "affected_points": int(len(out)),
+                "fallbacks": [
+                    {
+                        "stage": "diurnal",
+                        "requested": "base_station_diurnal_correction",
+                        "actual": "median_normalisation",
+                        "reason": "No usable time data were available.",
+                        "severity": "warning",
+                    }
+                ],
+            }
+        )
+        out.attrs["diurnal_report"] = report
+        return out, "diurnal normalisation fallback (no time data)"
 
     def _apply_lag_correction(self, frame: pd.DataFrame) -> tuple[pd.DataFrame, str]:
         """Cross-correlation lag estimation using best-quality flight lines."""
         out = frame.copy()
+        report = {"status": "skipped", "warnings": [], "fallbacks": [], "affected_points": 0}
         if "time_s" not in out.columns or "_line_id" not in out.columns:
             # Fallback: interpolation-based shift of 0
+            report["fallbacks"].append(
+                {
+                    "stage": "lag",
+                    "requested": "cross_correlation_lag",
+                    "actual": "skipped",
+                    "reason": "No line IDs or time axis were available.",
+                    "severity": "warning",
+                }
+            )
+            out.attrs["lag_report"] = report
             return out, "lag correction skipped (no time or line data)"
 
         try:
@@ -1012,6 +1528,16 @@ class ProcessingService:
                     best_line = ln
 
             if best_line is None or len(lines) < 2:
+                report["fallbacks"].append(
+                    {
+                        "stage": "lag",
+                        "requested": "cross_correlation_lag",
+                        "actual": "skipped",
+                        "reason": "Fewer than two supported lines were available.",
+                        "severity": "warning",
+                    }
+                )
+                out.attrs["lag_report"] = report
                 return out, "lag correction skipped (insufficient lines)"
 
             ref_line = out[out["_line_id"] == best_line]["magnetic"].dropna().to_numpy(dtype=np.float64)
@@ -1023,8 +1549,9 @@ class ProcessingService:
             a = ref_line[:min_len]
             b = other_line[:min_len]
 
-            a_n = (a - np.mean(a)) / (np.std(a) + 1e-9)
-            b_n = (b - np.mean(b)) / (np.std(b) + 1e-9)
+            taper = windows.hann(min_len, sym=False)
+            a_n = ((a - np.mean(a)) * taper) / (np.std(a) + 1e-9)
+            b_n = ((b - np.mean(b)) * taper) / (np.std(b) + 1e-9)
             corr = correlate(a_n, b_n, mode="full")
             lags = np.arange(-(len(b_n) - 1), len(a_n))
             peak_idx = int(np.argmax(np.abs(corr)))
@@ -1035,7 +1562,29 @@ class ProcessingService:
             # Reject unrealistic lag
             if abs(lag) > 15:
                 logger.warning("Lag %d samples exceeds threshold (15); skipping lag correction.", lag)
+                report["fallbacks"].append(
+                    {
+                        "stage": "lag",
+                        "requested": "cross_correlation_lag",
+                        "actual": "skipped",
+                        "reason": f"Estimated lag {lag} samples exceeded the allowed threshold.",
+                        "severity": "warning",
+                    }
+                )
+                out.attrs["lag_report"] = report
                 return out, f"lag correction skipped (estimated lag {lag} samples exceeds threshold)"
+            if confidence < 0.2:
+                report["fallbacks"].append(
+                    {
+                        "stage": "lag",
+                        "requested": "cross_correlation_lag",
+                        "actual": "skipped",
+                        "reason": f"Lag confidence was too low ({confidence:.3f}).",
+                        "severity": "warning",
+                    }
+                )
+                out.attrs["lag_report"] = report
+                return out, f"lag correction skipped (low confidence {confidence:.3f})"
 
             # Apply via interpolation shift
             if lag != 0 and "time_s" in out.columns:
@@ -1043,14 +1592,40 @@ class ProcessingService:
                 mag = out["magnetic"].to_numpy(dtype=np.float64)
                 valid = ~np.isnan(mag)
                 if valid.sum() > 3:
-                    t_shift = t + lag * _compute_dt_median(t[valid])
-                    interp_fn = interp1d(t[valid], mag[valid], bounds_error=False, fill_value="extrapolate")
+                    dt = _compute_dt_median(t[valid])
+                    t_shift = t + lag * dt
+                    interp_fn = interp1d(
+                        t[valid],
+                        mag[valid],
+                        bounds_error=False,
+                        fill_value=(float(mag[valid][0]), float(mag[valid][-1])),
+                    )
                     out["magnetic"] = interp_fn(t_shift)
                     _proc_log("3.3.lag", out["magnetic"].to_numpy(dtype=np.float64))
+                    report.update(
+                        {
+                            "status": "completed",
+                            "lag_samples": int(lag),
+                            "lag_distance_m": float(lag * dt),
+                            "confidence": float(confidence),
+                            "affected_points": int(valid.sum()),
+                        }
+                    )
 
+            out.attrs["lag_report"] = report
             return out, f"lag correction ({lag} samples, confidence={confidence:.3f})"
         except Exception as exc:
             logger.warning("Lag correction failed (%s); skipping.", exc)
+            report["fallbacks"].append(
+                {
+                    "stage": "lag",
+                    "requested": "cross_correlation_lag",
+                    "actual": "skipped",
+                    "reason": f"Error during lag estimation: {exc}",
+                    "severity": "warning",
+                }
+            )
+            out.attrs["lag_report"] = report
             return out, "lag correction skipped (error)"
 
     def _apply_heading_correction(self, frame: pd.DataFrame) -> tuple[pd.DataFrame, str]:
@@ -1059,13 +1634,16 @@ class ProcessingService:
         lon = out["longitude"].to_numpy(dtype=np.float64)
         lat = out["latitude"].to_numpy(dtype=np.float64)
         mag = out["magnetic"].to_numpy(dtype=np.float64)
+        report = {"status": "skipped", "warnings": [], "fallbacks": [], "affected_points": 0}
 
         if len(lon) < 4:
+            out.attrs["heading_report"] = report
             return out, "heading correction skipped (insufficient points)"
 
         dx = np.diff(lon, prepend=lon[0])
         dy = np.diff(lat, prepend=lat[0])
         heading = np.arctan2(dy, dx + 1e-12)
+        heading = median_filter(heading, size=3, mode="nearest")
 
         n_bins = max(4, min(16, int(math.sqrt(len(heading)))))
         percentiles = np.linspace(0, 100, n_bins + 1)
@@ -1073,18 +1651,145 @@ class ProcessingService:
         bin_edges[-1] += 1e-9
 
         corrected_mag = mag.copy()
+        overall_median = float(np.nanmedian(mag))
+        bin_stats = []
         for i in range(n_bins):
             mask = (heading >= bin_edges[i]) & (heading < bin_edges[i + 1])
-            if mask.sum() >= 3:
-                bin_bias = float(np.nanmean(mag[mask]))
-                overall_mean = float(np.nanmean(mag))
-                corrected_mag[mask] = mag[mask] - (bin_bias - overall_mean)
+            if mask.sum() >= 4:
+                bin_bias = float(np.nanmedian(mag[mask]))
+                corrected_mag[mask] = mag[mask] - (bin_bias - overall_median)
+                bin_stats.append({"count": int(mask.sum()), "bias": bin_bias})
+            elif mask.sum() > 0:
+                report["warnings"].append(f"Heading bin {i + 1} had sparse support and was left uncorrected.")
 
         out["magnetic"] = corrected_mag
         _proc_log("3.4.heading", out["magnetic"].to_numpy(dtype=np.float64))
+        report.update(
+            {
+                "status": "completed",
+                "affected_points": int(len(out)),
+                "bin_count": int(n_bins),
+                "bin_stats": bin_stats,
+            }
+        )
+        out.attrs["heading_report"] = report
         return out, f"heading correction ({n_bins} adaptive bins)"
 
     # ── Stage 4: Grid prep (unchanged) ──────────────────────────────────────
+
+    def _apply_leveling_and_crossover(self, task: dict, frame: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+        out = frame.copy()
+        report = {"status": "degraded", "warnings": [], "fallbacks": [], "affected_points": 0}
+        if "_line_id" not in out.columns or out["_line_id"].nunique() < 2:
+            report["fallbacks"].append(
+                {
+                    "stage": "leveling",
+                    "requested": "crossover_leveling",
+                    "actual": "skipped",
+                    "reason": "At least two supported lines are required for crossover leveling.",
+                    "severity": "warning",
+                }
+            )
+            out.attrs["leveling_report"] = report
+            return out, "leveling skipped (insufficient line support)"
+
+        line_ids = list(out["_line_id"].dropna().unique())
+        coords = out[["longitude", "latitude"]].to_numpy(dtype=np.float64)
+        if len(coords) < 4:
+            out.attrs["leveling_report"] = report
+            return out, "leveling skipped (insufficient coordinates)"
+
+        tree = cKDTree(coords)
+        distance_scale = tree.query(coords, k=min(4, len(coords)))[0][:, -1]
+        threshold = max(float(np.nanmedian(distance_scale)) * 1.5, 0.0002)
+        line_offsets: dict[int, float] = {int(line_ids[0]): 0.0}
+        pair_rows = []
+
+        for line_id in line_ids:
+            line_mask = out["_line_id"] == line_id
+            line = out.loc[line_mask]
+            others = out.loc[~line_mask]
+            if line.empty or others.empty:
+                continue
+            other_tree = cKDTree(others[["longitude", "latitude"]].to_numpy(dtype=np.float64))
+            distances, indices = other_tree.query(line[["longitude", "latitude"]].to_numpy(dtype=np.float64), k=1)
+            for row_idx, dist, other_idx in zip(line.index.to_numpy(), distances, indices):
+                if not np.isfinite(dist) or dist > threshold:
+                    continue
+                other_row = others.iloc[int(other_idx)]
+                if int(other_row["_line_id"]) == int(line_id):
+                    continue
+                pair_rows.append(
+                    {
+                        "line_a": int(line_id),
+                        "line_b": int(other_row["_line_id"]),
+                        "diff": float(out.at[row_idx, "magnetic"] - other_row["magnetic"]),
+                    }
+                )
+
+        if len(pair_rows) < max(2, len(line_ids) - 1):
+            report["fallbacks"].append(
+                {
+                    "stage": "leveling",
+                    "requested": "crossover_leveling",
+                    "actual": "skipped",
+                    "reason": "Not enough crossovers were found to solve line offsets.",
+                    "severity": "warning",
+                }
+            )
+            out.attrs["leveling_report"] = report
+            return out, "leveling skipped (insufficient crossovers)"
+
+        unresolved = set(map(int, line_ids[1:]))
+        while unresolved:
+            progress = False
+            for pair in pair_rows:
+                a = int(pair["line_a"])
+                b = int(pair["line_b"])
+                diff = float(pair["diff"])
+                if a in line_offsets and b not in line_offsets:
+                    line_offsets[b] = line_offsets[a] - diff
+                    unresolved.discard(b)
+                    progress = True
+                elif b in line_offsets and a not in line_offsets:
+                    line_offsets[a] = line_offsets[b] + diff
+                    unresolved.discard(a)
+                    progress = True
+            if not progress:
+                for line_id in list(unresolved):
+                    line_offsets[line_id] = 0.0
+                    unresolved.discard(line_id)
+
+        before_rmse = float(np.sqrt(np.mean([row["diff"] ** 2 for row in pair_rows])))
+        for line_id, offset in line_offsets.items():
+            if line_id == int(line_ids[0]):
+                continue
+            mask = out["_line_id"] == line_id
+            out.loc[mask, "magnetic"] = out.loc[mask, "magnetic"] - offset
+            report["affected_points"] += int(mask.sum())
+
+        after_diffs = []
+        for pair in pair_rows:
+            a_off = line_offsets.get(int(pair["line_a"]), 0.0)
+            b_off = line_offsets.get(int(pair["line_b"]), 0.0)
+            after_diffs.append(float(pair["diff"] - (a_off - b_off)))
+        after_rmse = float(np.sqrt(np.mean(np.square(after_diffs)))) if after_diffs else before_rmse
+
+        report.update(
+            {
+                "status": "completed" if after_rmse <= before_rmse else "degraded",
+                "line_offsets": {str(key): float(val) for key, val in line_offsets.items()},
+                "crossover_count": int(len(pair_rows)),
+                "threshold_degrees": threshold,
+                "before_rmse": before_rmse,
+                "after_rmse": after_rmse,
+            }
+        )
+        if after_rmse > before_rmse:
+            report["warnings"].append("Leveling did not reduce crossover RMSE; QA was downgraded.")
+
+        out.attrs["leveling_report"] = report
+        return out, f"leveling complete ({len(pair_rows)} crossovers, RMSE {before_rmse:.2f} -> {after_rmse:.2f} nT)"
 
     def _prepare_prediction_inputs(self, task: dict, frame: pd.DataFrame) -> dict:
         grid_x, grid_y = self._build_grid(task, frame)
@@ -1101,6 +1806,12 @@ class ProcessingService:
                 predict = train.tail(n)[["latitude", "longitude"]].reset_index(drop=True)
                 train = train.iloc[: len(train) - n].reset_index(drop=True)
             detail = f"Explicit: {len(train)} measured stations train the model, predicting at {len(predict)} unmeasured locations"
+            metadata = {
+                "scenario": "explicit",
+                "observed_points": int(len(train)),
+                "prediction_points": int(len(predict)),
+                "preserve_observed_values": True,
+            }
         else:
             # Sparse: all rows with magnetic values train the model
             train = frame.dropna(subset=["magnetic"]).reset_index(drop=True)
@@ -1133,6 +1844,7 @@ class ProcessingService:
 
                 for tidx, trav in enumerate(predicted_traverses):
                     ttype = trav.get("type", "offset")
+                    traverse_label = trav.get("label") or f"Predicted Traverse {tidx + 1}"
                     spacing_val = float(trav.get("spacing") or 10)
                     spacing_unit = (trav.get("spacing_unit") or "Metres").lower()
                     spacing_m = spacing_val * (1000 if "kilo" in spacing_unit else 0.3048 if "feet" in spacing_unit else 1)
@@ -1153,14 +1865,24 @@ class ProcessingService:
                                 ls, le = _len_ext(trav, pts[0][1], pts[-1][1], lat_m, "lon")
                                 lons_new = np.arange(ls, le + spacing_deg * 0.5, spacing_deg)
                                 for lon in lons_new:
-                                    predict_rows.append({"latitude": lat_m, "longitude": float(lon)})
+                                    predict_rows.append({
+                                        "latitude": lat_m,
+                                        "longitude": float(lon),
+                                        "point_kind": "infill",
+                                        "traverse_label": traverse_label,
+                                    })
                             else:
                                 pts.sort(key=lambda p: p[0])
                                 lon_m = sum(p[1] for p in pts) / len(pts)
                                 ls, le = _len_ext(trav, pts[0][0], pts[-1][0], (pts[0][0] + pts[-1][0]) / 2, "lat")
                                 lats_new = np.arange(ls, le + spacing_deg * 0.5, spacing_deg)
                                 for lat in lats_new:
-                                    predict_rows.append({"latitude": float(lat), "longitude": lon_m})
+                                    predict_rows.append({
+                                        "latitude": float(lat),
+                                        "longitude": lon_m,
+                                        "point_kind": "infill",
+                                        "traverse_label": traverse_label,
+                                    })
                     else:
                         distance_val = float(trav.get("distance") or 50)
                         distance_unit = (trav.get("distance_unit") or "Metres").lower()
@@ -1179,7 +1901,12 @@ class ProcessingService:
                                 ls, le = _len_ext(trav, rs, re, lat_m, "lon")
                                 lons_new = np.arange(ls, le + spacing_deg * 0.5, spacing_deg)
                                 for lon in lons_new:
-                                    predict_rows.append({"latitude": float(lat_m), "longitude": float(lon)})
+                                    predict_rows.append({
+                                        "latitude": float(lat_m),
+                                        "longitude": float(lon),
+                                        "point_kind": "offset",
+                                        "traverse_label": traverse_label,
+                                    })
                             else:
                                 pts.sort(key=lambda p: p[0])
                                 lon_m = sum(p[1] for p in pts) / len(pts) + dlon
@@ -1187,15 +1914,32 @@ class ProcessingService:
                                 ls, le = _len_ext(trav, rs, re, (rs + re) / 2, "lat")
                                 lats_new = np.arange(ls, le + spacing_deg * 0.5, spacing_deg)
                                 for lat in lats_new:
-                                    predict_rows.append({"latitude": float(lat), "longitude": float(lon_m)})
+                                    predict_rows.append({
+                                        "latitude": float(lat),
+                                        "longitude": float(lon_m),
+                                        "point_kind": "offset",
+                                        "traverse_label": traverse_label,
+                                    })
 
                 predict = pd.DataFrame(predict_rows) if predict_rows else pd.DataFrame({"latitude": [], "longitude": []})
                 detail = f"Sparse: {len(train)} measured stations, {len(predicted_traverses)} predicted traverse(s), {len(predict)} predicted points"
+                metadata = {
+                    "scenario": "sparse",
+                    "prediction_geometry": "predicted_traverses",
+                    "observed_points": int(len(train)),
+                    "prediction_points": int(len(predict)),
+                }
             else:
                 # Legacy: use grid
                 grid_x, grid_y = self._build_grid(task, train)
                 predict = pd.DataFrame({"longitude": grid_x.ravel(), "latitude": grid_y.ravel()})
                 detail = f"Sparse: {len(train)} measured stations, predicting at {len(predict)} grid nodes"
+                metadata = {
+                    "scenario": "sparse",
+                    "prediction_geometry": "grid",
+                    "observed_points": int(len(train)),
+                    "prediction_points": int(len(predict)),
+                }
 
         return {
             "frame": train,
@@ -1205,13 +1949,26 @@ class ProcessingService:
             "grid_y": grid_y,
             "detail": detail,
             "scenario": scenario,
+            "metadata": metadata,
         }
 
     def _build_grid(self, task: dict, frame: pd.DataFrame):
         spacing_value = float(task.get("station_spacing") or 20)
         spacing_unit = (task.get("station_spacing_unit") or "Metres").lower()
         spacing_metres = spacing_value * (1000 if "kilo" in spacing_unit else 0.3048 if "feet" in spacing_unit else 1)
-        spacing_degrees = max(spacing_metres / 111_320, 0.0002)
+        observed_spacing = None
+        if "_line_id" in frame.columns and "along_line_m" in frame.columns:
+            spacing_samples = []
+            for _, line in frame.groupby("_line_id"):
+                along = np.sort(line["along_line_m"].to_numpy(dtype=np.float64))
+                diffs = np.diff(along)
+                diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
+                if diffs.size:
+                    spacing_samples.extend(diffs.tolist())
+            if spacing_samples:
+                observed_spacing = float(np.median(spacing_samples))
+        base_spacing_m = observed_spacing if observed_spacing and observed_spacing > 0 else spacing_metres
+        spacing_degrees = max(base_spacing_m / 111_320, 0.0002)
 
         lon_min, lon_max = frame["longitude"].min(), frame["longitude"].max()
         lat_min, lat_max = frame["latitude"].min(), frame["latitude"].max()
@@ -1303,25 +2060,65 @@ class ProcessingService:
         requested_model = (analysis.get("model") or "Machine learning").lower()
 
         kriging_surface, kriging_variance = self._krige(x, y, z, grid_x, grid_y)
-        ml_surface, rf_variance = self._rf_surface(x, y, z, grid_x, grid_y)
+        predictor = self._build_rf_predictor(x, y, z)
+        ml_surface, rf_variance = self._predict_rf_surface(predictor, grid_x, grid_y)
+        train_ml, _ = self._predict_rf_surface(predictor, x, y)
+        train_ml = np.asarray(train_ml, dtype=np.float64).reshape(-1)
+        residuals = z - train_ml
+        hybrid_surface = None
+        hybrid_variance = None
+        hybrid_metadata = {}
+        if predictor is not None and len(residuals) >= 4:
+            residual_surface, residual_variance = self._krige(x, y, residuals, grid_x, grid_y)
+            hybrid_surface = ml_surface + residual_surface
+            hybrid_variance = residual_variance + rf_variance
+            hybrid_metadata = {
+                "algorithm": "rf_trend_plus_kriged_residual",
+                "residual_std": float(np.nanstd(residuals)),
+            }
 
+        model_metadata = {"requested_model": requested_model, "warnings": []}
         if "kriging" in requested_model:
             surface = kriging_surface
             model_used = "kriging"
             variance = kriging_variance
+            model_metadata["algorithm"] = "variogram_rbf_or_pykrige"
         elif "hybrid" in requested_model:
-            surface = (kriging_surface + ml_surface) / 2.0
+            if hybrid_surface is not None:
+                surface = hybrid_surface
+                variance = hybrid_variance
+                model_metadata.update(hybrid_metadata)
+            else:
+                surface = (kriging_surface + ml_surface) / 2.0
+                variance = (kriging_variance + rf_variance) / 2.0
+                model_metadata["algorithm"] = "weighted_blend_fallback"
+                model_metadata["warnings"].append("Hybrid residual kriging was unavailable, so a weighted blend fallback was used.")
             model_used = "hybrid"
-            variance = kriging_variance
         else:
             surface = ml_surface
             model_used = "machine_learning"
-            variance = kriging_variance
+            variance = rf_variance
+            model_metadata["algorithm"] = "random_forest_surface"
 
         uncertainty = self._uncertainty_surface(x, y, grid_x, grid_y, variance, rf_variance)
         anomaly_threshold = float(np.nanmean(surface) + np.nanstd(surface))
         anomaly_mask = surface >= anomaly_threshold
         scenario = (task.get("scenario") or "explicit").lower()
+        support_tree = cKDTree(np.column_stack([x, y]))
+        support_distance, _ = support_tree.query(np.column_stack([grid_x.ravel(), grid_y.ravel()]), k=1)
+        support_distance = support_distance.reshape(grid_x.shape)
+        support_mask = support_distance <= max(float(np.nanmedian(support_distance)) * 2.5, 0.0005)
+        rmse = float(np.sqrt(mean_squared_error(z, train_ml))) if len(train_ml) == len(z) and len(z) else None
+        mae = float(mean_absolute_error(z, train_ml)) if len(train_ml) == len(z) and len(z) else None
+        r2 = float(r2_score(z, train_ml)) if len(train_ml) == len(z) and len(z) > 1 else None
+        model_metadata.update(
+            {
+                "rmse": rmse,
+                "mae": mae,
+                "r2": r2,
+                "support_fraction": float(np.mean(support_mask)),
+            }
+        )
 
         result = {
             "grid_x": grid_x,
@@ -1330,6 +2127,8 @@ class ProcessingService:
             "uncertainty": uncertainty,
             "model_used": model_used,
             "rf_variance": rf_variance,
+            "model_metadata": model_metadata,
+            "support_mask": support_mask.tolist(),
             "points": prep["frame"][["latitude", "longitude", "magnetic"]
                 + (["__is_base_station__"] if "__is_base_station__" in prep["frame"].columns else [])
                 + (["_line_id"] if "_line_id" in prep["frame"].columns else [])
@@ -1342,9 +2141,29 @@ class ProcessingService:
                 "point_count": int(len(prep["frame"])),
                 "anomaly_count": int(np.count_nonzero(anomaly_mask)),
             },
+            "uncertainty_metadata": {
+                "algorithm": "distance_variance_density",
+                "detail": "Combined distance, model variance, and density penalties were synthesized",
+                "warnings": [],
+            },
         }
-        if scenario == "sparse":
-            result["predicted_points"] = prep["predict_frame"][["latitude", "longitude"]].head(600).to_dict(orient="records")
+        if scenario == "sparse" and {"latitude", "longitude"}.issubset(prep["predict_frame"].columns):
+            predicted_points = []
+            grid_x = np.asarray(result["grid_x"], dtype=float)
+            grid_y = np.asarray(result["grid_y"], dtype=float)
+            surface_array = np.asarray(surface, dtype=float)
+            for _, row in prep["predict_frame"].head(600).iterrows():
+                record = row.to_dict()
+                lat = float(record.get("latitude"))
+                lon = float(record.get("longitude"))
+                if np.isfinite(lat) and np.isfinite(lon) and grid_x.ndim >= 2 and grid_y.ndim >= 2 and surface_array.ndim >= 2:
+                    row_idx = int(np.argmin(np.abs(grid_y[:, 0] - lat)))
+                    col_idx = int(np.argmin(np.abs(grid_x[0, :] - lon)))
+                    predicted_value = float(surface_array[row_idx, col_idx])
+                    record["magnetic"] = predicted_value
+                    record["predicted_magnetic"] = predicted_value
+                predicted_points.append(record)
+            result["predicted_points"] = predicted_points
         else:
             result["predicted_points"] = []
         result["predicted_points"] = self._filter_predicted_to_bounds(result["predicted_points"], prep["frame"])
@@ -1386,12 +2205,59 @@ class ProcessingService:
             pass
 
         # griddata fallback
-        res = griddata((x, y), z, (grid_x, grid_y), method="cubic")
+        try:
+            res = griddata((x, y), z, (grid_x, grid_y), method="cubic")
+        except Exception:
+            try:
+                res = griddata((x, y), z, (grid_x, grid_y), method="linear")
+            except Exception:
+                res = self._nearest_surface(x, y, z, grid_x, grid_y)
         if np.isnan(res).any():
-            res2 = griddata((x, y), z, (grid_x, grid_y), method="linear")
-            res = np.where(np.isnan(res), res2, res)
+            try:
+                res2 = griddata((x, y), z, (grid_x, grid_y), method="linear")
+                res = np.where(np.isnan(res), res2, res)
+            except Exception:
+                res = np.where(np.isnan(res), self._nearest_surface(x, y, z, grid_x, grid_y), res)
         res = np.where(np.isnan(res), float(np.nanmean(z)), res).astype(np.float64)
         return res, np.zeros(grid_x.shape, dtype=np.float64)
+
+    def _build_rf_predictor(self, x, y, z):
+        if len(z) < 4:
+            return None
+
+        train_tree = KDTree(np.column_stack([x, y]))
+
+        def _augment(fx, fy):
+            base = np.column_stack([fx, fy])
+            k = min(5, len(x) - 1)
+            if k < 1:
+                return base
+            pts = np.column_stack([fx, fy])
+            dist, _ = train_tree.query(pts, k=k + 1)
+            mean_nn = np.mean(dist[:, 1:k + 1], axis=1).reshape(-1, 1)
+            radius = 2.0 * float(np.median(mean_nn)) + 1e-9
+            counts = np.array(train_tree.query_ball_point(pts, r=radius, return_length=True), dtype=np.float64).reshape(-1, 1)
+            return np.column_stack([base, mean_nn, counts])
+
+        feat_tr = _augment(x, y)
+        scaler = StandardScaler()
+        feat_tr_n = scaler.fit_transform(feat_tr)
+        rf = RandomForestRegressor(n_estimators=120, random_state=7, n_jobs=1)
+        rf.fit(feat_tr_n, z)
+        return {"augment": _augment, "scaler": scaler, "model": rf}
+
+    def _predict_rf_surface(self, predictor, px, py):
+        if predictor is None:
+            shape = np.shape(px)
+            zeros = np.zeros(shape, dtype=np.float64)
+            return zeros, zeros
+
+        feat_pred = predictor["augment"](np.ravel(px), np.ravel(py))
+        feat_pred_n = predictor["scaler"].transform(feat_pred)
+        tree_preds = np.array([tree.predict(feat_pred_n) for tree in predictor["model"].estimators_])
+        mean = tree_preds.mean(axis=0).reshape(np.shape(px)).astype(np.float64)
+        var = tree_preds.var(axis=0).reshape(np.shape(px)).astype(np.float64)
+        return mean, var
 
     def _rf_surface(self, x, y, z, grid_x, grid_y):
         """
@@ -1401,40 +2267,8 @@ class ProcessingService:
         if len(z) < 4:
             flat = np.full(grid_x.shape, float(np.mean(z)), dtype=np.float64)
             return flat, np.zeros(grid_x.shape, dtype=np.float64)
-
-        # Augmented features: x, y, mean-NN distance, local density
-        tr_tree = KDTree(np.column_stack([x, y]))
-
-        def _augment(fx, fy):
-            base = np.column_stack([fx, fy])
-            try:
-                k = min(5, len(x) - 1)
-                if k < 1:
-                    return base
-                pts = np.column_stack([fx, fy])
-                dist, _ = tr_tree.query(pts, k=k + 1)
-                mean_nn = np.mean(dist[:, 1:k + 1], axis=1).reshape(-1, 1)
-                radius = 2.0 * float(np.median(mean_nn)) + 1e-9
-                counts = np.array(tr_tree.query_ball_point(pts, r=radius, return_length=True), dtype=np.float64).reshape(-1, 1)
-                return np.column_stack([base, mean_nn, counts])
-            except Exception:
-                return base
-
-        feat_tr = _augment(x, y)
-        scaler = StandardScaler()
-        feat_tr_n = scaler.fit_transform(feat_tr)
-
-        rf = RandomForestRegressor(n_estimators=120, random_state=7, n_jobs=-1)
-        rf.fit(feat_tr_n, z)
-
-        feat_pred = _augment(grid_x.ravel(), grid_y.ravel())
-        feat_pred_n = scaler.transform(feat_pred)
-
-        tree_preds = np.array([tree.predict(feat_pred_n) for tree in rf.estimators_])
-        pred_mean = tree_preds.mean(axis=0).reshape(grid_x.shape).astype(np.float64)
-        pred_var = tree_preds.var(axis=0).reshape(grid_x.shape).astype(np.float64)
-
-        return pred_mean, pred_var
+        predictor = self._build_rf_predictor(x, y, z)
+        return self._predict_rf_surface(predictor, grid_x, grid_y)
 
     def _xgboost_surface(self, x, y, z, grid_x, grid_y):
         """XGBoost surface (kept for compatibility; RF used by default in _generate_surfaces)."""
@@ -1460,15 +2294,20 @@ class ProcessingService:
 
     def _uncertainty_surface(self, x, y, grid_x, grid_y, variance, rf_variance=None):
         """
-        Combined uncertainty: RF ensemble variance (primary) + distance-weighted kriging variance.
+        Combined uncertainty from model variance, distance-to-data, and local density.
         """
-        from scipy.spatial import cKDTree
         tree = cKDTree(np.column_stack([x, y]))
         distance, _ = tree.query(np.column_stack([grid_x.ravel(), grid_y.ravel()]), k=1)
         dist_surface = distance.reshape(grid_x.shape)
         dist_norm = dist_surface / max(float(np.nanmax(dist_surface)), 1e-6)
         variance_norm = variance / max(float(np.nanmax(variance)), 1e-6)
-        base_unc = ((dist_norm + variance_norm) / 2.0) * 100.0
+        neighbour_dist, _ = tree.query(np.column_stack([grid_x.ravel(), grid_y.ravel()]), k=min(4, len(x)))
+        if neighbour_dist.ndim == 1:
+            density_term = neighbour_dist.reshape(grid_x.shape)
+        else:
+            density_term = np.mean(neighbour_dist, axis=1).reshape(grid_x.shape)
+        density_norm = density_term / max(float(np.nanmax(density_term)), 1e-6)
+        base_unc = ((dist_norm + variance_norm + density_norm) / 3.0) * 100.0
 
         if rf_variance is not None and rf_variance.shape == grid_x.shape:
             rf_norm = rf_variance / max(float(np.nanmax(rf_variance)), 1e-6)
@@ -1485,6 +2324,7 @@ class ProcessingService:
         add_ons = (task.get("analysis_config") or {}).get("add_ons") or []
         selected = set(add_ons)
         detail_items: list[str] = []
+        metadata = {"warnings": [], "fallbacks": [], "layer_labels": {}}
 
         # Determine pixel spacing from grid
         grid_x = results.get("grid_x")
@@ -1518,6 +2358,17 @@ class ProcessingService:
             rtp_surface = _rtp_fourier(surface, rtp_inc, rtp_dec, dx, dy)
         else:
             rtp_surface = surface - float(np.nanmean(surface))
+        if rtp_inc is None or rtp_dec is None:
+            metadata["fallbacks"].append(
+                {
+                    "stage": "rtp",
+                    "requested": "reduction_to_pole",
+                    "actual": "mean_centered_surface",
+                    "reason": "Inclination or declination was missing, so RTP could not be computed physically.",
+                    "severity": "warning",
+                }
+            )
+            metadata["warnings"].append("RTP inputs were incomplete; a mean-centred fallback surface was produced instead.")
 
         # ── Tilt derivative ───────────────────────────────────────────────────
         if surface.ndim == 2 and surface.shape[0] > 1 and surface.shape[1] > 1:
@@ -1530,7 +2381,9 @@ class ProcessingService:
         # ── EMAG2 regional residual (Gaussian separation) ────────────────────
         from scipy.ndimage import gaussian_filter
         sigma = min(5.0, max(surface.shape) / 4.0) if surface.size > 1 else 0.0
-        emag2_residual = surface - gaussian_filter(surface, sigma=sigma) if sigma > 0 else np.zeros_like(surface)
+        regional_residual = surface - gaussian_filter(surface, sigma=sigma) if sigma > 0 else np.zeros_like(surface)
+        metadata["layer_labels"]["emag2_residual"] = "Regional residual"
+        metadata["layer_labels"]["regional_residual"] = "Regional residual"
 
         # ── Filtered surface ─────────────────────────────────────────────────
         filter_type = config.get("filter_type", "")
@@ -1570,17 +2423,76 @@ class ProcessingService:
             "first_vertical_derivative": fvd.tolist(),
             "horizontal_derivative": horizontal_derivative.tolist(),
             "filtered_surface": filtered_surface.tolist(),
-            "emag2_residual": emag2_residual.tolist(),
+            "emag2_residual": regional_residual.tolist(),
+            "regional_residual": regional_residual.tolist(),
             "rtp_surface": rtp_surface.tolist(),
             "tilt_derivative": tilt.tolist(),
             "total_gradient": total_grad.tolist(),
             "selected_add_ons": add_ons,
             "detail": ", ".join(detail_items) if detail_items else "No add-on layers were requested",
+            "metadata": metadata,
         }
 
     # ── Stage 7: Persist (unchanged) ────────────────────────────────────────
 
-    def _persist_outputs(self, task: dict, prep: dict, results: dict, add_ons: dict) -> dict:
+    def _build_qa_report(self, task: dict, prep: dict, results: dict, add_ons: dict, runtime: ProcessingRuntime) -> dict:
+        correction_report = runtime.stage_reports[2]["metadata"] if len(runtime.stage_reports) > 2 else {}
+        leveling_report = runtime.stage_reports[3]["metadata"] if len(runtime.stage_reports) > 3 else {}
+        integrity = _validate_integrity(
+            np.asarray(results["surface"], dtype=np.float64),
+            prep["train_frame"]["magnetic"].to_numpy(dtype=np.float64),
+            prep["frame"]["magnetic"].to_numpy(dtype=np.float64),
+        )
+        model_meta = results.get("model_metadata") or {}
+        quality_score = _compute_quality_score(
+            integrity,
+            bool(correction_report.get("igrf_applied")),
+            model_meta.get("rmse"),
+            float(np.nanstd(prep["frame"]["magnetic"].to_numpy(dtype=np.float64))) if len(prep["frame"]) else 0.0,
+        )
+        warnings = list(runtime.warnings)
+        warnings.extend(add_ons.get("metadata", {}).get("warnings") or [])
+        blocking_issues = []
+        if any(item.get("severity") == "critical" for item in runtime.fallback_events):
+            blocking_issues.append("One or more requested scientific paths could not be run physically and were downgraded.")
+        qa_status = "valid"
+        if blocking_issues:
+            qa_status = "degraded"
+        elif warnings:
+            qa_status = "valid_with_warnings"
+
+        return QAReport(
+            status=qa_status,
+            warnings=warnings,
+            blocking_issues=blocking_issues,
+            validation=ValidationSummary(**(runtime.validation_summary or {})) if runtime.validation_summary else None,
+            fallback_events=[ProcessingFallbackEvent(**item) for item in runtime.fallback_events],
+            correction_path=list(runtime.correction_path),
+            crossover=leveling_report,
+            lag=correction_report.get("lag", {}),
+            heading=correction_report.get("heading", {}),
+            model=model_meta,
+            uncertainty=results.get("uncertainty_metadata") or {},
+            derived_layers=add_ons.get("metadata") or {},
+            integrity=integrity,
+            quality_score=quality_score,
+            metadata={
+                "scenario": prep.get("scenario"),
+                "observed_points": int(len(prep["train_frame"])),
+                "predicted_points": int(len(prep["predict_frame"])),
+                "support_fraction": model_meta.get("support_fraction"),
+            },
+        ).model_dump(mode="json")
+
+    def _persist_outputs(
+        self,
+        task: dict,
+        prep: dict,
+        results: dict,
+        add_ons: dict,
+        qa_report: dict | None = None,
+        validation_summary: dict | None = None,
+    ) -> dict:
         payload = {
             "grid_x": results["grid_x"].tolist(),
             "grid_y": results["grid_y"].tolist(),
@@ -1589,6 +2501,11 @@ class ProcessingService:
             "points": results["points"],
             "stats": results["stats"],
             "model_used": results["model_used"],
+            "model_metadata": results.get("model_metadata") or {},
+            "uncertainty_metadata": results.get("uncertainty_metadata") or {},
+            "support_mask": results.get("support_mask"),
+            "validation_summary": validation_summary or {},
+            "qa_report": qa_report or {},
             **add_ons,
         }
         if "predicted_points" in results:
@@ -1661,7 +2578,7 @@ class ProcessingService:
 
         _2d_keys = {"grid_x", "grid_y", "surface", "uncertainty", "analytic_signal",
                     "first_vertical_derivative", "horizontal_derivative",
-                    "filtered_surface", "emag2_residual", "rtp_surface",
+                    "filtered_surface", "emag2_residual", "regional_residual", "rtp_surface",
                     "tilt_derivative", "total_gradient"}
         firestore_data = {k: v for k, v in payload.items() if k not in _2d_keys}
         if "points" in firestore_data:

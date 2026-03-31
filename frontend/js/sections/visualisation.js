@@ -1,6 +1,14 @@
 ﻿import {fetchTask, fetchTaskResults} from "../api.js";
 import {renderWorkflowProgress} from "./progress.js";
-import {appState, setActiveResultLayer, setActiveVisualisation, setStackProfiles, setTask} from "../state.js";
+import {
+  appState,
+  setActiveResultLayer,
+  setActiveTraverseFilter,
+  setActiveVisualisation,
+  setStackProfiles,
+  setTask,
+  setTaskResults,
+} from "../state.js";
 import {initAIChat} from "../shared/ai_chat.js";
 
 let _visChat = null;
@@ -42,7 +50,7 @@ const LAYER_META = {
     key: "rtp_surface",
     unit: "nT",
     tone: "Add-on",
-    description: "Centred magnetic response that makes anomalies easier to compare over vertical sources.",
+    description: "Pole-reduced surface when inclination/declination are available; QA will flag any fallback path.",
     palette: ["#1c3567", "#2d5ab3", "#79a8f2", "#e2edff"],
   },
   analytic_signal: {
@@ -73,12 +81,12 @@ const LAYER_META = {
     palette: ["#3f2d14", "#8e6528", "#d6a55c", "#f9ebca"],
   },
   emag2_residual: {
-    label: "EMAG2 residual",
-    shortLabel: "EMAG2",
+    label: "Regional residual",
+    shortLabel: "Residual",
     key: "emag2_residual",
     unit: "nT",
     tone: "Comparison",
-    description: "Residual-style comparison surface against the smoothed regional field.",
+    description: "Gaussian regional-residual separation built from the processed surface.",
     palette: ["#3e1847", "#8b3e91", "#cf7ad7", "#f3def8"],
   },
   uncertainty: {
@@ -93,12 +101,32 @@ const LAYER_META = {
 };
 
 const VISUALISATION_TAB_LABELS = {
-  Heatmap: "Heatmap",
-  Contour: "Contour",
+  Surface: "Surface",
+  Heatmap: "Surface",
+  Contour: "Surface",
   "3D": "3D surface",
   Map: "Map overlay",
   "Line Profiles": "Line profiles",
 };
+
+function getTraverseFilterOptions(displayData) {
+  return [
+    {value: "all", label: "All traverses"},
+    ...displayData.traverses.map((traverse) => ({value: traverse.label, label: traverse.label})),
+  ];
+}
+
+function filterDisplayData(displayData) {
+  const filterValue = appState.activeTraverseFilter || "all";
+  if (filterValue === "all") return displayData;
+  const traverses = displayData.traverses.filter((traverse) => traverse.label === filterValue);
+  const keys = new Set(traverses.map((traverse) => traverse.key));
+  return {
+    measured: displayData.measured.filter((point) => keys.has(point.traverse_key)),
+    predicted: displayData.predicted.filter((point) => keys.has(point.traverse_key)),
+    traverses,
+  };
+}
 
 async function ensurePlotly() {
   if (window.Plotly) {
@@ -164,7 +192,7 @@ function resetVisualisationHost() {
 }
 
 function syncVisualisationTabs(mode) {
-  const activeLabel = VISUALISATION_TAB_LABELS[mode] || VISUALISATION_TAB_LABELS.Heatmap;
+  const activeLabel = VISUALISATION_TAB_LABELS[mode] || VISUALISATION_TAB_LABELS.Surface;
   document.querySelectorAll("#screen-visualisation .vt").forEach((node) => {
     node.classList.toggle("on", node.textContent.trim() === activeLabel);
   });
@@ -470,7 +498,9 @@ function buildDisplayDatasets(results, layer) {
   });
 
   const predictedDisplay = predicted.map((point) => {
-    const displayValue = sampler(Number(point.latitude), Number(point.longitude));
+    const displayValue = layer.id === "magnetic" && Number.isFinite(Number(point.predicted_magnetic ?? point.magnetic))
+      ? Number(point.predicted_magnetic ?? point.magnetic)
+      : sampler(Number(point.latitude), Number(point.longitude));
     const item = {
       ...point,
       display_value: Number.isFinite(displayValue) ? displayValue : null,
@@ -485,7 +515,9 @@ function buildDisplayDatasets(results, layer) {
 
   const traverseMap = new Map();
   all.forEach((point) => {
-    const key = point.line_id != null
+    const key = point.traverse_label
+      ? `predicted-${point.traverse_label}`
+      : point.line_id != null
       ? `line-${point.line_id}`
       : `group-${Math.round(Number(point[grouping.transverseKey]) / grouping.step)}`;
     if (!traverseMap.has(key)) traverseMap.set(key, []);
@@ -499,16 +531,18 @@ function buildDisplayDatasets(results, layer) {
       const origin = sorted[0]
         ? {lat: Number(sorted[0].latitude), lon: Number(sorted[0].longitude)}
         : {lat: 0, lon: 0};
+      const traverseLabel = sorted.find((point) => point.traverse_label)?.traverse_label || `Traverse ${index + 1}`;
       sorted.forEach((point, stationIndex) => {
         point.station_number = stationIndex + 1;
         const dLat = (Number(point.latitude) - origin.lat) * 111320;
         const dLon = (Number(point.longitude) - origin.lon) * 111320 * Math.cos(origin.lat * Math.PI / 180);
         point.distance_along = Math.sqrt((dLat ** 2) + (dLon ** 2));
-        point.traverse_label = `Traverse ${index + 1}`;
+        point.traverse_label = traverseLabel;
+        point.traverse_key = key;
       });
       return {
         key,
-        label: `Traverse ${index + 1}`,
+        label: traverseLabel,
         points: sorted,
       };
     });
@@ -523,6 +557,9 @@ function buildDisplayDatasets(results, layer) {
 function renderLayerControls(layers, activeLayer, mode) {
   const roots = getRoots();
   if (!roots.layerToggles) return;
+  const fullDisplayData = buildDisplayDatasets(appState.taskResults || {}, activeLayer);
+  const displayData = filterDisplayData(fullDisplayData);
+  const traverseOptions = getTraverseFilterOptions(fullDisplayData);
   roots.layerToggles.innerHTML = `
     <div style="font-size:10px;font-weight:700;color:var(--text4);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:10px">Selected processing outputs</div>
     <div style="display:flex;flex-direction:column;gap:6px">
@@ -542,6 +579,13 @@ function renderLayerControls(layers, activeLayer, mode) {
           </button>
         `;
       }).join("")}
+    </div>
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-size:10px;font-weight:700;color:var(--text4);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:8px">Traverse view</div>
+      <select class="fsel" style="font-size:11px" onchange="window.setTraverseFilter(this.value)">
+        ${traverseOptions.map((option) => `<option value="${option.value}"${option.value === (appState.activeTraverseFilter || "all") ? " selected" : ""}>${option.label}</option>`).join("")}
+      </select>
+      <div style="font-size:10px;color:var(--text3);margin-top:6px;line-height:1.6">Showing ${displayData.traverses.length} traverse${displayData.traverses.length === 1 ? "" : "s"} in the current view.</div>
     </div>
     ${mode === "Line Profiles" ? `
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
@@ -591,21 +635,16 @@ function renderInterpretation(layer, stats, displayData) {
     </div>
   `;
 
-  // Fire layer-specific AI interpretation (non-blocking)
-  if (_visChat) {
-    const q = `The user is viewing the ${layer.label} (${layer.shortLabel}) layer. `
-      + `Mean: ${formatNumber(stats.mean)} ${layer.unit}, range: ${formatNumber(stats.range)} ${layer.unit}, `
-      + `anomaly count: ${stats.anomaly_count ?? 0}. `
-      + "Briefly interpret this layer — what patterns or anomalies should the user focus on, "
-      + "and what do they indicate geologically?";
-    _visChat.autoLoad(q);
+  if (aiBody && !aiBody.dataset.readyMessage) {
+    aiBody.innerHTML = "<div class='amsg'>Aurora AI is ready. Ask for a simple summary of this layer, a traverse comparison, or help choosing the clearest view.</div>";
+    aiBody.dataset.readyMessage = "1";
   }
 }
 
 async function renderLineProfiles(results, layer, stats) {
   const Plotly = await ensurePlotly();
   const host = resetVisualisationHost();
-  const displayData = buildDisplayDatasets(results, layer);
+  const displayData = filterDisplayData(buildDisplayDatasets(results, layer));
   const traverses = displayData.traverses.filter((traverse) => traverse.points.some((point) => Number.isFinite(point.display_value)));
 
   if (!traverses.length) {
@@ -693,7 +732,7 @@ async function renderPlot(mode, results, layer) {
   };
   const colorscale = paletteToPlotly(getLayerPalette(layer));
 
-  if (mode === "Heatmap") {
+  if (mode === "Surface" || mode === "Heatmap") {
     await Plotly.newPlot(host, [{
       x: plotSurface.x,
       y: plotSurface.y,
@@ -701,6 +740,16 @@ async function renderPlot(mode, results, layer) {
       type: "heatmap",
       colorscale,
       colorbar: {title: layer.unit},
+    }, {
+      x: plotSurface.x,
+      y: plotSurface.y,
+      z: plotSurface.z,
+      type: "contour",
+      colorscale,
+      contours: {coloring: "none", showlabels: false},
+      line: {width: 1, color: "rgba(20,30,24,0.28)"},
+      showscale: false,
+      hoverinfo: "skip",
     }], {...commonLayout, xaxis: {title: "Longitude"}, yaxis: {title: "Latitude"}}, {displayModeBar: false, responsive: true});
     return;
   }
@@ -728,7 +777,7 @@ async function renderPlot(mode, results, layer) {
 async function renderMapOverlay(results, layer) {
   const host = resetVisualisationHost();
   syncVisualisationMapControls(true);
-  const displayData = buildDisplayDatasets(results, layer);
+  const displayData = filterDisplayData(buildDisplayDatasets(results, layer));
   const measured = displayData.measured.map((point) => ({
     ...point,
     hide_value: false,
@@ -768,9 +817,12 @@ export async function loadVisualisation() {
     return;
   }
 
-  let results;
+  let results = appState.taskResults;
   try {
-    results = await fetchTaskResults(appState.project.id, appState.task.id);
+    if (!results) {
+      results = await fetchTaskResults(appState.project.id, appState.task.id);
+      setTaskResults(results);
+    }
   } catch {
     host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">Could not load results. Please try again.</div>`;
     return;
@@ -779,7 +831,7 @@ export async function loadVisualisation() {
   const layers = buildAvailableLayers(results, task);
   const activeLayer = getActiveLayer(layers);
   const stats = computeLayerStats(activeLayer);
-  const mode = appState.activeVisualisation || "Heatmap";
+  const mode = appState.activeVisualisation || "Surface";
 
   // Detect single-traverse to show a hint (never force-redirect — let user choose their tab)
   const _lineIds = new Set((results?.points || []).map((p) => (p.line_id != null ? String(p.line_id) : null)).filter(Boolean));
@@ -796,7 +848,7 @@ export async function loadVisualisation() {
   const _mapBox = getRoots().mapBox;
   const _existingHint = document.getElementById("_visSingleTraverseHint");
   if (_existingHint) _existingHint.remove();
-  if (_isSingleTraverse && (mode === "Heatmap" || mode === "Contour" || mode === "3D")) {
+  if (_isSingleTraverse && (mode === "Surface" || mode === "Heatmap" || mode === "Contour" || mode === "3D")) {
     const _hint = document.createElement("div");
     _hint.id = "_visSingleTraverseHint";
     _hint.style.cssText = "position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:200;background:rgba(255,247,230,0.97);border:1px solid #e9c46a;border-radius:8px;padding:7px 14px;font-family:'Manrope',sans-serif;font-size:11px;color:#7a5a00;display:flex;align-items:center;gap:10px;pointer-events:auto;white-space:nowrap";
@@ -813,7 +865,7 @@ export async function loadVisualisation() {
   } else {
     syncVisualisationMapControls(false);
     await renderPlot(mode, results, activeLayer);
-    displayData = buildDisplayDatasets(results, activeLayer);
+    displayData = filterDisplayData(buildDisplayDatasets(results, activeLayer));
   }
   renderInterpretation(activeLayer, stats, displayData);
 }
@@ -875,6 +927,10 @@ export function initVisualisation() {
   };
   window.toggleProfileStacking = async (value) => {
     setStackProfiles(value);
+    await loadVisualisation();
+  };
+  window.setTraverseFilter = async (value) => {
+    setActiveTraverseFilter(value);
     await loadVisualisation();
   };
 }

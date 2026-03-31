@@ -23,10 +23,10 @@ gaia-magnetics/
 | Screen | Description |
 |--------|-------------|
 | Home | Platform overview, capabilities, about |
-| Project Setup | Project context, basemap upload, survey data upload, column mapping, scenario, station spacing |
+| Projects / Setup | Project context, basemap upload, survey data upload, column mapping, scenario, station spacing |
 | Analysis | Corrections (incl. low-pass / high-pass filtering), prediction modelling, add-ons |
 | Preview | Configuration summary, station map preview, Aurora AI pre-run analysis |
-| Processing | Visual pipeline execution with step-by-step progress |
+| Processing | Visual pipeline execution with validation, corrections, leveling, modelling, QA, and packaging steps |
 | Visualisation | Heatmap / Contour / 3D / Map overlay views with Aurora interpretation |
 | Export | All 8 output formats, Aurora AI report options, delivery configuration |
 
@@ -44,6 +44,8 @@ gaia-magnetics/
 - Platform radio (Ground / Airborne) — mutually exclusive
 - Scenario radio (Explicit / Sparse) — Explicit disables station spacing input
 - Processing mode (Single / Multi-line) — Multi-line enables multiple file uploads
+- Hybrid modelling uses `RF trend + kriged residual` when the residual path is available; otherwise QA records the weighted-blend fallback.
+- The add-on previously labelled `EMAG2 comparison` is now exposed as `Regional residual`, because it is produced from Gaussian regional-residual separation rather than an external EMAG2 dataset.
 
 ---
 *GAIA Magnetics · Terracode Analytics · Confidential*

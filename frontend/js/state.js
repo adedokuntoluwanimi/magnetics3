@@ -2,21 +2,24 @@ const storedSurveyColor = localStorage.getItem("gaiaSurveyColor") || "#2daa52";
 const storedPredictedColor = localStorage.getItem("gaiaPredictedColor") || "#5ba8d4";
 const storedBaseStationColor = localStorage.getItem("gaiaBaseStationColor") || "#e07b14";
 
-const _VALID_VIS = new Set(["Heatmap", "Contour", "3D", "Map", "Line Profiles"]);
-const _storedVis = localStorage.getItem("gaiaActiveVis") || "Heatmap";
+const _VALID_VIS = new Set(["Surface", "3D", "Map", "Line Profiles"]);
+const _storedVis = localStorage.getItem("gaiaActiveVis") || "Surface";
 const _storedLayer = localStorage.getItem("gaiaActiveLayer") || "magnetic";
+const _storedTraverse = localStorage.getItem("gaiaActiveTraverseFilter") || "all";
 
 export const appState = {
   project: null,
   task: null,
+  taskResults: null,
   processingRun: null,
   surveyFiles: [],
   basemapFile: null,
   headers: [],
   mapsApiKey: null,
-  activeVisualisation: _VALID_VIS.has(_storedVis) ? _storedVis : "Heatmap",
+  activeVisualisation: _VALID_VIS.has(_storedVis) ? _storedVis : "Surface",
   activeResultLayer: _storedLayer,
   stackProfiles: false,
+  activeTraverseFilter: _storedTraverse,
   mapColors: {
     survey: storedSurveyColor,
     predicted: storedPredictedColor,
@@ -33,11 +36,23 @@ export function clearProject() {
 }
 
 export function setTask(task) {
+  if (appState.task?.id !== task?.id) {
+    appState.taskResults = null;
+  }
   appState.task = task;
 }
 
 export function clearTask() {
   appState.task = null;
+  appState.taskResults = null;
+}
+
+export function setTaskResults(results) {
+  appState.taskResults = results;
+}
+
+export function clearTaskResults() {
+  appState.taskResults = null;
 }
 
 export function setProcessingRun(run) {
@@ -91,4 +106,8 @@ export function setPredictedMarkerColor(color) {
 export function setBaseStationMarkerColor(color) {
   appState.mapColors.baseStation = color;
   localStorage.setItem("gaiaBaseStationColor", color);
+}
+export function setActiveTraverseFilter(value) {
+  appState.activeTraverseFilter = value || "all";
+  localStorage.setItem("gaiaActiveTraverseFilter", appState.activeTraverseFilter);
 }

@@ -1,4 +1,4 @@
-﻿import {createProject, createTask} from "../api.js";
+import {createProject, createTask} from "../api.js";
 import {renderWorkflowProgress} from "./progress.js";
 import {renameProject, updateTask} from "../api.js";
 import {refreshSidebar} from "./sidebar.js";
@@ -329,6 +329,22 @@ function setStep(step) {
   getEl("setupScroll")?.scrollTo(0, 0);
 }
 
+function resetPredictedTraverseForMode(type, index) {
+  return {
+    type,
+    label: `Predicted Traverse ${index + 1}`,
+    spacing: type === "infill" ? 10 : 20,
+    spacing_unit: "Metres",
+    distance: 50,
+    distance_unit: "Metres",
+    direction: 90,
+    align_with_original_direction: true,
+    length_same_as_original: true,
+    length: 1000,
+    length_unit: "Metres",
+  };
+}
+
 function updateUploadZone(mode) {
   const zone = getEl("surveyUpzone");
   const addBtn = getEl("addUploadBtn");
@@ -616,15 +632,12 @@ async function submitTaskFlow() {
     fd.set("description", taskDesc);
     fd.set("platform", window.state?.platform || "ground");
     fd.set("data_state", getEl("state-corr")?.classList.contains("selected") ? "corrected" : "raw");
-    fd.set("scenario", window.state?.scenario || "explicit");
+    const scenario = (window.state?.scenario || "").trim();
+    if (scenario) fd.set("scenario", scenario);
     fd.set("processing_mode", window.state?.mode || "single");
     fd.set("corrected_corrections", JSON.stringify([]));
     fd.set("column_mapping", JSON.stringify(mapping));
     fd.set("metadata", JSON.stringify({headers: appState.headers}));
-    const spacingVal = (getEl("spacingInput")?.value || "").trim();
-    if (spacingVal) fd.set("station_spacing", spacingVal);
-    const spacingUnit = getEl("spacingUnit")?.value;
-    if (spacingUnit) fd.set("station_spacing_unit", spacingUnit);
     const ptList = window.state?.predictedTraverses || [];
     fd.set("predicted_traverses_json", JSON.stringify(ptList));
     preparedSurveyFiles.forEach((f) => fd.append("survey_files", f, f.name));
@@ -663,6 +676,12 @@ function fullReset({preserveProject = false} = {}) {
   renderBasemap();
   resetColumnMapping();
   resetTimeMapping();
+  if (window.state) {
+    window.state.predictedTraverses = [];
+    window.state.predictedTraverseMode = "offset";
+    window.state.scenario = "";
+  }
+  renderPredictedTraverseList();
 
   syncRawDataSection();
   syncBaseStationSection([], "");
@@ -760,6 +779,29 @@ export function initSetup() {
     }
   };
 
+  const legacySetScenario = window.setScenario?.bind(window);
+  window.setScenario = (scenarioValue) => {
+    const scenario = scenarioValue || "";
+    if (!window.state) window.state = {};
+    window.state.scenario = scenario;
+    legacySetScenario?.(scenario);
+    const ids = ["sc-auto", "sc-explicit", "sc-sparse"];
+    ids.forEach((id) => {
+      const node = getEl(id);
+      if (!node) return;
+      const active = (id === "sc-auto" && !scenario) || id === `sc-${scenario}`;
+      node.classList.toggle("selected", active);
+      const circle = node.querySelector(".radio-circle");
+      if (circle) circle.innerHTML = active ? '<div class="radio-dot"></div>' : "";
+    });
+    const pts = getEl("predictedTraverseSection");
+    if (pts) pts.style.display = scenario === "sparse" ? "block" : "none";
+    if (scenario !== "sparse") {
+      window.state.predictedTraverses = [];
+      renderPredictedTraverseList();
+    }
+  };
+
   // Global hooks
   window.setCoordSystem = (cs) => {
     if (!window.state) window.state = {};
@@ -822,9 +864,10 @@ export function initSetup() {
     const platform = task.platform || "ground";
     window.setPlatform?.(platform);
     if (window.state) window.state.platform = platform;
-    const scenario = task.scenario || "explicit";
+    const scenario = task.scenario || "";
     window.setScenario?.(scenario);
     if (window.state) window.state.scenario = scenario;
+    if (window.state) window.state.predictedTraverseMode = (task.predicted_traverses || [])[0]?.type || "offset";
     if (scenario === "sparse") {
       const pts = task.predicted_traverses || [];
       window.state.predictedTraverses = pts;
@@ -835,10 +878,6 @@ export function initSetup() {
     const mapping = task.column_mapping || {};
     if (mapping.coordinate_system) window.setCoordSystem?.(mapping.coordinate_system);
     if (mapping.utm_zone) { const z = getEl("utmZoneInput"); if (z) z.value = mapping.utm_zone; }
-    const spacingEl = getEl("spacingInput");
-    if (spacingEl && task.station_spacing) spacingEl.value = task.station_spacing;
-    const unitEl = getEl("spacingUnit");
-    if (unitEl && task.station_spacing_unit) unitEl.value = task.station_spacing_unit;
     getEl("setupScroll")?.scrollTo({top: 0, behavior: "smooth"});
     window.go?.("setup");
   };
@@ -857,24 +896,27 @@ export function initSetup() {
 // Predicted traverse management (sparse scenario)
 window.state = window.state || {};
 window.state.predictedTraverses = window.state.predictedTraverses || [];
+window.state.predictedTraverseMode = window.state.predictedTraverseMode || "offset";
+
+window.setPredictedTraverseMode = function(type) {
+  if (!window.state) window.state = {};
+  const nextType = type || "offset";
+  const currentType = window.state.predictedTraverseMode || "offset";
+  window.state.predictedTraverseMode = nextType;
+  if (window.state.predictedTraverses?.length && nextType !== currentType) {
+    window.state.predictedTraverses = window.state.predictedTraverses.map((_, index) => (
+      resetPredictedTraverseForMode(nextType, index)
+    ));
+  }
+  renderPredictedTraverseList();
+};
 
 window.addPredictedTraverse = function(type) {
   if (!window.state) window.state = {};
   if (!window.state.predictedTraverses) window.state.predictedTraverses = [];
   const idx = window.state.predictedTraverses.length;
-  const label = `Predicted Traverse ${idx + 1}`;
-  const t = {
-    type: type || "offset",
-    label,
-    spacing: 10,
-    spacing_unit: "Metres",
-    distance: 50,
-    distance_unit: "Metres",
-    direction: 90,
-    length_same_as_original: true,
-    length: 1000,
-    length_unit: "Metres",
-  };
+  const activeType = type || window.state.predictedTraverseMode || "offset";
+  const t = resetPredictedTraverseForMode(activeType, idx);
   window.state.predictedTraverses.push(t);
   renderPredictedTraverseList();
 };
@@ -894,6 +936,21 @@ window.updatePredictedTraverse = function(idx, field, value) {
 
 function renderPredictedTraverseList() {
   const container = document.getElementById("predictedTraverseList");
+  const modeOffset = document.getElementById("pt-mode-offset");
+  const modeInfill = document.getElementById("pt-mode-infill");
+  const addBtn = document.getElementById("addPredictedTraverseBtn");
+  const activeMode = window.state?.predictedTraverseMode || window.state?.predictedTraverses?.[0]?.type || "offset";
+  if (modeOffset) {
+    modeOffset.classList.toggle("selected", activeMode === "offset");
+    const circle = modeOffset.querySelector(".radio-circle");
+    if (circle) circle.innerHTML = activeMode === "offset" ? '<div class="radio-dot"></div>' : "";
+  }
+  if (modeInfill) {
+    modeInfill.classList.toggle("selected", activeMode === "infill");
+    const circle = modeInfill.querySelector(".radio-circle");
+    if (circle) circle.innerHTML = activeMode === "infill" ? '<div class="radio-dot"></div>' : "";
+  }
+  if (addBtn) addBtn.textContent = activeMode === "offset" ? "+ Add offset traverse" : "+ Add infill traverse";
   if (!container) return;
   const list = window.state?.predictedTraverses || [];
   if (list.length === 0) {
@@ -902,11 +959,6 @@ function renderPredictedTraverseList() {
   }
   container.innerHTML = list.map((t, i) => {
     const isOffset = t.type === 'offset';
-    const isInfill = t.type === 'infill';
-    const offsetActive = `background:var(--accent);color:#fff;border-color:var(--accent);cursor:pointer`;
-    const offsetInactive = `background:var(--card);color:var(--text4);border-color:var(--border);cursor:pointer;opacity:0.45`;
-    const infillActive = `background:var(--accent);color:#fff;border-color:var(--accent);cursor:pointer`;
-    const infillInactive = `background:var(--card);color:var(--text4);border-color:var(--border);cursor:pointer;opacity:0.45`;
     const sameLength = t.length_same_as_original !== false;
     return `
     <div class="card" style="margin-bottom:8px;padding:10px 12px;position:relative">
@@ -914,10 +966,7 @@ function renderPredictedTraverseList() {
         <span style="font-size:12px;font-weight:700;color:var(--text1)">${t.label}</span>
         <button onclick="window.removePredictedTraverse(${i})" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:13px;padding:0 4px" title="Remove">✕</button>
       </div>
-      <div style="display:flex;gap:8px;margin-bottom:8px">
-        <button onclick="window.setPTType(${i},'offset')" style="flex:1;padding:4px;font-size:10.5px;border-radius:5px;border:1px solid;${isOffset ? offsetActive : offsetInactive}">${isOffset ? '● ' : ''}Offset traverse</button>
-        <button onclick="window.setPTType(${i},'infill')" style="flex:1;padding:4px;font-size:10.5px;border-radius:5px;border:1px solid;${isInfill ? infillActive : infillInactive}">${isInfill ? '● ' : ''}Infill spacing</button>
-      </div>
+      <div style="font-size:10.5px;color:var(--text3);margin-bottom:8px;font-weight:600">${isOffset ? "Offset traverse" : "Infill traverse"}</div>
       ${isOffset ? `
         <div class="g2" style="margin-bottom:6px">
           <div>
@@ -967,11 +1016,5 @@ function renderPredictedTraverseList() {
     </div>
   `}).join("");
 }
-
-window.setPTType = function(idx, type) {
-  if (!window.state?.predictedTraverses?.[idx]) return;
-  window.state.predictedTraverses[idx].type = type;
-  renderPredictedTraverseList();
-};
 
 window.renderPTList = renderPredictedTraverseList;

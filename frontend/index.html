@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
@@ -83,7 +83,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 /* legacy sb-acts kept for compat */
 .sb-acts{display:none}
 /* Sidebar chevron */
-.sb-chev{border:none;background:transparent;cursor:pointer;width:14px;height:14px;font-size:10px;color:var(--text4);flex-shrink:0;padding:0;display:flex;align-items:center;justify-content:center;transition:color 0.12s}
+.sb-chev{border:none;background:transparent;cursor:pointer;width:22px;height:22px;font-size:16px;color:var(--text4);flex-shrink:0;padding:0;display:flex;align-items:center;justify-content:center;transition:color 0.12s}
 .sb-chev:hover{color:var(--text2)}
 /* Task count badge */
 .sb-count{background:var(--g100);color:var(--g600);border-radius:10px;padding:2px 7px;font-size:11px;font-weight:700;margin-left:auto;flex-shrink:0;transition:opacity 0.1s}
@@ -246,11 +246,11 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 .chat-dot:nth-child(3){animation-delay:0.4s}
 @keyframes chatdot{0%,80%,100%{transform:scale(0.7);opacity:0.5}40%{transform:scale(1.1);opacity:1}}
 .a-body{display:flex;flex-direction:column}
-.a-input-row{display:flex;gap:6px;padding:10px 13px;border-top:1px solid var(--border);flex-shrink:0;background:var(--bg2)}
-.a-input-row textarea{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);font-size:12px;color:var(--text);padding:7px 10px;resize:none;font-family:'Manrope',sans-serif;outline:none;line-height:1.5;min-height:34px;max-height:80px}
+.a-input-row{display:flex;gap:8px;padding:10px 13px;border-top:1px solid var(--border);flex-shrink:0;background:var(--bg2);align-items:flex-end}
+.a-input-row textarea{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);font-size:12px;color:var(--text);padding:9px 10px;resize:none;font-family:'Manrope',sans-serif;outline:none;line-height:1.5;min-height:40px;max-height:92px}
 .a-input-row textarea:focus{border-color:var(--g400);box-shadow:0 0 0 2px rgba(45,170,82,0.12)}
 .a-input-row textarea::placeholder{color:var(--text4)}
-.a-input-row button{background:var(--g500);color:#fff;border:none;border-radius:var(--r);padding:0 13px;cursor:pointer;font-size:16px;font-weight:700;flex-shrink:0;transition:background 0.15s}
+.a-input-row button{background:var(--g500);color:#fff;border:none;border-radius:var(--r);padding:0 14px;cursor:pointer;font-size:12px;font-weight:800;flex-shrink:0;transition:background 0.15s;min-width:58px;height:40px}
 .a-input-row button:hover{background:var(--g600)}
 .a-input-row button:disabled{opacity:0.45;cursor:default}
 
@@ -275,7 +275,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 .ec:hover{border-color:var(--border2);transform:translateY(-2px);box-shadow:var(--shadow-md)}
 .ec.on{border-color:var(--g400);background:var(--g50)}
 
-/* PIPELINE — VISUAL CARDS */
+/* PIPELINE - VISUAL CARDS */
 .pipe-wrap{display:flex;flex-direction:column;gap:12px}
 .pipe-card{border-radius:var(--rl);border:1.5px solid var(--border);background:var(--bg);overflow:hidden;transition:all 0.4s}
 .pipe-card.done{border-color:var(--g200);background:var(--g25)}
@@ -497,14 +497,14 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
     <!-- SCREENS -->
     <div class="main" id="mainArea">
 
-      <!-- ═══ HOME ═══ -->
+      <!-- HOME -->
       <div class="screen active" id="screen-home">
         <div class="home-scroll">
           <!-- HERO -->
           <div class="hero">
             <div class="hero-grid-bg"></div>
             <div class="hero-name">G<span>AI</span>A</div>
-            <div style="font-size:11px;font-weight:600;color:var(--g500);letter-spacing:2px;margin-bottom:6px;text-transform:uppercase">Geospatial Analysis and Inference Architecture</div>
+            <div style="font-size:11px;font-weight:600;color:var(--g500);letter-spacing:2px;margin-bottom:6px;text-transform:uppercase">Geospatial Automation and Inference Analysis</div>
             <div class="hero-sub">Magnetic Data Processing Platform</div>
             <div class="hero-btns">
               <button class="btn btn-g" style="padding:12px 28px;font-size:13px" onclick="openProjectsHub()">Projects</button>
@@ -512,9 +512,9 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             </div>
           </div>
           <div class="hsec" style="text-align:center">
-            <div class="hstitle" style="margin-bottom:10px"><span style="color:var(--g500)">GAaaS</span></div>
+            <div class="hstitle" style="margin-bottom:10px"><span style="color:var(--g500)">GAAS</span></div>
             <div style="font-size:13px;color:var(--text3);max-width:640px;margin:0 auto;line-height:1.8;font-weight:500">
-              Geophysical Automation as a Service for magnetic survey setup, quality control, processing, visualisation, and export in one workflow.
+              Geophysical Automation as a Service. GAAS brings project setup, traverse planning, magnetic processing, prediction review, visualisation, and export delivery into one guided workspace so teams can move from uploaded survey data to usable outputs without jumping between tools.
             </div>
           </div>
 
@@ -523,12 +523,12 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             <div class="hslabel">Platform</div>
             <div class="hstitle">Core capabilities</div>
             <div class="cap-grid">
-              <div class="cap-card"><div class="cap-t">GAIA AI</div><div class="cap-d">Get plain-language insights about your survey — anomaly descriptions, geological context, and recommendations, automatically.</div></div>
+              <div class="cap-card"><div class="cap-t">Aurora AI</div><div class="cap-d">Get clear, plain-language guidance about your survey setup, processing choices, outputs, and deliverables.</div></div>
               <div class="cap-card"><div class="cap-t">Corrections</div><div class="cap-d">Apply diurnal, IGRF, filtering, lag, and heading corrections to clean your data before modelling.</div></div>
-              <div class="cap-card"><div class="cap-t">Spatial modelling</div><div class="cap-d">Fill gaps across your survey area using three modelling approaches — choose the one that fits your data.</div></div>
+              <div class="cap-card"><div class="cap-t">Spatial modelling</div><div class="cap-d">Fill gaps across your survey area using three modelling approaches - choose the one that fits your data.</div></div>
               <div class="cap-card"><div class="cap-t">Interactive visualisation</div><div class="cap-d">View your results as heatmaps, contour overlays, or 3D surface plots on an interactive map.</div></div>
               <div class="cap-card"><div class="cap-t">Multi-format export</div><div class="cap-d">Download your processed results as PDF, GeoJSON, KML, Shapefile, CSV, or a ready-to-present report.</div></div>
-              <div class="cap-card"><div class="cap-t">End-to-end workflow</div><div class="cap-d">From raw survey CSV to final deliverable — everything happens in one place, no specialist software needed.</div></div>
+              <div class="cap-card"><div class="cap-t">End-to-end workflow</div><div class="cap-d">From raw survey CSV to final deliverable - everything happens in one place, no specialist software needed.</div></div>
             </div>
           </div>
 
@@ -541,7 +541,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
         </div>
       </div>
 
-      <!-- ═══ PROJECTS DIRECTORY ═══ -->
+      <!-- PROJECTS DIRECTORY -->
       <div class="screen" id="screen-projects">
         <div class="shdr" style="display:flex;align-items:center;gap:10px">
           <div style="flex:1">
@@ -556,7 +556,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
         </div>
       </div>
 
-      <!-- ═══ PROJECT OVERVIEW ═══ -->
+      <!-- PROJECT OVERVIEW -->
       <div class="screen" id="screen-project">
         <div class="shdr" style="display:flex;align-items:center;gap:10px">
           <div style="flex:1">
@@ -572,7 +572,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
           <div class="card" style="margin-bottom:20px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
               <div style="font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--text3);text-transform:uppercase">Project context</div>
-              <button class="btn btn-out btn-xs" id="projEditContextBtn">✎ Edit</button>
+              <button class="btn btn-out btn-xs" id="projEditContextBtn">Edit</button>
             </div>
             <div style="font-size:13px;color:var(--text2);line-height:1.8;font-weight:500" id="proj-context"></div>
           </div>
@@ -585,7 +585,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
         </div>
       </div>
 
-      <!-- ═══ PROJECT SETUP ═══ -->
+      <!-- PROJECT SETUP -->
       <div class="screen" id="screen-setup">
         <div class="shdr">
           <div class="stitle">Projects</div>
@@ -599,19 +599,19 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
           </div>
           <div id="setupFlash" style="display:none;margin-bottom:14px;padding:11px 13px;border-radius:var(--r);font-size:12px;font-weight:600"></div>
 
-          <!-- ── PANE 1: PROJECT DETAILS ── -->
+          <!-- PANE 1: PROJECT DETAILS -->
           <div id="setupProjectPane">
             <div class="sep first">Project</div>
             <div class="card" style="margin-bottom:14px">
-              <div class="frow"><label class="fl">Project name</label><input class="fi" id="projectNameInput" placeholder="Enter project name…"></div>
+              <div class="frow"><label class="fl">Project name</label><input class="fi" id="projectNameInput" placeholder="Enter project name..."></div>
               <div class="frow" style="margin-bottom:0"><label class="fl">Project context</label>
-                <textarea class="ftxt" id="projectContextInput" rows="4" placeholder="Describe the geology, survey area, previous work, and what you expect to find…"></textarea>
+                <textarea class="ftxt" id="projectContextInput" rows="4" placeholder="Describe the survey area, project goals, previous work, and any operational notes..."></textarea>
               </div>
             </div>
 
             <div class="sep">Reference files (optional)</div>
             <div class="card" style="margin-bottom:14px">
-              <div style="font-size:12px;color:var(--text2);font-weight:500;margin-bottom:12px">Upload relevant project documents — previous reports, field notes, PDFs, spatial reference data, or any supporting materials for this survey.</div>
+              <div style="font-size:12px;color:var(--text2);font-weight:500;margin-bottom:12px">Upload relevant project documents - previous reports, field notes, PDFs, spatial reference data, or any supporting materials for this survey.</div>
               <div id="basemapZone" class="upzone" style="padding:16px;cursor:pointer">
                 <div style="font-size:12.5px;font-weight:700;color:var(--text2)">Upload reference file</div>
                 <div style="font-size:11px;color:var(--text3);margin-top:3px">PDF, DOCX, TXT, KMZ, KML, Shapefile (.zip), GeoJSON · max 100 MB</div>
@@ -650,13 +650,13 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             </div>
           </div>
 
-          <!-- ── PANE 2: TASK SETUP ── -->
+          <!-- PANE 2: TASK SETUP -->
           <div id="setupTaskPane" style="display:none">
             <div class="sep first">Task</div>
             <div class="card" style="margin-bottom:14px">
-              <div class="frow"><label class="fl">Task name</label><input class="fi" id="taskNameInput" placeholder="Enter task name…"></div>
+              <div class="frow"><label class="fl">Task name</label><input class="fi" id="taskNameInput" placeholder="Enter task name..."></div>
               <div class="frow" style="margin-bottom:0"><label class="fl">Description</label>
-                <textarea class="ftxt" id="taskDescInput" rows="2" placeholder="Briefly describe this survey task (min 10 characters)…"></textarea>
+                <textarea class="ftxt" id="taskDescInput" rows="2" placeholder="Briefly describe this survey task (min 10 characters)..."></textarea>
               </div>
             </div>
 
@@ -710,7 +710,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
                     </div>
                     <div class="radio-opt" id="cs-utm" onclick="setCoordSystem('utm')">
                       <div class="radio-circle"></div>
-                      <div><div style="font-size:12.5px;font-weight:700">UTM</div><div style="font-size:10.5px;color:var(--text3);font-weight:500">Metres — easting / northing</div></div>
+                      <div><div style="font-size:12.5px;font-weight:700">UTM</div><div style="font-size:10.5px;color:var(--text3);font-weight:500">Metres - easting / northing</div></div>
                     </div>
                   </div>
                   <div id="utm-zone-row" style="display:none;margin-top:10px">
@@ -732,11 +732,11 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
               </div>
             </div>
 
-            <!-- Time column mapping — shown only for Raw data -->
+            <!-- Time column mapping shown only for Raw data -->
             <div id="rawDataSection" style="display:none">
               <div class="sep">Time columns</div>
               <div class="card" style="margin-bottom:14px">
-                <div style="font-size:12px;color:var(--text2);font-weight:500;margin-bottom:12px">Map the hour, minutes, and seconds columns — needed for diurnal correction.</div>
+                <div style="font-size:12px;color:var(--text2);font-weight:500;margin-bottom:12px">Map the hour, minutes, and seconds columns - needed for diurnal correction.</div>
                 <div id="timeMappingPlaceholder" style="font-size:12px;color:var(--text3);font-weight:500;padding:4px 0">Upload a file above to map time columns.</div>
                 <div id="timeMappingSelects" style="display:none">
                   <div class="colmap-grid">
@@ -768,42 +768,41 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             <div class="sep">Scenario</div>
             <div class="card" style="margin-bottom:14px">
               <div class="radio-group">
-                <div class="radio-opt selected" id="sc-explicit" onclick="setScenario('explicit')">
-                  <div class="radio-circle"><div class="radio-dot"></div></div>
-                  <div><div style="font-size:12.5px;font-weight:700">Explicit</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">train.csv / predict.csv split — known &amp; unknown points</div></div>
+                <div class="radio-opt" id="sc-auto" onclick="setScenario('')">
+                  <div class="radio-circle"></div>
+                  <div><div style="font-size:12.5px;font-weight:700">Automatic</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">Leave this open and the system will choose the simplest path from the task data.</div></div>
+                </div>
+                <div class="radio-opt" id="sc-explicit" onclick="setScenario('explicit')">
+                  <div class="radio-circle"></div>
+                  <div><div style="font-size:12.5px;font-weight:700">Explicit</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">train.csv / predict.csv split - known &amp; unknown points</div></div>
                 </div>
                 <div class="radio-opt" id="sc-sparse" onclick="setScenario('sparse')">
                   <div class="radio-circle"></div>
-                  <div><div style="font-size:12.5px;font-weight:700">Sparse</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">Full dataset as training — auto-generate grid from spacing</div></div>
+                  <div><div style="font-size:12.5px;font-weight:700">Sparse</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">Full dataset as training - auto-generate grid from spacing</div></div>
                 </div>
               </div>
             </div>
 
             <div id="predictedTraverseSection" style="display:none;margin-bottom:14px">
               <div class="sep" style="margin-top:0">Predicted traverses</div>
+              <div class="card" style="margin-bottom:10px">
+                <div style="font-size:10px;font-weight:700;letter-spacing:0.8px;color:var(--text4);text-transform:uppercase;margin-bottom:8px">Traverse type</div>
+                <div class="radio-group" style="margin-bottom:6px">
+                  <div class="radio-opt selected" id="pt-mode-offset" onclick="window.setPredictedTraverseMode('offset')">
+                    <div class="radio-circle"><div class="radio-dot"></div></div>
+                    <div><div style="font-size:12px;font-weight:700">Offset traverse</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">Create a new traverse away from the original line.</div></div>
+                  </div>
+                  <div class="radio-opt" id="pt-mode-infill" onclick="window.setPredictedTraverseMode('infill')">
+                    <div class="radio-circle"></div>
+                    <div><div style="font-size:12px;font-weight:700">Infill traverse</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">Create denser predicted stations along the original traverse direction.</div></div>
+                  </div>
+                </div>
+                <div style="font-size:10.5px;color:var(--text4);line-height:1.6">Once you choose a traverse type, only that setup stays visible so the spacing and preview always match what you selected.</div>
+              </div>
               <div id="predictedTraverseList" style="margin-bottom:8px">
                 <div style="font-size:11px;color:var(--text4);padding:6px 0">No predicted traverses added yet.</div>
               </div>
-              <div style="display:flex;gap:8px">
-                <button class="btn-sm" onclick="window.addPredictedTraverse('offset')" style="flex:1;font-size:11px">+ Offset traverse</button>
-                <button class="btn-sm" onclick="window.addPredictedTraverse('infill')" style="flex:1;font-size:11px">+ Infill spacing</button>
-              </div>
-              <div style="font-size:10.5px;color:var(--text4);margin-top:8px;line-height:1.5">
-                <b>Offset:</b> parallel traverse at a set distance &amp; bearing from the original.<br>
-                <b>Infill:</b> denser predictions along the same traverse line.
-              </div>
-            </div>
-
-            <div class="sep">Station spacing</div>
-            <div class="card" style="margin-bottom:14px">
-              <div class="frow" style="margin-bottom:0">
-                <label class="fl" id="spacingLabel">Distance between stations</label>
-                <div class="g2">
-                  <input class="fi" id="spacingInput" value="20">
-                  <select class="fsel" id="spacingUnit"><option>Metres</option><option>Kilometres</option><option>Feet</option></select>
-                </div>
-                <div style="font-size:10.5px;color:var(--text4);margin-top:6px;font-weight:500" id="spacingHint"></div>
-              </div>
+              <button class="btn-sm" id="addPredictedTraverseBtn" onclick="window.addPredictedTraverse()" style="width:100%;font-size:11px">+ Add offset traverse</button>
             </div>
 
             <div class="nfoot">
@@ -816,21 +815,21 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
       </div>
 
 
-      <!-- ═══ ANALYSIS ═══ -->
+      <!-- ANALYSIS -->
       <div class="screen" id="screen-analysis">
         <div class="shdr">
           <div class="stitle">Analysis Configuration</div>
-          <div class="ssub">Three independent panels — configure what applies, skip what doesn't</div>
+          <div class="ssub">Three independent panels - configure what applies, skip what doesn't</div>
         </div>
         <div class="scroll">
-          <div class="sep first">A — Corrections</div>
+          <div class="sep first">A - Corrections</div>
           <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">Diurnal correction</div><div class="chk-d">Remove daily geomagnetic variation using base station reference data</div></div></div>
           <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">IGRF removal</div><div class="chk-d">Subtract International Geomagnetic Reference Field at survey date and location</div></div></div>
           <div class="chk" id="chk-filtering" onclick="toggleFiltering(this)">
             <div class="chk-box"></div>
             <div style="flex:1">
               <div class="chk-t">Filtering</div>
-              <div class="chk-d">Spectral filtering — remove regional field or high-frequency noise</div>
+              <div class="chk-d">Spectral filtering - remove regional field or high-frequency noise</div>
               <div id="filter-opts" style="display:none;margin-top:10px">
                 <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:8px">Filter type</div>
                 <div style="display:flex;gap:8px">
@@ -846,11 +845,11 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
               </div>
             </div>
           </div>
-          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Lag correction</div><div class="chk-d">Sensor–GPS timing offset compensation — critical for vehicle-mounted sensors</div></div></div>
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Lag correction</div><div class="chk-d">Sensor/GPS timing offset compensation - critical for vehicle-mounted sensors</div></div></div>
           <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Heading correction</div><div class="chk-d">Remove directional bias between opposing survey line traverses</div></div></div>
 
           <div class="sep" style="display:flex;align-items:center;justify-content:space-between">
-            <span>B — Prediction modelling</span>
+            <span>B - Prediction modelling</span>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;font-weight:700;color:var(--text3)">
               <input type="checkbox" id="predModelToggle" checked style="width:14px;height:14px;accent-color:var(--g500)">
               Enabled
@@ -859,15 +858,15 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
           <div id="predModelSection">
           <div class="model-grid">
             <div class="mc" onclick="pickModel(this)"><div class="mc-name">Kriging</div><div class="mc-desc">Geostatistical interpolation with spherical variogram — produces prediction variance map</div></div>
-            <div class="mc on" onclick="pickModel(this)" id="mc-ml"><div class="mc-name">Machine learning</div><div class="mc-desc">XGBoost on corrected TMF. Explicit: train/predict split. Sparse: full dataset + auto-grid</div></div>
-            <div class="mc" onclick="pickModel(this)"><div class="mc-name">Hybrid</div><div class="mc-desc">Kriging interpolation with ML residual correction — best spatial accuracy</div></div>
+            <div class="mc on" onclick="pickModel(this)" id="mc-ml"><div class="mc-name">Machine learning</div><div class="mc-desc">Random-forest surface using coordinates and local density features. Explicit: train/predict split. Sparse: full dataset + generated targets</div></div>
+            <div class="mc" onclick="pickModel(this)"><div class="mc-name">Hybrid</div><div class="mc-desc">Random-forest trend plus kriged residuals, with weighted fallback only when the residual path cannot run</div></div>
           </div>
           </div>
 
           <div class="sep">C — Processing add-ons</div>
-          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Reduction to Pole (RTP)</div><div class="chk-d">Declination and inclination from reference model — makes anomalies symmetric over vertical sources</div></div></div>
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Reduction to Pole (RTP)</div><div class="chk-d">Uses supplied inclination and declination when available; QA will flag stabilized or fallback behaviour</div></div></div>
           <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">Analytic signal</div><div class="chk-d">Source body edge detection — maxima delineate geological contacts independent of inclination</div></div></div>
-          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">EMAG2 comparison</div><div class="chk-d">Compare against EMAG2 global 2-arc-minute model at survey extent</div></div></div>
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Regional residual</div><div class="chk-d">Separate the processed surface into regional and residual components using Gaussian smoothing</div></div></div>
           <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">First Vertical Derivative</div><div class="chk-d">Sharpen shallow anomalies and suppress broad regional trends for near-surface structure mapping</div></div></div>
           <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Horizontal Derivative</div><div class="chk-d">Highlight lateral gradients and edges along contacts, dykes, and fault traces</div></div></div>
 
@@ -878,7 +877,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
         </div>
       </div>
 
-      <!-- ═══ PREVIEW ═══ -->
+      <!-- PREVIEW -->
       <div class="screen" id="screen-preview" style="flex-direction:row;position:relative">
         <!-- Loading overlay -->
         <div class="pv-loading" id="pvLoadingOverlay" style="display:none">
@@ -892,24 +891,24 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             <div class="sep first" style="margin:0 0 10px;font-size:10px">Configuration summary</div>
             <div class="card" style="margin-bottom:10px;padding:0">
               <div style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text4);text-transform:uppercase">Survey &amp; scenario</div>
-              <div class="crow"><span class="ck">Project</span><span class="cv" id="pv-project">—</span></div>
-              <div class="crow"><span class="ck">Task</span><span class="cv" id="pv-task">—</span></div>
-              <div class="crow"><span class="ck">Points</span><span class="cv" id="pv-points">—</span></div>
-              <div class="crow"><span class="ck">Survey traverses</span><span class="cv" id="pv-traverses">—</span></div>
-              <div class="crow"><span class="ck">Predicted traverses</span><span class="cv" id="pv-pred-traverses">—</span></div>
-              <div class="crow"><span class="ck">Platform</span><span class="cv" id="pv-platform">—</span></div>
-              <div class="crow"><span class="ck">Scenario</span><span class="cv" id="pv-scenario">—</span></div>
-              <div class="crow"><span class="ck">Interpolation</span><span class="cv" id="pv-interp">—</span></div>
-              <div class="crow"><span class="ck">Grid</span><span class="cv" id="pv-grid">—</span></div>
+              <div class="crow"><span class="ck">Project</span><span class="cv" id="pv-project">-</span></div>
+              <div class="crow"><span class="ck">Task</span><span class="cv" id="pv-task">-</span></div>
+              <div class="crow"><span class="ck">Points</span><span class="cv" id="pv-points">-</span></div>
+              <div class="crow"><span class="ck">Survey traverses</span><span class="cv" id="pv-traverses">-</span></div>
+              <div class="crow"><span class="ck">Predicted traverses</span><span class="cv" id="pv-pred-traverses">-</span></div>
+              <div class="crow"><span class="ck">Platform</span><span class="cv" id="pv-platform">-</span></div>
+              <div class="crow"><span class="ck">Scenario</span><span class="cv" id="pv-scenario">-</span></div>
+              <div class="crow"><span class="ck">Interpolation</span><span class="cv" id="pv-interp">-</span></div>
+              <div class="crow"><span class="ck">Grid</span><span class="cv" id="pv-grid">-</span></div>
             </div>
             <div class="card" style="margin-bottom:10px;padding:0">
               <div style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text4);text-transform:uppercase">Processing &amp; outputs</div>
-              <div class="crow"><span class="ck">Mode</span><span class="cv" id="pv-mode">—</span></div>
-              <div class="crow"><span class="ck">Basemap</span><span class="cv" id="pv-basemap">—</span></div>
-              <div class="crow"><span class="ck">Corrections</span><span class="cv" id="pv-corrections">—</span></div>
-              <div class="crow"><span class="ck">Model</span><span class="cv" id="pv-model">—</span></div>
-              <div class="crow"><span class="ck">Add-ons</span><span class="cv" id="pv-addons">—</span></div>
-              <div class="crow"><span class="ck">Est. runtime</span><span class="cv" id="pv-runtime" style="color:var(--g500)">—</span></div>
+              <div class="crow"><span class="ck">Mode</span><span class="cv" id="pv-mode">-</span></div>
+              <div class="crow"><span class="ck">Basemap</span><span class="cv" id="pv-basemap">-</span></div>
+              <div class="crow"><span class="ck">Corrections</span><span class="cv" id="pv-corrections">-</span></div>
+              <div class="crow"><span class="ck">Model</span><span class="cv" id="pv-model">-</span></div>
+              <div class="crow"><span class="ck">Add-ons</span><span class="cv" id="pv-addons">-</span></div>
+              <div class="crow"><span class="ck">Est. runtime</span><span class="cv" id="pv-runtime" style="color:var(--g500)">-</span></div>
             </div>
           </div>
           <!-- Execute pinned to bottom -->
@@ -919,7 +918,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
           </div>
         </div>
 
-        <!-- RIGHT: map fills remaining space — absolute so height is always defined -->
+        <!-- RIGHT: map fills remaining space - absolute so height is always defined -->
         <div style="flex:1;position:relative;overflow:hidden">
           <div class="map-preview-wrap" style="position:absolute;top:0;left:0;right:0;bottom:0;margin:0;border-radius:0">
             <svg width="100%" height="100%" viewBox="0 0 520 300" id="previewMap"></svg>
@@ -974,20 +973,20 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
         <!-- AI chat panel -->
         <div class="a-panel" id="previewAIPanel">
           <div class="a-hdr">
-            <div class="a-title"><div class="a-gem"><div class="a-core"></div></div>GAIA AI<span class="badge bg" style="margin-left:auto;font-size:9.5px">AI</span></div>
+            <div class="a-title"><div class="a-gem"><div class="a-core"></div></div>Aurora AI<span class="badge bg" style="margin-left:auto;font-size:9.5px">AI</span></div>
             <div class="a-sub">Survey analysis</div>
           </div>
           <div class="a-body" id="previewAIBody" style="flex:1;overflow-y:auto;padding:14px 15px">
-            <div class="amsg" style="opacity:0.5;font-style:italic">Loading AI analysis…</div>
+            <div class="amsg" style="opacity:0.5;font-style:italic">Aurora AI is ready when you need it. Ask for setup help, QA checks, or output guidance.</div>
           </div>
           <div class="a-input-row">
-            <textarea id="previewAIInput" rows="2" placeholder="Ask about this survey, risks, expected outputs…"></textarea>
-            <button id="previewAISend" title="Send">↑</button>
+            <textarea id="previewAIInput" rows="2" placeholder="Ask Aurora AI about this survey or setup..."></textarea>
+            <button id="previewAISend" title="Send">Send</button>
           </div>
         </div>
       </div>
 
-      <!-- ═══ PROCESSING ═══ -->
+      <!-- PROCESSING -->
       <div class="screen" id="screen-processing" style="flex-direction:column">
         <div style="flex:1;overflow-y:auto;padding:20px 26px;position:relative">
           <div class="sep first">Pipeline execution</div>
@@ -1075,16 +1074,15 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
               <button class="btn btn-white" style="flex-shrink:0" onclick="go(document.querySelector('[data-s=visualisation]'))">View visualisations →</button>
             </div>
           </div>
-          <div style="margin-top:12px;font-size:11.5px;color:var(--text3);font-weight:500" id="procEta">Processing in progress…</div>
+          <div style="margin-top:12px;font-size:11.5px;color:var(--text3);font-weight:500" id="procEta">Processing in progress...</div>
         </div>
       </div>
 
-      <!-- ═══ VISUALISATION ═══ -->
+      <!-- VISUALISATION -->
       <div class="screen" id="screen-visualisation">
         <div style="padding:13px 20px 11px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap">
           <div class="vis-bar">
-            <div class="vt on" onclick="pickVis(this,'Heatmap')">Heatmap</div>
-            <div class="vt" onclick="pickVis(this,'Contour')">Contour</div>
+            <div class="vt on" onclick="pickVis(this,'Surface')">Surface</div>
             <div class="vt" onclick="pickVis(this,'3D')">3D surface</div>
             <div class="vt" onclick="pickVis(this,'Map')">Map overlay</div>
             <div class="vt" onclick="pickVis(this,'Line Profiles')">Line profiles</div>
@@ -1135,42 +1133,42 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             </div>
           </div>
           <div class="a-input-row" style="border-top:1px solid var(--border)">
-            <textarea id="visAIInput" rows="2" placeholder="Ask about anomalies, layers, interpretation…"></textarea>
-            <button id="visAISend" title="Send">↑</button>
+            <textarea id="visAIInput" rows="2" placeholder="Ask Aurora AI about this layer or output..."></textarea>
+            <button id="visAISend" title="Send">Send</button>
           </div>
         </div>
       </div>
-      <!-- ═══ EXPORT ═══ -->
+      <!-- EXPORT -->
       <div class="screen" id="screen-export" style="flex-direction:row">
         <div class="split-l">
           <div class="sep first">Select formats</div>
           <div class="ex-grid">
             <div class="ec on" id="ec-pdf" onclick="toggleEx(this)">
-              <div><div style="font-size:13px;font-weight:700;color:var(--text)">PDF report</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Full survey report with maps, stats, and AI interpretation</div></div>
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">PDF report</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Full survey report with maps, statistics, and delivery-ready summary</div></div>
               <div style="display:flex;gap:6px;margin-top:8px"></div>
             </div>
             <div class="ec on" id="ec-pptx" onclick="toggleEx(this)">
-              <div><div style="font-size:13px;font-weight:700;color:var(--text)">AI Presentation</div><div style="font-size:11px;color:var(--text3);margin-top:2px">AI-generated PowerPoint with interpretation and statistics</div></div>
-              <div style="display:flex;gap:6px;margin-top:8px"><span class="badge ba">GAIA AI</span></div>
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">AI Presentation</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Presentation deck with processing outputs, maps, and summary slides</div></div>
+              <div style="display:flex;gap:6px;margin-top:8px"><span class="badge ba">Aurora AI</span></div>
             </div>
             <div class="ec" id="ec-word" onclick="toggleEx(this)">
-              <div><div style="font-size:13px;font-weight:700;color:var(--text)">Word report</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Editable .docx with AI-generated commentary</div></div>
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">Word report</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Editable .docx report with structured survey notes</div></div>
               <div style="display:flex;gap:6px;margin-top:8px"></div>
             </div>
             <div class="ec" id="ec-geojson" onclick="toggleEx(this)">
-              <div><div style="font-size:13px;font-weight:700;color:var(--text)">GeoJSON</div><div style="font-size:11px;color:var(--text3);margin-top:2px">TMF values, anomaly flags, ML scores — QGIS / ArcGIS</div></div>
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">GeoJSON</div><div style="font-size:11px;color:var(--text3);margin-top:2px">TMF values, anomaly flags, ML scores - QGIS / ArcGIS</div></div>
               <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bg">GIS ready</span></div>
             </div>
             <div class="ec" id="ec-kml" onclick="toggleEx(this)">
-              <div><div style="font-size:13px;font-weight:700;color:var(--text)">KML / KMZ</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Google Earth — anomaly placemarks, lineaments</div></div>
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">KML / KMZ</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Google Earth - anomaly placemarks, lineaments</div></div>
               <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bg">Google Earth</span></div>
             </div>
             <div class="ec" id="ec-csv" onclick="toggleEx(this)">
-              <div><div style="font-size:13px;font-weight:700;color:var(--text)">CSV + XYZ grid</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Corrected TMF, anomaly scores, uncertainty — Petrel / Montaj</div></div>
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">CSV + XYZ grid</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Corrected TMF, anomaly scores, uncertainty - Petrel / Montaj</div></div>
               <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bgr">Geosoft / Petrel</span></div>
             </div>
             <div class="ec" id="ec-gdb" onclick="toggleEx(this)">
-              <div><div style="font-size:13px;font-weight:700;color:var(--text)">File GDB</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Esri feature classes — full ArcGIS schema</div></div>
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">File GDB</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Esri feature classes - full ArcGIS schema</div></div>
               <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bb">ArcGIS</span></div>
             </div>
             <div class="ec" id="ec-png" onclick="toggleEx(this)">
@@ -1179,9 +1177,9 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             </div>
           </div>
 
-          <div class="sep">AI report options</div>
+          <div class="sep">Report options</div>
           <div class="card card-g" style="margin-bottom:14px">
-            <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:11px">Customise AI report content</div>
+            <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:11px">Choose what to include in the report</div>
             <div class="g2" style="gap:8px">
               <div class="chk on" style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)"><div class="chk-box on">✓</div><span class="chk-t" style="font-size:12px">Anomaly catalogue</span></div>
               <div class="chk on" style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)"><div class="chk-box on">✓</div><span class="chk-t" style="font-size:12px">Drilling recommendations</span></div>
@@ -1198,8 +1196,8 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
           <div id="exportProg" style="display:none;margin-top:18px">
             <div class="sep">Progress</div>
             <div class="card card-sm">
-              <div class="eprow"><div class="epname">PDF</div><div class="epbar"><div class="epfill" id="e-pdf" style="width:0%;background:var(--red)"></div></div><div class="epsize">—</div><span class="badge bgr" id="e-pdf-s">Queued</span></div>
-              <div class="eprow"><div class="epname">PPTX</div><div class="epbar"><div class="epfill" id="e-pptx" style="width:0%;background:var(--amber)"></div></div><div class="epsize">—</div><span class="badge bgr" id="e-pptx-s">Queued</span></div>
+              <div class="eprow"><div class="epname">PDF</div><div class="epbar"><div class="epfill" id="e-pdf" style="width:0%;background:var(--red)"></div></div><div class="epsize">-</div><span class="badge bgr" id="e-pdf-s">Queued</span></div>
+              <div class="eprow"><div class="epname">PPTX</div><div class="epbar"><div class="epfill" id="e-pptx" style="width:0%;background:var(--amber)"></div></div><div class="epsize">-</div><span class="badge bgr" id="e-pptx-s">Queued</span></div>
             </div>
           </div>
           <div id="exportDone" style="display:none;margin-top:14px">
@@ -1213,15 +1211,15 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
         </div>
         <div class="a-panel">
           <div class="a-hdr">
-            <div class="a-title"><div class="a-gem"><div class="a-core" style="width:9px;height:9px;border-radius:50%;background:var(--g400)"></div></div>GAIA AI<span class="badge bg" style="margin-left:auto;font-size:9.5px">AI</span></div>
+            <div class="a-title"><div class="a-gem"><div class="a-core" style="width:9px;height:9px;border-radius:50%;background:var(--g400)"></div></div>Aurora AI<span class="badge bg" style="margin-left:auto;font-size:9.5px">AI</span></div>
             <div class="a-sub">Export guidance</div>
           </div>
           <div class="a-body" id="exportAIBody" style="flex:1;overflow-y:auto;padding:14px 15px">
-            <div class="amsg" style="opacity:0.5;font-style:italic">Loading AI guidance…</div>
+            <div class="amsg" style="opacity:0.5;font-style:italic">Aurora AI is ready when you need it. Ask about export formats or delivery choices.</div>
           </div>
           <div class="a-input-row">
-            <textarea id="exportAIInput" rows="2" placeholder="Ask about export formats, deliverables…"></textarea>
-            <button id="exportAISend" title="Send">↑</button>
+            <textarea id="exportAIInput" rows="2" placeholder="Ask Aurora AI about export formats..."></textarea>
+            <button id="exportAISend" title="Send">Send</button>
           </div>
         </div>
       </div>
@@ -1241,7 +1239,7 @@ function goProjectScreen(){
   document.getElementById('ctxBadge').style.display='flex';
   cur='project';
 }
-var state={platform:'ground',scenario:'explicit',mode:'single',model:'ml',basemap:false,files:1,lineMode:'line',gridRows:12,gridCols:8};
+var state={platform:'ground',scenario:'',mode:'single',model:'ml',basemap:false,files:1,lineMode:'line',gridRows:12,gridCols:8};
 var smap={home:'Ready',projects:'Projects',setup:'Projects',analysis:'Configuring analysis pipeline',preview:'Review configuration',processing:'Pipeline executing...',visualisation:'Results ready',export:'Export centre'};
 var sorder=['home','projects','setup','analysis','preview','processing','visualisation','export'];
 
@@ -1279,7 +1277,7 @@ function go(el){
   cur=s;
   setStatus(smap[s]||'Ready',sorder.indexOf(s)-1);
   if(s==='processing'){if(!procStarted)startProc();}
-  if(s==='visualisation')drawVis('Heatmap');
+  if(s==='visualisation')drawVis('Surface');
   if(s==='preview')drawPreviewMap();
 }
 
@@ -1293,16 +1291,16 @@ function setStatus(txt,idx){
 function toggleDark(){
   var dark=document.documentElement.getAttribute('data-theme')==='dark';
   document.documentElement.setAttribute('data-theme',dark?'light':'dark');
-  document.getElementById('dmBtn').textContent=dark?'☀':'☾';
-  if(cur==='visualisation')drawVis(document.querySelector('.vt.on')?.textContent||'Heatmap');
+  document.getElementById('dmBtn').textContent=dark?'\u2600':'\u263D';
+  if(cur==='visualisation')drawVis(document.querySelector('.vt.on')?.textContent||'Surface');
   if(cur==='preview')drawPreviewMap();
 }
 
 function toggleFS(){
-  if(!document.fullscreenElement){document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen();document.getElementById('fsBtn').textContent='⊠';}
-  else{document.exitFullscreen&&document.exitFullscreen();document.getElementById('fsBtn').textContent='⛶';}
+  if(!document.fullscreenElement){document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen();document.getElementById('fsBtn').textContent='\u25A0';}
+  else{document.exitFullscreen&&document.exitFullscreen();document.getElementById('fsBtn').textContent='\u26F6';}
 }
-document.addEventListener('fullscreenchange',function(){if(!document.fullscreenElement)document.getElementById('fsBtn').textContent='⛶';});
+document.addEventListener('fullscreenchange',function(){if(!document.fullscreenElement)document.getElementById('fsBtn').textContent='\u26F6';});
 
 /* ---- RADIO HANDLERS ---- */
 function setPlatform(p){
@@ -1319,20 +1317,26 @@ function setPlatform(p){
 }
 
 function setScenario(sc){
-  state.scenario=sc;
+  state.scenario=sc||'';
+  var auto=document.getElementById('sc-auto');
   var ex=document.getElementById('sc-explicit');
   var sp=document.getElementById('sc-sparse');
-  var si=document.getElementById('spacingInput');
-  var su=document.getElementById('spacingUnit');
-  var sl=document.getElementById('spacingLabel');
-  var sh=document.getElementById('spacingHint');
   var pts=document.getElementById('predictedTraverseSection');
+  [[auto,!state.scenario],[ex,state.scenario==='explicit'],[sp,state.scenario==='sparse']].forEach(function(pair){
+    var el=pair[0],on=pair[1];
+    if(!el)return;
+    el.classList.toggle('selected',!!on);
+    var circle=el.querySelector('.radio-circle');
+    if(circle)circle.innerHTML=on?'<div class="radio-dot"></div>':'';
+  });
+  if(pts)pts.style.display=state.scenario==='sparse'?'block':'none';
+  return;
   if(sc==='explicit'){
     ex.classList.add('selected');ex.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
     sp.classList.remove('selected');sp.querySelector('.radio-circle').innerHTML='';
     si.disabled=true;su.disabled=true;
     sl.style.color='var(--disabled-text)';
-    sh.textContent='Station spacing is not used in Explicit mode — the predict.csv defines locations.';
+    sh.textContent='Station spacing is not used in Explicit mode - the predict.csv defines locations.';
     if(pts)pts.style.display='none';
   }else{
     sp.classList.add('selected');sp.querySelector('.radio-circle').innerHTML='<div class="radio-dot"></div>';
@@ -1541,7 +1545,7 @@ function pickVis(el,mode){
   el.classList.add('on');drawVis(mode);
 }
 function drawVis(mode){
-  // Placeholder — real implementation is provided by the ES module (visualisation.js).
+  // Placeholder - real implementation is provided by the ES module (visualisation.js).
   // The module overrides window.drawVis at DOMContentLoaded.
 }
 
@@ -1617,11 +1621,11 @@ function setFilter(type){
 }
 
 window.addEventListener('DOMContentLoaded',function(){
-  setScenario('explicit');
+  setScenario('');
   setPlatform('ground');
   drawPreviewMap();
   renderProcMap();
-  drawVis('Heatmap');
+  drawVis('Surface');
 });
 </script>
 <script type="module" src="/frontend/js/app.js"></script>

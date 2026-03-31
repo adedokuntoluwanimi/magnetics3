@@ -23,7 +23,7 @@ const ADD_ON_LABELS = {
   analytic_signal: "Analytic signal",
   first_vertical_derivative: "First vertical derivative",
   horizontal_derivative: "Horizontal derivative",
-  emag2: "EMAG2 comparison",
+  emag2: "Regional residual",
   uncertainty: "Uncertainty",
 };
 
@@ -67,7 +67,7 @@ function renderPreview(payload) {
   setVal("pv-traverses", payload.traverse_count ? String(payload.traverse_count) : "—");
   setVal("pv-pred-traverses", payload.predicted_traverse_count ? String(payload.predicted_traverse_count) : "—");
   setVal("pv-platform", task.platform ? titleCase(task.platform) : "—");
-  setVal("pv-scenario", task.scenario ? titleCase(task.scenario) : "—");
+  setVal("pv-scenario", task.scenario ? titleCase(task.scenario) : "Optional / automatic");
   const lineMode = task.line_interpolation === false ? "grid" : (window.state?.lineMode || "line");
   const gridRows = window.state?.gridRows || "—";
   const gridCols = window.state?.gridCols || "—";
@@ -222,9 +222,10 @@ function _loadPreviewAI() {
   if (!_previewChat) {
     _previewChat = initAIChat(bodyEl, inputEl, sendEl, {location: "preview"});
   }
-  _previewChat.autoLoad(
-    "Analyse this survey configuration. Explain the expected outputs, flag any risks or data gaps, and give one operational recommendation."
-  );
+  if (!bodyEl.dataset.readyMessage) {
+    bodyEl.innerHTML = "<div class='amsg'>Aurora AI is ready. Ask about setup choices, traverse planning, data checks, or what to review before processing.</div>";
+    bodyEl.dataset.readyMessage = "1";
+  }
 }
 
 window.drawPreviewMap = async () => {

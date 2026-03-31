@@ -20,91 +20,72 @@ Read these first:
   `app-01-488817`
 - AI project:
   `app-01-488817-ai`
-- Latest ready revision:
-  `gaia-magnetics-00060-rtr`
+- Latest live revision:
+  `gaia-magnetics-00065-zkf`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
-> All changes deployed to revision `gaia-magnetics-00060-rtr`. Health verified ok.
+> Revision `gaia-magnetics-00065-zkf` is live and `/api/health` returned `{"status":"ok"}` after deploy.
 
 ## What Changed Most Recently
 
-### AI assistant fully wired to Claude Sonnet 4.6
+### Product and UI updates
 
-- `backend/config.py`: model default now `claude-sonnet-4-6`.
-- `backend/gcp/vertex_ai.py`: `VertexAIClient` (was `VertexAuroraClient`);
-  `max_tokens` param added; alias kept.
-- `backend/services/container.py`: wired `VertexAIClient` and `storage_backend` into `AIService`.
-- `backend/services/ai_service.py`:
-  - System prompt removes "Aurora" branding.
-  - Prompt now passes a focused context block (project, task, config, stats, station sample).
-  - Reference file (`task.basemap_file`) downloaded from GCS and text-extracted per format
-    (PDF via pdfminer, DOCX via python-docx, TXT, KML, KMZ, GeoJSON/JSON); capped at 6000 chars.
-  - Export path: 3000 tokens, structured prompt with labelled sections.
-  - `_parse_response` correctly maps `EXECUTIVE SUMMARY` → `summary`,
-    `KEY FINDINGS` / `MODELLING NOTES` / `RECOMMENDATIONS` → `highlights`.
-- `backend/services/export_service.py`:
-  - Export AI call now passes full GCS results (stats + 50-point sample) as `extra_results`.
-  - PDF rebuilt with `SimpleDocTemplate` (proper styles, stats table).
-  - DOCX rebuilt with config table, stats table, full AI analysis.
-  - PPTX rebuilt as 6-slide deck using AI-generated content.
+- User-visible assistant branding is `Aurora AI`.
+- Setup now treats scenario selection as optional.
+- Predicted traverse mode is simplified to a single active choice:
+  `infill` or `offset`.
+- Sidebar project arrow was enlarged.
+- Preview and downstream state now preserve predicted traverse metadata more accurately.
+- Visualisation now supports viewing all traverses together or focusing on a selected traverse.
+- Combined heatmap/contour presentation remains the main surface view.
 
-### Interactive AI chatbox on all three screens
+### Processing and wording updates
 
-- New: `frontend/js/shared/ai_chat.js` — shared chat module.
-  `initAIChat(bodyEl, inputEl, sendEl, {location})` → `{autoLoad, clear}`.
-- **Preview**: new `a-panel` added to the right of the map in `screen-preview`.
-  Wired in `preview.js`; auto-loads on every `loadPreview()`.
-- **Visualisation**: chat input row added below the right stats panel in `screen-visualisation`.
-  `renderInterpretation` fires a layer-specific auto-load on every layer change.
-  Chat body (`visAIBody`) persists; layer card (`visLayerCard`) refreshes separately.
-  Chat initialised via `MutationObserver` in `initVisualisation` since `visAIBody`
-  is created lazily by the first `renderInterpretation` call.
-- **Export**: existing `a-panel` upgraded from static one-shot content to live chat.
-  Input row added. `_ensureExportChat()` called from `initExport` and `loadExportView`.
+- Predicted stations now carry values intended for overlay/readout use.
+- Some fallback and processing descriptions were simplified to remove unnecessary jargon.
+- Frontend result loading was tightened to reduce repeated fetches and improve perceived load time.
 
-### Aurora text removed
+### Mojibake cleanup
 
-- All user-visible "Aurora" text replaced with "GAIA AI" or neutral "AI".
-- Affected: export format card descriptions, section headings, panel headers,
-  processing step detail, home page capability card.
-- Internal Python class/variable names (`AuroraResponse`, `aurora_sections` API field)
-  left unchanged to avoid breaking the API contract.
+- `frontend/index.html` received a full mojibake cleanup sweep.
+- Corrupted arrows, placeholders, checkmarks, separators, map attribution text, upload controls, and default placeholders were fixed across all frontend pages.
+- Frontend scan for common mojibake sequences is clean.
 
 ## Most Important Files To Check First
 
-- `backend/config.py`
-- `backend/gcp/vertex_ai.py`
-- `backend/services/ai_service.py`
-- `backend/services/export_service.py`
-- `backend/services/container.py`
-- `frontend/js/shared/ai_chat.js`
-- `frontend/js/sections/preview.js`
-- `frontend/js/sections/visualisation.js`
-- `frontend/js/sections/export.js`
 - `frontend/index.html`
+- `frontend/js/state.js`
+- `frontend/js/sections/setup.js`
+- `frontend/js/sections/preview.js`
+- `frontend/js/sections/processing.js`
+- `frontend/js/sections/visualisation.js`
+- `frontend/js/sections/maps.js`
+- `frontend/js/sections/export.js`
+- `frontend/js/sections/analysis.js`
+- `backend/services/preview_service.py`
+- `backend/services/processing_service.py`
+- `backend/services/ai_service.py`
+- `backend/routes/tasks.py`
 
 ## Remaining Gaps
 
-1. **Deploy required** — run deploy command below, then verify `/api/health` and homepage.
-2. **SA permissions** — verify `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
-   has `roles/aiplatform.user` on project `app-01-488817-ai`. Without this the AI calls
-   will fail silently (falling back to deterministic text).
-3. Long-running processing still times out on live smoke; needs investigation.
-4. `predicted_points` still use sampled surface values for hover/readout.
-5. Export Cloud Run Job not yet implemented.
-6. Full browser click-through after deploy.
+1. Manual browser click-through on the latest live build.
+2. End-to-end confirmation on a real dataset that predicted overlay values render exactly as expected.
+3. Per-traverse grid rendering is still a potential follow-up if current filtering is not enough.
+4. Exports still execute in the API path rather than a dedicated job flow.
+5. Watch live processing and export latency after the recent UI and metadata changes.
 
 ## Deploy Command
 
 ```powershell
-gcloud run deploy gaia-magnetics --source gaia-magnetics --region=us-central1 --project=app-01-488817 --quiet
+gcloud run deploy gaia-magnetics --source . --region=us-central1 --project=app-01-488817 --quiet
 ```
 
 ## Working Style
 
-- Keep updates short and direct.
+- Keep updates short and concrete.
 - Prefer fixing and verifying over only describing.
 - If you deploy, report the exact revision and URL.
 - If you make assumptions, state them after the work.
-- No "Aurora" branding in user-visible text. Internal Python names are fine to keep.
+- Keep user-visible AI wording as `Aurora AI` unless the user asks to change it.

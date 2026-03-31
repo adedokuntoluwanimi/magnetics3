@@ -1,5 +1,17 @@
 from .ai import AuroraRequest, AuroraResponse
-from .processing import AnalysisConfig, ExportJob, ExportRequest, PipelineRun, PipelineStep
+from .processing import (
+    AnalysisConfig,
+    ExportJob,
+    ExportRequest,
+    MetricSummary,
+    PipelineRun,
+    PipelineStep,
+    ProcessingFallbackEvent,
+    ProcessingStageSummary,
+    QAReport,
+    ValidationIssue,
+    ValidationSummary,
+)
 from .project import (
     ArtifactRecord,
     ColumnMapping,
@@ -20,11 +32,17 @@ __all__ = [
     "DatasetProfile",
     "ExportJob",
     "ExportRequest",
+    "MetricSummary",
     "PipelineRun",
     "PipelineStep",
+    "ProcessingFallbackEvent",
+    "ProcessingStageSummary",
     "ProjectCreate",
     "ProjectRecord",
+    "QAReport",
     "TaskCreatePayload",
     "TaskRecord",
     "TaskSummary",
+    "ValidationIssue",
+    "ValidationSummary",
 ]
