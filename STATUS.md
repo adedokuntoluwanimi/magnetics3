@@ -9,7 +9,7 @@ Last updated: `2026-03-31`
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00065-zkf`
+  `gaia-magnetics-00067-b5x`
 - Region:
   `us-central1`
 - Infra project:
@@ -19,7 +19,7 @@ Last updated: `2026-03-31`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
-> Revision `gaia-magnetics-00065-zkf` is serving 100% traffic. `/api/health` returned `{"status":"ok"}` after deploy.
+> Revision `gaia-magnetics-00067-b5x` is serving 100% traffic. `/api/health` returned `{"status":"ok"}` after deploy.
 
 ## Current Product State
 
@@ -55,6 +55,16 @@ Last updated: `2026-03-31`
 - Simplified processing-step wording for cases such as unavailable IGRF dependencies.
 - Preserved predicted magnetic values on generated stations so overlay readouts can use them.
 - Improved frontend result caching to reduce repeat fetches and soften load-time delays in visualisation flows.
+- Blank scenario no longer defaults to `explicit`; it now resolves to an analysis-only automatic path.
+- Single uploaded traverses now stay single instead of being split into many inferred lines.
+- Derived layers/add-ons can now be produced even when predictive modelling is turned off.
+
+### Analysis and setup controls
+
+- Scenario setup now has an explicit `Off` option for users who do not want predictive modelling.
+- Dark-mode contrast was improved for visualisation plots and assistant surfaces.
+- The canned “Aurora AI is ready...” placeholder text was removed from the frontend assistant panels.
+- The Aurora side panel now has a black border treatment.
 
 ### Mojibake cleanup
 
@@ -65,7 +75,8 @@ Last updated: `2026-03-31`
 ### Deployment
 
 - Deployed the latest frontend cleanup and current app state to Cloud Run.
-- Live revision is now `gaia-magnetics-00065-zkf`.
+- Deployed the single-traverse, optional-scenario, dark-mode, and setup `Off` option fixes.
+- Live revision is now `gaia-magnetics-00067-b5x`.
 
 ## Important Open Items
 
@@ -76,6 +87,7 @@ Last updated: `2026-03-31`
 5. Verify Vertex AI permissions remain correct for
    `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
    on `app-01-488817-ai`.
+6. Re-run older tasks created before revision `gaia-magnetics-00066-99m` if they still show bad inferred traverses or skipped layers, because their stored results may predate the fix.
 
 ## Main Files Most Relevant Right Now
 
@@ -105,5 +117,5 @@ Last updated: `2026-03-31`
 - `python -m unittest tests.test_processing_service` passed during the recent processing changes.
 - `node --check` passed on the updated frontend modules touched in the previous feature pass.
 - Frontend mojibake scan across `frontend/index.html`, `frontend/js`, and `frontend/css` is clean.
-- Cloud Run deploy completed successfully to revision `gaia-magnetics-00065-zkf`.
+- Cloud Run deploy completed successfully to revision `gaia-magnetics-00067-b5x`.
 - Live health endpoint returned `{"status":"ok"}`.

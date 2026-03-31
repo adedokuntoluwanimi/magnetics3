@@ -69,6 +69,34 @@ class ProcessingServiceTests(unittest.TestCase):
         self.assertLessEqual(report.get("after_rmse", 1e9), report.get("before_rmse", 0))
         self.assertGreater(report.get("affected_points", 0), 0)
 
+    def test_single_mode_keeps_one_inferred_line(self):
+        frame = pd.DataFrame(
+            {
+                "latitude": np.linspace(6.74, 6.75, 12),
+                "longitude": np.linspace(3.376, 3.378, 12),
+                "magnetic": np.linspace(32970.0, 32980.0, 12),
+                "_hour": [14] * 12,
+                "_minute": list(range(12)),
+                "_second": [0] * 12,
+            }
+        )
+        cleaned = self.service._clean_dataframe({"processing_mode": "single"}, frame)
+        self.assertEqual(int(cleaned["_line_id"].nunique()), 1)
+
+    def test_blank_scenario_becomes_automatic_without_prediction_targets(self):
+        frame = pd.DataFrame(
+            {
+                "latitude": np.linspace(6.74, 6.75, 8),
+                "longitude": np.linspace(3.376, 3.378, 8),
+                "magnetic": np.linspace(32970.0, 32980.0, 8),
+                "_line_id": [0] * 8,
+                "along_line_m": np.linspace(0.0, 70.0, 8),
+            }
+        )
+        prep = self.service._prepare_prediction_inputs({"processing_mode": "single"}, frame)
+        self.assertEqual(prep["scenario"], "automatic")
+        self.assertTrue(prep["predict_frame"].empty)
+
     def test_hybrid_model_reports_residual_strategy(self):
         lon = np.linspace(3.0, 3.01, 8)
         lat = np.linspace(7.0, 7.01, 8)

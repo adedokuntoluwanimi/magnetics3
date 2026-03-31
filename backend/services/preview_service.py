@@ -71,6 +71,20 @@ class PreviewService:
         if not points:
             return 0, int(len(task.get("predicted_traverses") or []))
 
+        line_ids = {
+            p.get("line_id")
+            for p in points
+            if p.get("line_id") is not None and not p.get("is_base_station")
+        }
+        if line_ids:
+            configured_predicted = task.get("predicted_traverses") or []
+            predicted_count = int(len(configured_predicted)) if configured_predicted else 0
+            return len(line_ids), predicted_count
+
+        if str(task.get("processing_mode") or "").lower() == "single" and len(task.get("survey_files") or []) <= 1:
+            configured_predicted = task.get("predicted_traverses") or []
+            return 1, int(len(configured_predicted))
+
         uploaded_count = int(len(task.get("survey_files") or [])) if task.get("processing_mode") == "multi" else 0
 
         spacing_value = float(task.get("station_spacing") or 20)
@@ -103,9 +117,15 @@ class PreviewService:
         predicted_count = len(pred_labels) if pred_labels else len({round(p["latitude"] / tol) for p in predicted_points})
         return survey_count, predicted_count
 
+    def _resolve_scenario(self, task: dict) -> str:
+        scenario = str(task.get("scenario") or "").strip().lower()
+        if scenario in {"explicit", "sparse"}:
+            return scenario
+        return "automatic"
+
     def _extract_predicted_points(self, task: dict) -> list[dict]:
         """Generate predicted station positions from user-defined predicted traverses."""
-        scenario = (task.get("scenario") or "explicit").lower()
+        scenario = self._resolve_scenario(task)
         predicted_traverses = task.get("predicted_traverses") or []
 
         # For explicit scenario: predicted targets come from is_predicted_target flag in measured points

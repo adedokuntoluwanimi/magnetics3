@@ -785,11 +785,11 @@ export function initSetup() {
     if (!window.state) window.state = {};
     window.state.scenario = scenario;
     legacySetScenario?.(scenario);
-    const ids = ["sc-auto", "sc-explicit", "sc-sparse"];
+    const ids = ["sc-off", "sc-explicit", "sc-sparse"];
     ids.forEach((id) => {
       const node = getEl(id);
       if (!node) return;
-      const active = (id === "sc-auto" && !scenario) || id === `sc-${scenario}`;
+      const active = (id === "sc-off" && !scenario) || id === `sc-${scenario}`;
       node.classList.toggle("selected", active);
       const circle = node.querySelector(".radio-circle");
       if (circle) circle.innerHTML = active ? '<div class="radio-dot"></div>' : "";

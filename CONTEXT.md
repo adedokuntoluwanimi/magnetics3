@@ -23,7 +23,7 @@ This file captures the current working context for `gaia-magnetics`.
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00065-zkf`
+  `gaia-magnetics-00067-b5x`
 - Region:
   `us-central1`
 - Infra project:
@@ -56,7 +56,7 @@ This file captures the current working context for `gaia-magnetics`.
 
 - Two-step setup flow:
   `Project details -> Task setup`
-- Scenario selection is optional.
+- Scenario selection is optional and now includes an explicit `Off` option.
 - Prediction mode now expects one selected predicted-traverse type:
   `infill` or `offset`.
 - Old generic station-spacing handling was reduced so generated traverses depend on the chosen prediction mode.
@@ -67,6 +67,7 @@ This file captures the current working context for `gaia-magnetics`.
 - Preview renders Google Maps-backed station maps.
 - Summary cards show survey traverses and predicted traverses separately.
 - Predicted traverse counts now reflect configured traverses more accurately.
+- Single uploaded traverses are meant to remain a single traverse through preview and processing.
 - Assistant surface uses `Aurora AI`.
 
 ### Processing
@@ -74,12 +75,15 @@ This file captures the current working context for `gaia-magnetics`.
 - Processing pipeline persists richer metadata and predicted-station magnetic values.
 - User-facing step descriptions were simplified where needed, especially around fallback wording.
 - Result loading in the frontend is cached more aggressively to reduce repeat fetch delays.
+- Blank scenario now resolves to an automatic analysis-only path instead of defaulting to `explicit`.
+- Derived layers/add-ons can still be generated when predictive modelling is disabled.
 
 ### Visualisation
 
 - Combined surface presentation remains heatmap plus contour.
 - Users can now choose to view all traverses together or focus on a selected traverse.
 - Layer-driven views and maps remain powered by the processed task results.
+- Dark-mode contrast for plots and assistant surfaces was improved.
 - Assistant surface uses `Aurora AI`.
 
 ### Export
@@ -118,6 +122,7 @@ This file captures the current working context for `gaia-magnetics`.
 3. Revisit per-traverse surface rendering if the current traverse filter is not sufficient.
 4. Keep an eye on live processing latency and export response time.
 5. Continue reducing stale wording in docs and UI where older assumptions remain.
+6. Older tasks may need a fresh processing run to regenerate results with the current single-traverse fix.
 
 ## Deployment Note
 

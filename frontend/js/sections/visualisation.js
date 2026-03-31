@@ -19,6 +19,19 @@ import {renderStationMap} from "./maps.js";
 let plotlyPromise = null;
 const _customPalettes = {};
 
+function themeValue(token, fallback = "") {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+  return value || fallback;
+}
+
+function getPlotTheme() {
+  return {
+    text: themeValue("--text3", "#5f6d64"),
+    grid: themeValue("--border2", "rgba(0,0,0,0.12)"),
+    contourLine: themeValue("--border3", "rgba(20,30,24,0.28)"),
+  };
+}
+
 function getLayerPalette(layer) {
   const custom = _customPalettes[layer.id];
   if (custom?.length >= 2) return custom;
@@ -635,10 +648,6 @@ function renderInterpretation(layer, stats, displayData) {
     </div>
   `;
 
-  if (aiBody && !aiBody.dataset.readyMessage) {
-    aiBody.innerHTML = "<div class='amsg'>Aurora AI is ready. Ask for a simple summary of this layer, a traverse comparison, or help choosing the clearest view.</div>";
-    aiBody.dataset.readyMessage = "1";
-  }
 }
 
 async function renderLineProfiles(results, layer, stats) {
@@ -700,13 +709,14 @@ async function renderLineProfiles(results, layer, stats) {
     }
   });
 
+  const plotTheme = getPlotTheme();
   await Plotly.newPlot(host, traces, {
     margin: {t: 20, r: 12, b: 48, l: 56},
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
-    font: {color: "#5f6d64", size: 11},
-    xaxis: {title: "Distance along traverse (m)", gridcolor: "rgba(0,0,0,0.06)"},
-    yaxis: {title: appState.stackProfiles ? `${layer.shortLabel} (${layer.unit}) - stacked` : `${layer.shortLabel} (${layer.unit})`, gridcolor: "rgba(0,0,0,0.06)"},
+    font: {color: plotTheme.text, size: 11},
+    xaxis: {title: "Distance along traverse (m)", gridcolor: plotTheme.grid},
+    yaxis: {title: appState.stackProfiles ? `${layer.shortLabel} (${layer.unit}) - stacked` : `${layer.shortLabel} (${layer.unit})`, gridcolor: plotTheme.grid},
     showlegend: true,
     legend: {font: {size: 9}},
     hovermode: "closest",
@@ -728,7 +738,7 @@ async function renderPlot(mode, results, layer) {
     margin: {t: 20, r: 12, b: 42, l: 48},
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
-    font: {color: "#5f6d64"},
+    font: {color: getPlotTheme().text},
   };
   const colorscale = paletteToPlotly(getLayerPalette(layer));
 
@@ -747,7 +757,7 @@ async function renderPlot(mode, results, layer) {
       type: "contour",
       colorscale,
       contours: {coloring: "none", showlabels: false},
-      line: {width: 1, color: "rgba(20,30,24,0.28)"},
+      line: {width: 1, color: getPlotTheme().contourLine},
       showscale: false,
       hoverinfo: "skip",
     }], {...commonLayout, xaxis: {title: "Longitude"}, yaxis: {title: "Latitude"}}, {displayModeBar: false, responsive: true});
@@ -851,8 +861,8 @@ export async function loadVisualisation() {
   if (_isSingleTraverse && (mode === "Surface" || mode === "Heatmap" || mode === "Contour" || mode === "3D")) {
     const _hint = document.createElement("div");
     _hint.id = "_visSingleTraverseHint";
-    _hint.style.cssText = "position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:200;background:rgba(255,247,230,0.97);border:1px solid #e9c46a;border-radius:8px;padding:7px 14px;font-family:'Manrope',sans-serif;font-size:11px;color:#7a5a00;display:flex;align-items:center;gap:10px;pointer-events:auto;white-space:nowrap";
-    _hint.innerHTML = `<span>Single traverse detected — <button onclick="window.drawVis('Line Profiles')" style="background:none;border:none;color:#1a7f4b;font-weight:700;cursor:pointer;font-size:11px;padding:0;font-family:inherit">Switch to Line Profiles</button> for best view</span><button onclick="this.parentElement.remove()" style="background:none;border:none;cursor:pointer;color:#7a5a00;font-size:13px;line-height:1;padding:0 2px">×</button>`;
+    _hint.style.cssText = `position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:200;background:${themeValue("--amber-bg", "rgba(255,247,230,0.97)")};border:1px solid ${themeValue("--amber", "#e9c46a")};border-radius:8px;padding:7px 14px;font-family:'Manrope',sans-serif;font-size:11px;color:${themeValue("--amber", "#7a5a00")};display:flex;align-items:center;gap:10px;pointer-events:auto;white-space:nowrap`;
+    _hint.innerHTML = `<span>Single traverse detected - <button onclick="window.drawVis('Line Profiles')" style="background:none;border:none;color:${themeValue("--g500", "#1a7f4b")};font-weight:700;cursor:pointer;font-size:11px;padding:0;font-family:inherit">Switch to Line Profiles</button> for best view</span><button onclick="this.parentElement.remove()" style="background:none;border:none;cursor:pointer;color:${themeValue("--amber", "#7a5a00")};font-size:13px;line-height:1;padding:0 2px">×</button>`;
     if (_mapBox) { _mapBox.style.position = "relative"; _mapBox.appendChild(_hint); }
   }
 

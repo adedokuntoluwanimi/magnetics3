@@ -90,11 +90,6 @@ function renderDownloads(job) {
 async function renderAIPanel() {
   _ensureExportChat();
   if (!_exportChat) return;
-  const body = document.getElementById("exportAIBody");
-  if (body && !body.dataset.readyMessage) {
-    body.innerHTML = "<div class='amsg'>Aurora AI is ready. Ask what each export contains, which files to share, or which combination fits your delivery.</div>";
-    body.dataset.readyMessage = "1";
-  }
 }
 
 export async function loadExportView() {

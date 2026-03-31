@@ -21,30 +21,35 @@ Read these first:
 - AI project:
   `app-01-488817-ai`
 - Latest live revision:
-  `gaia-magnetics-00065-zkf`
+  `gaia-magnetics-00067-b5x`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
-> Revision `gaia-magnetics-00065-zkf` is live and `/api/health` returned `{"status":"ok"}` after deploy.
+> Revision `gaia-magnetics-00067-b5x` is live and `/api/health` returned `{"status":"ok"}` after deploy.
 
 ## What Changed Most Recently
 
 ### Product and UI updates
 
 - User-visible assistant branding is `Aurora AI`.
-- Setup now treats scenario selection as optional.
+- Setup now treats scenario selection as optional and includes an explicit `Off` option.
 - Predicted traverse mode is simplified to a single active choice:
   `infill` or `offset`.
 - Sidebar project arrow was enlarged.
 - Preview and downstream state now preserve predicted traverse metadata more accurately.
 - Visualisation now supports viewing all traverses together or focusing on a selected traverse.
 - Combined heatmap/contour presentation remains the main surface view.
+- Aurora panels have a black border treatment and the canned “Aurora AI is ready...” placeholder text was removed.
+- Dark-mode contrast was improved in visualisation plots and assistant surfaces.
 
 ### Processing and wording updates
 
 - Predicted stations now carry values intended for overlay/readout use.
 - Some fallback and processing descriptions were simplified to remove unnecessary jargon.
 - Frontend result loading was tightened to reduce repeated fetches and improve perceived load time.
+- Blank scenario no longer defaults to `explicit`; it now follows an automatic analysis-only path.
+- Single uploaded traverses are intended to remain single instead of being split into many inferred lines.
+- Derived layers/add-ons can still be generated when predictive modelling is turned off.
 
 ### Mojibake cleanup
 
@@ -75,6 +80,7 @@ Read these first:
 3. Per-traverse grid rendering is still a potential follow-up if current filtering is not enough.
 4. Exports still execute in the API path rather than a dedicated job flow.
 5. Watch live processing and export latency after the recent UI and metadata changes.
+6. Re-run older tasks if they still show pre-fix line splitting or skipped derived layers, because stored results may have been generated before the latest processing changes.
 
 ## Deploy Command
 

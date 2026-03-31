@@ -218,7 +218,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 .cv{font-size:13px;font-weight:700;color:var(--text);text-align:right;word-break:break-word}
 
 /* AURORA PANEL */
-.a-panel{width:278px;flex-shrink:0;background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.a-panel{width:278px;flex-shrink:0;background:var(--bg2);border-left:1px solid var(--border);border:2px solid #000;box-shadow:0 10px 26px rgba(0,0,0,0.14);display:flex;flex-direction:column;overflow:hidden}
 .a-hdr{padding:15px 17px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
 .a-title{display:flex;align-items:center;gap:9px;font-family:'Roboto',sans-serif;font-size:15px;font-weight:600;color:var(--text);}
 .a-gem{width:22px;height:22px;border-radius:50%;background:var(--g50);border:2px solid var(--g300);display:flex;align-items:center;justify-content:center;flex-shrink:0}
@@ -411,6 +411,9 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 [data-theme="dark"] .a-panel{background:var(--bg2)}
 [data-theme="dark"] .a-hdr{background:var(--bg2)}
 [data-theme="dark"] .ahi{background:var(--bg3);border-left-color:var(--g400)}
+[data-theme="dark"] .chat-ai{background:var(--bg3);color:var(--text2);border-left-color:var(--g400)}
+[data-theme="dark"] .chat-empty{color:var(--text3)}
+[data-theme="dark"] .chat-user{background:var(--g600);color:#fff}
 [data-theme="dark"] .cap-card{background:var(--bg2)}
 [data-theme="dark"] .cap-card:hover{background:var(--bg3)}
 [data-theme="dark"] .ec{background:var(--bg2)}
@@ -768,9 +771,9 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             <div class="sep">Scenario</div>
             <div class="card" style="margin-bottom:14px">
               <div class="radio-group">
-                <div class="radio-opt" id="sc-auto" onclick="setScenario('')">
+                <div class="radio-opt" id="sc-off" onclick="setScenario('')">
                   <div class="radio-circle"></div>
-                  <div><div style="font-size:12.5px;font-weight:700">Automatic</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">Leave this open and the system will choose the simplest path from the task data.</div></div>
+                  <div><div style="font-size:12.5px;font-weight:700">Off</div><div style="font-size:10.5px;color:var(--text3);margin-top:1px;font-weight:500">Do not do predictive modelling. Process and visualise only the uploaded survey data.</div></div>
                 </div>
                 <div class="radio-opt" id="sc-explicit" onclick="setScenario('explicit')">
                   <div class="radio-circle"></div>
@@ -977,7 +980,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             <div class="a-sub">Survey analysis</div>
           </div>
           <div class="a-body" id="previewAIBody" style="flex:1;overflow-y:auto;padding:14px 15px">
-            <div class="amsg" style="opacity:0.5;font-style:italic">Aurora AI is ready when you need it. Ask for setup help, QA checks, or output guidance.</div>
+            <div class="chat-empty"></div>
           </div>
           <div class="a-input-row">
             <textarea id="previewAIInput" rows="2" placeholder="Ask Aurora AI about this survey or setup..."></textarea>
@@ -1215,7 +1218,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             <div class="a-sub">Export guidance</div>
           </div>
           <div class="a-body" id="exportAIBody" style="flex:1;overflow-y:auto;padding:14px 15px">
-            <div class="amsg" style="opacity:0.5;font-style:italic">Aurora AI is ready when you need it. Ask about export formats or delivery choices.</div>
+            <div class="chat-empty"></div>
           </div>
           <div class="a-input-row">
             <textarea id="exportAIInput" rows="2" placeholder="Ask Aurora AI about export formats..."></textarea>
@@ -1318,11 +1321,11 @@ function setPlatform(p){
 
 function setScenario(sc){
   state.scenario=sc||'';
-  var auto=document.getElementById('sc-auto');
+  var off=document.getElementById('sc-off');
   var ex=document.getElementById('sc-explicit');
   var sp=document.getElementById('sc-sparse');
   var pts=document.getElementById('predictedTraverseSection');
-  [[auto,!state.scenario],[ex,state.scenario==='explicit'],[sp,state.scenario==='sparse']].forEach(function(pair){
+  [[off,!state.scenario],[ex,state.scenario==='explicit'],[sp,state.scenario==='sparse']].forEach(function(pair){
     var el=pair[0],on=pair[1];
     if(!el)return;
     el.classList.toggle('selected',!!on);

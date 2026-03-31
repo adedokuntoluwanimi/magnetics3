@@ -222,10 +222,6 @@ function _loadPreviewAI() {
   if (!_previewChat) {
     _previewChat = initAIChat(bodyEl, inputEl, sendEl, {location: "preview"});
   }
-  if (!bodyEl.dataset.readyMessage) {
-    bodyEl.innerHTML = "<div class='amsg'>Aurora AI is ready. Ask about setup choices, traverse planning, data checks, or what to review before processing.</div>";
-    bodyEl.dataset.readyMessage = "1";
-  }
 }
 
 window.drawPreviewMap = async () => {

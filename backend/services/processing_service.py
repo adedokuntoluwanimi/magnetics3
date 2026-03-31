@@ -650,7 +650,7 @@ class ProcessingService:
             )
 
             self._update_run(run_id, 1, "running", "Cleaning duplicates, line IDs, and survey ordering...")
-            cleaned = self._clean_dataframe(frame)
+            cleaned = self._clean_dataframe(task, frame)
             clean_report = cleaned.attrs.get("cleaning_report", {})
             clean_detail = clean_report.get("detail") or f"{len(cleaned)} readings ready after cleaning"
             self._update_run(run_id, 1, "completed", clean_detail)
@@ -745,7 +745,6 @@ class ProcessingService:
             else:
                 self._update_run(run_id, 4, "completed", "Prediction modelling disabled - skipped")
                 self._update_run(run_id, 5, "completed", "Prediction modelling disabled - skipped")
-                self._update_run(run_id, 6, "completed", "Grid-domain transforms skipped - prediction disabled")
                 grid_x, grid_y = self._build_grid(task, leveled)
                 surface = self._nearest_surface(
                     leveled["longitude"].to_numpy(),
@@ -783,18 +782,8 @@ class ProcessingService:
                     },
                     "uncertainty_metadata": {"algorithm": "distance_only", "detail": "Distance-based uncertainty prepared"},
                 }
-                add_on_payload = {
-                    "analytic_signal": [],
-                    "first_vertical_derivative": [],
-                    "horizontal_derivative": [],
-                    "filtered_surface": [],
-                    "emag2_residual": [],
-                    "regional_residual": [],
-                    "rtp_surface": [],
-                    "selected_add_ons": [],
-                    "detail": "No add-ons - modelling was disabled",
-                    "metadata": {"warnings": ["Grid-domain add-ons were skipped because prediction modelling was disabled."]},
-                }
+                add_on_payload = self._apply_add_ons(task, results)
+                self._update_run(run_id, 6, "completed", add_on_payload["detail"])
                 prep = {
                     "frame": leveled,
                     "train_frame": leveled,
@@ -802,7 +791,7 @@ class ProcessingService:
                     "grid_x": grid_x,
                     "grid_y": grid_y,
                     "detail": "Prediction disabled",
-                    "scenario": (task.get("scenario") or "explicit").lower(),
+                    "scenario": self._resolve_scenario(task),
                     "metadata": {"run_prediction": False},
                 }
                 self._push_stage_report(
@@ -811,6 +800,15 @@ class ProcessingService:
                     status="completed",
                     detail="Prediction disabled - existing observed data carried forward",
                     metadata=prep["metadata"],
+                )
+                self._push_stage_report(
+                    runtime,
+                    name="Grid-domain transforms",
+                    status="completed",
+                    detail=add_on_payload["detail"],
+                    warnings=list((add_on_payload.get("metadata") or {}).get("warnings") or []),
+                    fallbacks=list((add_on_payload.get("metadata") or {}).get("fallbacks") or []),
+                    metadata=add_on_payload.get("metadata") or {},
                 )
 
             self._update_run(run_id, 7, "running", "Synthesizing uncertainty and support confidence...")
@@ -1058,7 +1056,13 @@ class ProcessingService:
 
     # ── Stage 2: Data cleaning (upgraded) ───────────────────────────────────
 
-    def _clean_dataframe(self, frame: pd.DataFrame) -> pd.DataFrame:
+    def _resolve_scenario(self, task: dict) -> str:
+        scenario = str(task.get("scenario") or "").strip().lower()
+        if scenario in {"explicit", "sparse"}:
+            return scenario
+        return "automatic"
+
+    def _clean_dataframe(self, task: dict, frame: pd.DataFrame) -> pd.DataFrame:
         cleaned = frame.copy()
         warnings: list[str] = []
 
@@ -1111,10 +1115,13 @@ class ProcessingService:
         grouping_col = "latitude" if group_by_lat else "longitude"
         along_col = "longitude" if group_by_lat else "latitude"
 
-        step = np.median(np.abs(np.diff(np.sort(cleaned[grouping_col].to_numpy(dtype=np.float64))))) if len(cleaned) > 2 else 0.0
-        step = float(step) if np.isfinite(step) and step > 0 else max((lat_range if group_by_lat else lon_range) / max(math.sqrt(max(len(cleaned), 1)), 1.0), 0.0001)
-        tol_group = max(step * 2.5, 0.0001)
-        cleaned["_line_id"] = np.round(cleaned[grouping_col].to_numpy(dtype=np.float64) / tol_group).astype(int)
+        if str(task.get("processing_mode") or "").lower() == "single":
+            cleaned["_line_id"] = 0
+        else:
+            step = np.median(np.abs(np.diff(np.sort(cleaned[grouping_col].to_numpy(dtype=np.float64))))) if len(cleaned) > 2 else 0.0
+            step = float(step) if np.isfinite(step) and step > 0 else max((lat_range if group_by_lat else lon_range) / max(math.sqrt(max(len(cleaned), 1)), 1.0), 0.0001)
+            tol_group = max(step * 2.5, 0.0001)
+            cleaned["_line_id"] = np.round(cleaned[grouping_col].to_numpy(dtype=np.float64) / tol_group).astype(int)
         cleaned = cleaned.sort_values(["_line_id", "time_s", along_col], na_position="last").reset_index(drop=True)
 
         along_m = np.zeros(len(cleaned), dtype=np.float64)
@@ -1793,7 +1800,7 @@ class ProcessingService:
 
     def _prepare_prediction_inputs(self, task: dict, frame: pd.DataFrame) -> dict:
         grid_x, grid_y = self._build_grid(task, frame)
-        scenario = (task.get("scenario") or "explicit").lower()
+        scenario = self._resolve_scenario(task)
 
         if scenario == "explicit":
             has_mag = frame["magnetic"].notna()
@@ -1812,7 +1819,7 @@ class ProcessingService:
                 "prediction_points": int(len(predict)),
                 "preserve_observed_values": True,
             }
-        else:
+        elif scenario == "sparse":
             # Sparse: all rows with magnetic values train the model
             train = frame.dropna(subset=["magnetic"]).reset_index(drop=True)
             if train.empty:
@@ -1941,6 +1948,19 @@ class ProcessingService:
                     "prediction_points": int(len(predict)),
                 }
 
+        else:
+            train = frame.dropna(subset=["magnetic"]).reset_index(drop=True)
+            if train.empty:
+                raise ValueError("No rows with magnetic field values found.")
+            predict = pd.DataFrame({"latitude": [], "longitude": []})
+            detail = f"Automatic: {len(train)} measured stations will be processed without prediction targets"
+            metadata = {
+                "scenario": "automatic",
+                "observed_points": int(len(train)),
+                "prediction_points": 0,
+                "preserve_observed_values": True,
+            }
+
         return {
             "frame": train,
             "train_frame": train,
@@ -1973,7 +1993,7 @@ class ProcessingService:
         lon_min, lon_max = frame["longitude"].min(), frame["longitude"].max()
         lat_min, lat_max = frame["latitude"].min(), frame["latitude"].max()
 
-        scenario = (task.get("scenario") or "explicit").lower()
+        scenario = self._resolve_scenario(task)
         if scenario == "sparse":
             lon_range_m = (lon_max - lon_min) * 111_320
             lat_range_m = (lat_max - lat_min) * 111_320
@@ -2103,7 +2123,7 @@ class ProcessingService:
         uncertainty = self._uncertainty_surface(x, y, grid_x, grid_y, variance, rf_variance)
         anomaly_threshold = float(np.nanmean(surface) + np.nanstd(surface))
         anomaly_mask = surface >= anomaly_threshold
-        scenario = (task.get("scenario") or "explicit").lower()
+        scenario = self._resolve_scenario(task)
         support_tree = cKDTree(np.column_stack([x, y]))
         support_distance, _ = support_tree.query(np.column_stack([grid_x.ravel(), grid_y.ravel()]), k=1)
         support_distance = support_distance.reshape(grid_x.shape)
