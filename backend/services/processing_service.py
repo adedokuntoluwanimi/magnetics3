@@ -4,6 +4,7 @@ Scientific auditability, numerical stability, Oasis Montaj-comparable outputs.
 """
 from __future__ import annotations
 
+import importlib
 import io
 import json
 import math
@@ -92,6 +93,80 @@ def _mad(values: np.ndarray) -> float:
         return 0.0
     median = np.median(finite)
     return float(np.median(np.abs(finite - median)))
+
+
+def _datetime_from_decimal_year(decimal_yr: float) -> datetime:
+    year = int(math.floor(decimal_yr))
+    fraction = min(max(float(decimal_yr) - year, 0.0), 1.0)
+    start = datetime(year, 1, 1, tzinfo=timezone.utc)
+    end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    return start + (end - start) * fraction
+
+
+def _compute_igrf_total_supported(
+    lat: np.ndarray,
+    lon: np.ndarray,
+    decimal_yr: float,
+    elevation_m: Optional[np.ndarray] = None,
+) -> Optional[dict]:
+    """
+    Compute total-field IGRF reference (nT) using the best available backend.
+    Returns backend metadata and values, or None if no supported backend is available.
+    """
+    lat_arr = np.asarray(lat, dtype=np.float64)
+    lon_arr = np.asarray(lon, dtype=np.float64)
+    if elevation_m is None:
+        elev_arr = np.zeros(len(lat_arr), dtype=np.float64)
+    else:
+        elev_arr = np.asarray(elevation_m, dtype=np.float64)
+        if elev_arr.shape != lat_arr.shape:
+            elev_arr = np.resize(elev_arr, lat_arr.shape)
+        elev_arr = np.where(np.isfinite(elev_arr), elev_arr, 0.0)
+
+    survey_dt = _datetime_from_decimal_year(decimal_yr).replace(tzinfo=None)
+
+    try:
+        ppigrf = importlib.import_module("ppigrf")
+        results = np.empty(len(lat_arr), dtype=np.float64)
+        for i in range(len(lat_arr)):
+            east, north, up = ppigrf.igrf(
+                float(lon_arr[i]),
+                float(lat_arr[i]),
+                float(elev_arr[i]) / 1000.0,
+                survey_dt,
+            )
+            results[i] = float(np.sqrt(float(east) ** 2 + float(north) ** 2 + float(up) ** 2))
+        return {
+            "values": results,
+            "backend": "ppigrf",
+            "reference_model": "IGRF-14",
+        }
+    except Exception as exc:
+        logger.warning("ppigrf backend unavailable or failed for IGRF correction: %s", exc)
+
+    try:
+        pyigrf = importlib.import_module("pyIGRF")
+        results = np.empty(len(lat_arr), dtype=np.float64)
+        for i in range(len(lat_arr)):
+            igrf = pyigrf.igrf_value(
+                float(lat_arr[i]),
+                float(lon_arr[i]),
+                float(elev_arr[i]) / 1000.0,
+                decimal_yr,
+            )
+            results[i] = float(igrf[6])
+        return {
+            "values": results,
+            "backend": "pyIGRF",
+            "reference_model": "IGRF-13",
+        }
+    except Exception as exc:
+        logger.critical(
+            "CRITICAL: no supported IGRF backend could run (%s). "
+            "IGRF correction will be skipped - output is NOT geophysically corrected.",
+            exc,
+        )
+        return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1171,6 +1246,8 @@ class ProcessingService:
         warnings: list[str] = []
         fallbacks: list[dict] = []
         igrf_applied = False
+        igrf_backend: Optional[str] = None
+        igrf_reference_model: Optional[str] = None
         affected_points = 0
 
         mag_before = out["magnetic"].to_numpy(dtype=np.float64).copy()
@@ -1190,8 +1267,14 @@ class ProcessingService:
         if "igrf" in selected:
             lat = out["latitude"].to_numpy(dtype=np.float64)
             lon = out["longitude"].to_numpy(dtype=np.float64)
-            igrf_vals = _compute_igrf_total(lat, lon, decimal_yr)
-            if igrf_vals is not None:
+            elevation_m = None
+            for elevation_column in ("elevation", "elevation_m", "altitude", "altitude_m"):
+                if elevation_column in out.columns:
+                    elevation_m = out[elevation_column].to_numpy(dtype=np.float64)
+                    break
+            igrf_result = _compute_igrf_total_supported(lat, lon, decimal_yr, elevation_m=elevation_m)
+            if igrf_result is not None:
+                igrf_vals = np.asarray(igrf_result.get("values"), dtype=np.float64)
                 valid_igrf = ~np.isnan(igrf_vals)
                 if valid_igrf.sum() > 0:
                     igrf_min = float(np.nanmin(igrf_vals))
@@ -1201,21 +1284,27 @@ class ProcessingService:
                     igrf_mean = float(np.nanmean(igrf_vals))
                     out["magnetic"] = out["magnetic"] - igrf_vals
                     igrf_applied = True
+                    igrf_backend = str(igrf_result.get("backend") or "unknown")
+                    igrf_reference_model = str(igrf_result.get("reference_model") or "IGRF")
                     logger.info(
-                        "IGRF applied: mean_field=%.2f nT, min=%.2f, max=%.2f",
-                        igrf_mean, igrf_min, igrf_max,
+                        "IGRF applied via %s (%s): mean_field=%.2f nT, min=%.2f, max=%.2f",
+                        igrf_backend,
+                        igrf_reference_model,
+                        igrf_mean,
+                        igrf_min,
+                        igrf_max,
                     )
-                    notes.append(f"IGRF-13 correction (mean ref={igrf_mean:.1f} nT)")
+                    notes.append(f"{igrf_reference_model} correction via {igrf_backend} (mean ref={igrf_mean:.1f} nT)")
                     _proc_log("3.1.igrf", out["magnetic"].to_numpy(dtype=np.float64))
             else:
-                logger.critical("IGRF correction requested but pyIGRF was unavailable.")
+                logger.critical("IGRF correction requested but no supported IGRF backend was available.")
                 notes.append("IGRF requested but unavailable - output kept without IGRF removal")
                 fallbacks.append(
                     {
                         "stage": "igrf",
                         "requested": "igrf",
                         "actual": "uncorrected_field",
-                        "reason": "pyIGRF was unavailable, so true IGRF removal could not be applied.",
+                        "reason": "No supported IGRF backend was available, so true IGRF removal could not be applied.",
                         "severity": "critical",
                     }
                 )
@@ -1281,6 +1370,8 @@ class ProcessingService:
             "fallbacks": fallbacks,
             "affected_points": int(affected_points),
             "igrf_applied": bool(igrf_applied),
+            "igrf_backend": igrf_backend,
+            "igrf_reference_model": igrf_reference_model,
             "survey_date": survey_dt.isoformat(),
             "decimal_year": decimal_yr,
             "spike": out.attrs.get("spike_report", {}),
@@ -2596,10 +2687,22 @@ class ProcessingService:
                 ).model_dump(mode="json")
             )
 
-        _2d_keys = {"grid_x", "grid_y", "surface", "uncertainty", "analytic_signal",
-                    "first_vertical_derivative", "horizontal_derivative",
-                    "filtered_surface", "emag2_residual", "regional_residual", "rtp_surface",
-                    "tilt_derivative", "total_gradient"}
+        _2d_keys = {
+            "grid_x",
+            "grid_y",
+            "surface",
+            "uncertainty",
+            "support_mask",
+            "analytic_signal",
+            "first_vertical_derivative",
+            "horizontal_derivative",
+            "filtered_surface",
+            "emag2_residual",
+            "regional_residual",
+            "rtp_surface",
+            "tilt_derivative",
+            "total_gradient",
+        }
         firestore_data = {k: v for k, v in payload.items() if k not in _2d_keys}
         if "points" in firestore_data:
             firestore_data["points"] = firestore_data["points"][:500]

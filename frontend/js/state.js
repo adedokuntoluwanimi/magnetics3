@@ -1,22 +1,24 @@
 const storedSurveyColor = localStorage.getItem("gaiaSurveyColor") || "#2daa52";
 const storedPredictedColor = localStorage.getItem("gaiaPredictedColor") || "#5ba8d4";
 const storedBaseStationColor = localStorage.getItem("gaiaBaseStationColor") || "#e07b14";
+const storedProjectId = localStorage.getItem("gaiaSelectedProjectId");
+const storedTaskId = localStorage.getItem("gaiaSelectedTaskId");
 
-const _VALID_VIS = new Set(["Surface", "3D", "Map", "Line Profiles"]);
-const _storedVis = localStorage.getItem("gaiaActiveVis") || "Surface";
+const _VALID_VIS = new Set(["Contour", "Surface", "3D", "Map", "Line Profiles"]);
+const _storedVis = localStorage.getItem("gaiaActiveVis") || "Contour";
 const _storedLayer = localStorage.getItem("gaiaActiveLayer") || "magnetic";
 const _storedTraverse = localStorage.getItem("gaiaActiveTraverseFilter") || "all";
 
 export const appState = {
-  project: null,
-  task: null,
+  project: storedProjectId ? {id: storedProjectId} : null,
+  task: storedTaskId ? {id: storedTaskId} : null,
   taskResults: null,
   processingRun: null,
   surveyFiles: [],
   basemapFile: null,
   headers: [],
   mapsApiKey: null,
-  activeVisualisation: _VALID_VIS.has(_storedVis) ? _storedVis : "Surface",
+  activeVisualisation: _VALID_VIS.has(_storedVis) ? _storedVis : "Contour",
   activeResultLayer: _storedLayer,
   stackProfiles: false,
   activeTraverseFilter: _storedTraverse,
@@ -29,10 +31,16 @@ export const appState = {
 
 export function setProject(project) {
   appState.project = project;
+  if (project?.id) {
+    localStorage.setItem("gaiaSelectedProjectId", project.id);
+  } else {
+    localStorage.removeItem("gaiaSelectedProjectId");
+  }
 }
 
 export function clearProject() {
   appState.project = null;
+  localStorage.removeItem("gaiaSelectedProjectId");
 }
 
 export function setTask(task) {
@@ -40,11 +48,17 @@ export function setTask(task) {
     appState.taskResults = null;
   }
   appState.task = task;
+  if (task?.id) {
+    localStorage.setItem("gaiaSelectedTaskId", task.id);
+  } else {
+    localStorage.removeItem("gaiaSelectedTaskId");
+  }
 }
 
 export function clearTask() {
   appState.task = null;
   appState.taskResults = null;
+  localStorage.removeItem("gaiaSelectedTaskId");
 }
 
 export function setTaskResults(results) {

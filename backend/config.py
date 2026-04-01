@@ -26,6 +26,13 @@ class Settings:
     infra_project_id: str = env_value("GAIA_INFRA_PROJECT_ID", default="app-01-488817")
     ai_project_id: str = env_value("GAIA_AI_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", default="app-01-488817-ai")
     region: str = env_value("GAIA_REGION", "GOOGLE_CLOUD_REGION", default="us-central1")
+    ai_region: str = env_value("GAIA_AI_REGION", default="global")
+    aurora_chat_project_id: str = env_value("GAIA_AURORA_CHAT_PROJECT_ID", default=env_value("GAIA_INFRA_PROJECT_ID", default="app-01-488817"))
+    aurora_chat_region: str = env_value("GAIA_AURORA_CHAT_REGION", default="global")
+    aurora_chat_model: str = env_value("GAIA_AURORA_CHAT_MODEL", default="gemini-2.5-flash")
+    aurora_export_project_id: str = env_value("GAIA_AURORA_EXPORT_PROJECT_ID", "GAIA_AI_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", default="app-01-488817-ai")
+    aurora_export_region: str = env_value("GAIA_AURORA_EXPORT_REGION", "GAIA_AI_REGION", default="global")
+    aurora_export_model: str = env_value("GAIA_AURORA_EXPORT_MODEL", "GAIA_AURORA_MODEL", "CLAUDE_MODEL", default="claude-sonnet-4@20250514")
     firestore_database: str = env_value("GAIA_FIRESTORE_DATABASE", default="(default)")
     uploads_bucket: str = bucket_name(env_value("GAIA_UPLOADS_BUCKET", "GCS_BUCKET_RAW"))
     results_bucket: str = bucket_name(env_value("GAIA_RESULTS_BUCKET", "GCS_BUCKET_PROCESSED"))
@@ -36,7 +43,6 @@ class Settings:
     export_job: str = env_value("GAIA_EXPORT_JOB", default="gaia-magnetics-export")
     maps_api_key_secret: str = env_value("GAIA_MAPS_API_KEY_SECRET", default="gaia-google-maps-api-key")
     maps_api_key: str = env_value("GAIA_MAPS_API_KEY", "GOOGLE_MAPS_API_KEY")
-    aurora_model: str = env_value("GAIA_AURORA_MODEL", "CLAUDE_MODEL", default="claude-sonnet-4-6")
     service_name: str = env_value("GAIA_SERVICE_NAME", "K_SERVICE", default="gaia-magnetics")
     base_dir: Path = Path(__file__).resolve().parents[1]
     frontend_dir: Path = Path(__file__).resolve().parents[1] / "frontend"
@@ -55,7 +61,7 @@ class Settings:
 
     @property
     def ready_for_ai(self) -> bool:
-        return bool(self.aurora_model)
+        return bool(self.aurora_chat_model and self.aurora_export_model)
 
 
 @lru_cache(maxsize=1)

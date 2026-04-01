@@ -1,6 +1,6 @@
 # GAIA Magnetics Status
 
-Last updated: `2026-03-31`
+Last updated: `2026-04-01`
 
 ## Live Snapshot
 
@@ -9,7 +9,7 @@ Last updated: `2026-03-31`
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00067-b5x`
+  `gaia-magnetics-00073-87x`
 - Region:
   `us-central1`
 - Infra project:
@@ -19,103 +19,97 @@ Last updated: `2026-03-31`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
-> Revision `gaia-magnetics-00067-b5x` is serving 100% traffic. `/api/health` returned `{"status":"ok"}` after deploy.
+> Revision `gaia-magnetics-00073-87x` is serving 100% traffic. `/api/health` returned `{"status":"ok"}` and a full live smoke test completed after deploy.
 
 ## Current Product State
 
 - FastAPI backend is live with modular `routes`, `services`, `models`, `gcp`, and `jobs`.
 - Frontend remains anchored on `frontend/index.html` with ES-module sections under `frontend/js/sections`.
 - Core workflow is live:
-  `Home -> Projects -> Analysis -> Preview -> Processing -> Visualisation -> Export`
-- Firestore stores lightweight project/task metadata.
+  `Home -> Projects -> Setup -> Analysis -> Preview -> Processing -> Visualisation -> Export`
+- Firestore stores project/task metadata and lightweight result references.
 - Full processing outputs are persisted to GCS `results.json`.
 - Google Maps-backed preview and visualisation views are live.
 - User-visible AI branding is `Aurora AI`.
 
 ## Most Recent Completed Work
 
-### Setup, prediction, preview, and visualisation updates
+### Live processing and persistence fixes
 
-- Restored `Aurora AI` branding in user-visible frontend surfaces.
-- Expanded the GAAS explanation while keeping the full phrase
-  `Geospatial Automation and Inference Analysis`.
-- Made scenario selection optional in setup again.
-- Increased the sidebar project-arrow size for better visibility.
-- Simplified predicted-traverse setup so the user picks one mode:
-  `infill` or `offset`.
-- Removed the old top-level station-spacing path that conflicted with mode-based traverse generation.
-- Carried predicted traverse metadata through preview and processing so generated traverses retain their type and labels.
-- Updated preview counts so predicted traverses reflect the configured amount more accurately.
-- Added visualisation support for viewing all traverses together or filtering by traverse.
-- Kept the main surface view as a combined heatmap/contour presentation.
+- Fixed the task-result persistence failure that was causing completed runs to end as failed.
+- The Firestore write path now sanitizes update payloads before persistence.
+- `support_mask` is no longer written into the task-document `results` payload, which resolved the invalid nested entity error.
+- Added a regression test covering the `support_mask` persistence case.
 
-### Processing and assistant wording cleanup
+### Aurora chat and AI routing
 
-- Reduced assistant fallback jargon in preview, visualisation, and export surfaces.
-- Simplified processing-step wording for cases such as unavailable IGRF dependencies.
-- Preserved predicted magnetic values on generated stations so overlay readouts can use them.
-- Improved frontend result caching to reduce repeat fetches and soften load-time delays in visualisation flows.
-- Blank scenario no longer defaults to `explicit`; it now resolves to an analysis-only automatic path.
-- Single uploaded traverses now stay single instead of being split into many inferred lines.
-- Derived layers/add-ons can now be produced even when predictive modelling is turned off.
+- Aurora chat now uses the split AI path:
+  `Gemini on Vertex AI` for Preview and Visualisation chat,
+  `Claude` remains reserved for export drafting.
+- Granted the live Cloud Run service account Vertex AI access on the infra project.
+- Live smoke test confirmed Aurora now returns real model responses on Preview and Visualisation instead of the old fallback text.
+- Export screen chat remains disabled by design for now.
 
-### Analysis and setup controls
+### Setup, processing, and visualisation state
 
-- Scenario setup now has an explicit `Off` option for users who do not want predictive modelling.
-- Dark-mode contrast was improved for visualisation plots and assistant surfaces.
-- The canned “Aurora AI is ready...” placeholder text was removed from the frontend assistant panels.
-- The Aurora side panel now has a black border treatment.
+- Project and task selection now persist across hard refreshes.
+- Setup state restores from the selected project/task instead of dropping the user back to a blank flow.
+- Processing summary now reflects the exact chosen corrections, add-ons, filter mode, and prediction status more directly.
+- Blank scenario remains truly optional and the explicit `Off` option is still in place.
+- Single uploaded traverses remain single instead of being split into many inferred traverses.
+- IGRF is working again in live processing via `ppigrf`.
 
-### Mojibake cleanup
+## Smoke Test Result
 
-- Removed mojibake across the shared frontend shell in `frontend/index.html`.
-- Fixed corrupted arrows, placeholders, checkmarks, separators, attribution text, upload controls, and default placeholders across setup, analysis, preview, processing, visualisation, and export.
-- Repo-wide frontend scan for common mojibake sequences (`Ã`, `Â`, `â€`, etc.) came back clean after the sweep.
+The most recent full live smoke pass completed successfully against revision `gaia-magnetics-00073-87x`.
 
-### Deployment
-
-- Deployed the latest frontend cleanup and current app state to Cloud Run.
-- Deployed the single-traverse, optional-scenario, dark-mode, and setup `Off` option fixes.
-- Live revision is now `gaia-magnetics-00067-b5x`.
+- Health check: passed
+- Project creation: passed
+- Task upload: passed
+- Analysis save: passed
+- Preview Aurora chat: passed with a real model response
+- Processing run: passed and completed
+- Visualisation Aurora chat: passed with a real model response
+- Export job: completed
 
 ## Important Open Items
 
-1. Full browser click-through on the latest deployed UI still needs a manual pass.
-2. Long-running processing should be observed again on live to confirm no timeout regressions remain.
-3. Surface rendering is still grid-first; per-traverse filtering is clearer in the UI, but per-traverse regridding is still a possible follow-up if needed.
-4. Exports still run in the API service; Export Cloud Run Job remains a future hardening step.
-5. Verify Vertex AI permissions remain correct for
-   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
-   on `app-01-488817-ai`.
-6. Re-run older tasks created before revision `gaia-magnetics-00066-99m` if they still show bad inferred traverses or skipped layers, because their stored results may predate the fix.
+1. Claude-backed export drafting is still not reliably generating the AI-authored export narrative. Export jobs complete, but Aurora export authoring can still fall back to saved-data-only copy.
+2. Manual browser click-through on the latest deployed UI still needs a human pass.
+3. Long-running processing should be observed again on live to confirm no timeout regressions remain on larger datasets.
+4. Surface rendering is now contour-first, but per-traverse regridding is still a possible follow-up if needed.
+5. Keep an eye on Vertex/Claude quota behavior separately now that chat and export use different AI paths.
+6. Re-run older tasks created before the single-traverse and persistence fixes if they still show bad inferred traverses or stale results.
 
 ## Main Files Most Relevant Right Now
 
 ### Backend
 
-- `backend/routes/tasks.py`
+- `backend/config.py`
+- `backend/gcp/firestore_store.py`
+- `backend/gcp/vertex_ai.py`
 - `backend/services/ai_service.py`
-- `backend/services/preview_service.py`
+- `backend/services/container.py`
+- `backend/services/export_service.py`
 - `backend/services/processing_service.py`
-- `backend/models/processing.py`
-- `backend/models/project.py`
+- `backend/routes/ai.py`
+- `backend/routes/tasks.py`
 
 ### Frontend
 
 - `frontend/index.html`
 - `frontend/js/state.js`
+- `frontend/js/shared/ai_chat.js`
 - `frontend/js/sections/setup.js`
+- `frontend/js/sections/navigation.js`
 - `frontend/js/sections/preview.js`
 - `frontend/js/sections/processing.js`
 - `frontend/js/sections/visualisation.js`
-- `frontend/js/sections/maps.js`
 - `frontend/js/sections/export.js`
-- `frontend/js/sections/analysis.js`
 
 ## Verification Status
 
-- `python -m unittest tests.test_processing_service` passed during the recent processing changes.
-- `node --check` passed on the updated frontend modules touched in the previous feature pass.
-- Frontend mojibake scan across `frontend/index.html`, `frontend/js`, and `frontend/css` is clean.
-- Cloud Run deploy completed successfully to revision `gaia-magnetics-00067-b5x`.
-- Live health endpoint returned `{"status":"ok"}`.
+- `py -3 -m unittest tests.test_processing_service tests.test_ai_service tests.test_export_service` passed.
+- `py -3 -m py_compile backend/gcp/firestore_store.py backend/services/processing_service.py` passed.
+- Live Cloud Run deploy completed successfully to revision `gaia-magnetics-00073-87x`.
+- Full live smoke test completed successfully after deploy.

@@ -87,78 +87,39 @@ class ExportService:
     def _build_artifact(self, project: dict, task: dict, data: dict, export_format: str, aurora):
         normalized = export_format.lower()
         if normalized == "csv":
-            rows = []
-            for lat_row, lon_row, surface_row, uncertainty_row in zip(
-                data["grid_y"],
-                data["grid_x"],
-                data["surface"],
-                data["uncertainty"],
-            ):
-                for latitude, longitude, magnetic, uncertainty in zip(lat_row, lon_row, surface_row, uncertainty_row):
-                    rows.append(
-                        {
-                            "longitude": longitude,
-                            "latitude": latitude,
-                            "predicted_magnetic": magnetic,
-                            "uncertainty": uncertainty,
-                        }
-                    )
-            frame = pd.DataFrame(rows)
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name="export.csv",
-                content_type="text/csv",
-                data=frame.to_csv(index=False).encode("utf-8"),
+                file_name="csv_bundle.zip",
+                content_type="application/zip",
+                data=self._build_csv_bundle(project, task, data),
                 kind="export",
             )
         if normalized == "geojson":
-            features = [
-                {
-                    "type": "Feature",
-                    "geometry": {"type": "Point", "coordinates": [row["longitude"], row["latitude"]]},
-                    "properties": {"magnetic": row["magnetic"]},
-                }
-                for row in data["points"]
-            ]
-            geojson = {"type": "FeatureCollection", "features": features}
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name="export.geojson",
-                content_type="application/geo+json",
-                data=json.dumps(geojson).encode("utf-8"),
+                file_name="geojson_bundle.zip",
+                content_type="application/zip",
+                data=self._build_geojson_bundle(project, task, data),
                 kind="export",
             )
         if normalized in {"kml", "kmz"}:
-            content = self._build_kml(data["points"]).encode("utf-8")
-            if normalized == "kmz":
-                buffer = io.BytesIO()
-                with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-                    archive.writestr("doc.kml", content)
-                payload = buffer.getvalue()
-                file_name = "export.kmz"
-                content_type = "application/vnd.google-earth.kmz"
-            else:
-                payload = content
-                file_name = "export.kml"
-                content_type = "application/vnd.google-earth.kml+xml"
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name=file_name,
-                content_type=content_type,
-                data=payload,
+                file_name="kmz_bundle.zip",
+                content_type="application/zip",
+                data=self._build_kmz_bundle(project, task, data),
                 kind="export",
             )
         if normalized == "gdb":
-            bundle = self._build_gdb_bundle(task)
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name="export.gdb.zip",
+                file_name="gdb_bundle.zip",
                 content_type="application/zip",
-                data=bundle,
+                data=self._build_gdb_bundle(project, task, data),
                 kind="export",
             )
         if normalized == "pdf":
@@ -167,7 +128,7 @@ class ExportService:
                 task_id=task["id"],
                 file_name="report.pdf",
                 content_type="application/pdf",
-                data=self._build_pdf(project, task, full_results, aurora),
+                data=self._build_pdf(project, task, data, aurora),
                 kind="export",
             )
         if normalized == "word":
@@ -176,7 +137,7 @@ class ExportService:
                 task_id=task["id"],
                 file_name="report.docx",
                 content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                data=self._build_docx(project, task, full_results, aurora),
+                data=self._build_docx(project, task, data, aurora),
                 kind="export",
             )
         if normalized == "pptx":
@@ -185,89 +146,213 @@ class ExportService:
                 task_id=task["id"],
                 file_name="presentation.pptx",
                 content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                data=self._build_pptx(project, task, full_results, aurora),
+                data=self._build_pptx(project, task, data, aurora),
                 kind="export",
             )
         if normalized in {"png", "jpg", "jpeg"}:
-            from PIL import Image
-
-            png_artifact = next((artifact for artifact in task["results"]["artifacts"] if artifact["file_name"] == "heatmap.png"), None)
-            if not png_artifact:
-                return None
-            image_bytes = self._storage.download_bytes(png_artifact["bucket"], png_artifact["object_name"])
-            if normalized in {"jpg", "jpeg"}:
-                image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-                output = io.BytesIO()
-                image.save(output, format="JPEG", quality=92)
-                image_bytes = output.getvalue()
-                file_name = "heatmap.jpg"
-                content_type = "image/jpeg"
-            else:
-                file_name = "heatmap.png"
-                content_type = "image/png"
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name=file_name,
-                content_type=content_type,
-                data=image_bytes,
+                file_name="map_bundle.zip",
+                content_type="application/zip",
+                data=self._build_raster_bundle(project, task),
                 kind="export",
             )
         return None
 
-    def _build_kml(self, points: list[dict]) -> str:
+    def _layer_specs(self, data: dict) -> list[dict]:
+        specs = [
+            {"key": "surface", "slug": "tmf", "label": "Total Magnetic Field"},
+            {"key": "uncertainty", "slug": "uncertainty", "label": "Uncertainty"},
+            {"key": "filtered_surface", "slug": "filtered_surface", "label": "Filtered Surface"},
+            {"key": "rtp_surface", "slug": "rtp", "label": "Reduction to Pole"},
+            {"key": "analytic_signal", "slug": "analytic_signal", "label": "Analytic Signal"},
+            {"key": "first_vertical_derivative", "slug": "first_vertical_derivative", "label": "First Vertical Derivative"},
+            {"key": "horizontal_derivative", "slug": "horizontal_derivative", "label": "Horizontal Derivative"},
+            {"key": "regional_residual", "slug": "regional_residual", "label": "Regional Residual"},
+            {"key": "emag2_residual", "slug": "regional_residual", "label": "Regional Residual"},
+            {"key": "tilt_derivative", "slug": "tilt_derivative", "label": "Tilt Derivative"},
+            {"key": "total_gradient", "slug": "total_gradient", "label": "Total Gradient"},
+        ]
+        active = []
+        seen = set()
+        for spec in specs:
+            if data.get(spec["key"]) is not None and spec["slug"] not in seen:
+                active.append(spec)
+                seen.add(spec["slug"])
+        return active
+
+    def _grid_rows(self, data: dict, key: str, value_field: str) -> list[dict]:
+        rows = []
+        grid_x = data.get("grid_x") or []
+        grid_y = data.get("grid_y") or []
+        values = data.get(key) or []
+        for lat_row, lon_row, value_row in zip(grid_y, grid_x, values):
+            for latitude, longitude, value in zip(lat_row, lon_row, value_row):
+                rows.append({"longitude": longitude, "latitude": latitude, value_field: value})
+        return rows
+
+    def _point_rows(self, points: list[dict]) -> list[dict]:
+        rows = []
+        for point in points or []:
+            row = dict(point)
+            rows.append(row)
+        return rows
+
+    def _point_value(self, point: dict):
+        for key in ("magnetic", "corrected_magnetic", "predicted_magnetic", "value"):
+            if point.get(key) is not None:
+                return point.get(key)
+        return None
+
+    def _points_geojson(self, points: list[dict], *, value_field: str = "magnetic") -> dict:
+        return {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [row["longitude"], row["latitude"]]},
+                    "properties": {
+                        **{k: v for k, v in row.items() if k not in {"longitude", "latitude"}},
+                        value_field: row.get(value_field, self._point_value(row)),
+                    },
+                }
+                for row in points
+                if row.get("longitude") is not None and row.get("latitude") is not None
+            ],
+        }
+
+    def _traverse_geojson(self, points: list[dict]) -> dict:
+        groups = {}
+        for point in points or []:
+            line_id = point.get("line_id") or point.get("traverse_label") or "line"
+            groups.setdefault(str(line_id), []).append(point)
+        features = []
+        for line_id, group in groups.items():
+            coords = [
+                [point.get("longitude"), point.get("latitude")]
+                for point in group
+                if point.get("longitude") is not None and point.get("latitude") is not None
+            ]
+            if len(coords) >= 2:
+                features.append(
+                    {
+                        "type": "Feature",
+                        "geometry": {"type": "LineString", "coordinates": coords},
+                        "properties": {"line_id": line_id},
+                    }
+                )
+        return {"type": "FeatureCollection", "features": features}
+
+    def _build_kml(self, points: list[dict], *, name: str, value_field: str = "magnetic") -> str:
         placemarks = []
-        for row in points:
+        for row in points or []:
+            longitude = row.get("longitude")
+            latitude = row.get("latitude")
+            if longitude is None or latitude is None:
+                continue
+            value = row.get(value_field, self._point_value(row))
             placemarks.append(
-                f"<Placemark><name>{row['magnetic']}</name><Point><coordinates>{row['longitude']},{row['latitude']},0</coordinates></Point></Placemark>"
+                "<Placemark>"
+                f"<name>{value if value is not None else name}</name>"
+                f"<description>{name}</description>"
+                f"<Point><coordinates>{longitude},{latitude},0</coordinates></Point>"
+                "</Placemark>"
             )
         return (
             "<?xml version='1.0' encoding='UTF-8'?>"
             "<kml xmlns='http://www.opengis.net/kml/2.2'><Document>"
+            f"<name>{name}</name>"
             + "".join(placemarks)
             + "</Document></kml>"
         )
 
-    def _build_gdb_bundle(self, task: dict) -> bytes:
+    def _build_csv_bundle(self, project: dict, task: dict, data: dict) -> bytes:
         buffer = io.BytesIO()
-        rows = []
-        data = task["results"]["data"]
-        for lat_row, lon_row, surface_row, uncertainty_row in zip(
-            data["grid_y"],
-            data["grid_x"],
-            data["surface"],
-            data["uncertainty"],
-        ):
-            for latitude, longitude, magnetic, uncertainty in zip(lat_row, lon_row, surface_row, uncertainty_row):
-                rows.append(
-                    {
-                        "longitude": longitude,
-                        "latitude": latitude,
-                        "predicted_magnetic": magnetic,
-                        "uncertainty": uncertainty,
-                    }
-                )
-        csv_bytes = pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
-        geojson_bytes = json.dumps(
-            {
-                "type": "FeatureCollection",
-                "features": [
-                    {
-                        "type": "Feature",
-                        "geometry": {"type": "Point", "coordinates": [row["longitude"], row["latitude"]]},
-                        "properties": {"magnetic": row["magnetic"]},
-                    }
-                    for row in data["points"]
-                ],
-            }
-        ).encode("utf-8")
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("gaia_export.gdb/stations.geojson", geojson_bytes)
-            archive.writestr("gaia_export.gdb/grid.csv", csv_bytes)
+            archive.writestr("metadata/project.json", json.dumps({"project": project, "task": task}, default=str, indent=2))
+            archive.writestr("metadata/qa_report.json", json.dumps(data.get("qa_report") or {}, indent=2))
+            archive.writestr("metadata/validation_summary.json", json.dumps(data.get("validation_summary") or {}, indent=2))
+            archive.writestr("points/measured_points.csv", pd.DataFrame(self._point_rows(data.get("points") or [])).to_csv(index=False))
+            if data.get("predicted_points"):
+                archive.writestr("points/predicted_points.csv", pd.DataFrame(self._point_rows(data["predicted_points"])).to_csv(index=False))
+            for spec in self._layer_specs(data):
+                rows = self._grid_rows(data, spec["key"], spec["slug"])
+                if rows:
+                    archive.writestr(f"grids/{spec['slug']}.csv", pd.DataFrame(rows).to_csv(index=False))
+            archive.writestr("traverses/traverses.csv", pd.DataFrame(self._point_rows(data.get("points") or [])).to_csv(index=False))
+            archive.writestr("README.txt", "CSV bundle contains measured points, predicted points when available, grid exports for every compatible output layer, and processing metadata.")
+        return buffer.getvalue()
+
+    def _build_geojson_bundle(self, project: dict, task: dict, data: dict) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("metadata/project.json", json.dumps({"project": project.get("name"), "task": task.get("name")}, indent=2))
+            archive.writestr("points/measured_points.geojson", json.dumps(self._points_geojson(data.get("points") or [])))
+            if data.get("predicted_points"):
+                archive.writestr("points/predicted_points.geojson", json.dumps(self._points_geojson(data["predicted_points"], value_field="predicted_magnetic")))
+            archive.writestr("traverses/traverses.geojson", json.dumps(self._traverse_geojson(data.get("points") or [])))
+            for spec in self._layer_specs(data):
+                rows = self._grid_rows(data, spec["key"], spec["slug"])
+                if rows:
+                    archive.writestr(f"grids/{spec['slug']}.geojson", json.dumps(self._points_geojson(rows, value_field=spec["slug"])))
+            archive.writestr("README.txt", "GeoJSON bundle contains measured points, predicted points when available, traverse lines, and gridded layers exported as point features.")
+        return buffer.getvalue()
+
+    def _build_kmz_bundle(self, project: dict, task: dict, data: dict) -> bytes:
+        outer = io.BytesIO()
+        with zipfile.ZipFile(outer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("kml/measured_points.kml", self._build_kml(data.get("points") or [], name=f"{project.get('name', 'Project')} measured points"))
+            if data.get("predicted_points"):
+                archive.writestr(
+                    "kml/predicted_points.kml",
+                    self._build_kml(data["predicted_points"], name=f"{project.get('name', 'Project')} predicted points", value_field="predicted_magnetic"),
+                )
+            for spec in self._layer_specs(data):
+                rows = self._grid_rows(data, spec["key"], spec["slug"])
+                if rows:
+                    archive.writestr(f"kml/{spec['slug']}.kml", self._build_kml(rows, name=spec["label"], value_field=spec["slug"]))
+            kmz_buffer = io.BytesIO()
+            with zipfile.ZipFile(kmz_buffer, "w", zipfile.ZIP_DEFLATED) as kmz:
+                kmz.writestr("doc.kml", self._build_kml(data.get("points") or [], name=f"{project.get('name', 'Project')} measured points"))
+            archive.writestr("google_earth/overview.kmz", kmz_buffer.getvalue())
+            archive.writestr("README.txt", "KMZ bundle contains KML layers and a quick-look KMZ for Google Earth.")
+        return outer.getvalue()
+
+    def _build_gdb_bundle(self, project: dict, task: dict, data: dict) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("gaia_export.gdb/measured_points.geojson", json.dumps(self._points_geojson(data.get("points") or [])))
+            if data.get("predicted_points"):
+                archive.writestr("gaia_export.gdb/predicted_points.geojson", json.dumps(self._points_geojson(data["predicted_points"], value_field="predicted_magnetic")))
+            archive.writestr("gaia_export.gdb/traverses.geojson", json.dumps(self._traverse_geojson(data.get("points") or [])))
+            for spec in self._layer_specs(data):
+                rows = self._grid_rows(data, spec["key"], spec["slug"])
+                if rows:
+                    archive.writestr(f"gaia_export.gdb/{spec['slug']}.csv", pd.DataFrame(rows).to_csv(index=False))
+                    archive.writestr(f"gaia_export.gdb/{spec['slug']}.geojson", json.dumps(self._points_geojson(rows, value_field=spec["slug"])))
+            archive.writestr("gaia_export.gdb/qa_report.json", json.dumps(data.get("qa_report") or {}, indent=2))
             archive.writestr(
                 "gaia_export.gdb/README.txt",
-                "Bundle contains geospatial layers and grid attributes prepared for downstream GIS ingestion.",
+                "Bundle contains measured points, predicted points when available, traverse lines, gridded layers, and metadata prepared for downstream GIS ingestion.",
             )
+        return buffer.getvalue()
+
+    def _build_raster_bundle(self, project: dict, task: dict) -> bytes:
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        image_names = ["heatmap.png", "contour.png", "surface.png"]
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for image_name in image_names:
+                image_bytes = self._try_get_image_bytes(task, image_name)
+                if not image_bytes:
+                    continue
+                archive.writestr(f"png/{image_name}", image_bytes)
+                jpg_output = io.BytesIO()
+                Image.open(io.BytesIO(image_bytes)).convert("RGB").save(jpg_output, format="JPEG", quality=92)
+                archive.writestr(f"jpg/{image_name.replace('.png', '.jpg')}", jpg_output.getvalue())
+            archive.writestr("README.txt", f"Raster bundle for {project.get('name', 'project')} includes all generated map images in PNG and JPG where available.")
         return buffer.getvalue()
 
     # ── Image helpers ─────────────────────────────────────────────────────────
@@ -289,7 +374,7 @@ class ExportService:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import mm
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, KeepTogether
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
         from reportlab.lib import colors
 
         buffer = io.BytesIO()
@@ -310,13 +395,25 @@ class ExportService:
                                          backColor=colors.HexColor("#f0f4f0"),
                                          borderColor=colors.HexColor("#1a7340"),
                                          borderWidth=0.5, borderPadding=8, spaceAfter=4)
+        hero = ParagraphStyle("hero", parent=styles["Normal"], fontSize=12, leading=17, textColor=colors.white)
 
         story = []
+        title_block = Table(
+            [[Paragraph(f"<b>{project.get('name', 'Magnetic Survey Report')}</b><br/>{task.get('name', '')}", hero)]],
+            colWidths=[170 * mm],
+        )
+        title_block.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#153a2d")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 16),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 16),
+            ("TOPPADDING", (0, 0), (-1, -1), 18),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 18),
+        ]))
+        story.append(title_block)
+        story.append(Spacer(1, 3*mm))
 
         # ── Title block ──
-        story.append(Paragraph(project.get("name", "Magnetic Survey Report"), h1))
-        story.append(Paragraph(task.get("name", ""), styles["Heading2"]))
-        story.append(Paragraph(f"Generated: {utc_now()}  |  GAIA Magnetics", meta))
+        story.append(Paragraph(f"Generated: {utc_now()}  |  Aurora AI document engine", meta))
         story.append(Spacer(1, 6*mm))
 
         rd = aurora.report_data or {}
@@ -367,7 +464,16 @@ class ExportService:
         exec_summary = rd.get("executive_summary") or aurora.summary
         if exec_summary:
             story.append(Paragraph("Executive Summary", h2))
-            story.append(Paragraph(exec_summary, body))
+            summary_card = Table([[Paragraph(exec_summary, body)]], colWidths=[170 * mm])
+            summary_card.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eef6f1")),
+                ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#1a7340")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("TOPPADDING", (0, 0), (-1, -1), 10),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+            ]))
+            story.append(summary_card)
             story.append(Spacer(1, 4*mm))
 
         # ── Project Overview ──
@@ -508,11 +614,23 @@ class ExportService:
                 ph.runs[0].font.color.rgb = RGBColor(0x1a, 0x73, 0x40)
 
         # ── Title ──
-        title = doc.add_heading(project.get("name", "Magnetic Survey Report"), level=1)
-        if title.runs:
-            title.runs[0].font.color.rgb = RGBColor(0x1a, 0x73, 0x40)
-        doc.add_heading(task.get("name", ""), level=2)
-        doc.add_paragraph(f"Generated: {utc_now()}")
+        from docx.oxml import parse_xml
+        from docx.oxml.ns import nsdecls
+
+        cover = doc.add_table(rows=1, cols=1)
+        cover.style = "Table Grid"
+        cover_cell = cover.cell(0, 0)
+        cover_cell.text = ""
+        cover_para = cover_cell.paragraphs[0]
+        cover_title = cover_para.add_run(project.get("name", "Magnetic Survey Report") + "\n")
+        cover_title.bold = True
+        cover_title.font.size = Pt(22)
+        cover_title.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        cover_sub = cover_para.add_run(task.get("name", ""))
+        cover_sub.font.size = Pt(13)
+        cover_sub.font.color.rgb = RGBColor(0xE6, 0xF4, 0xEA)
+        cover_cell._tc.get_or_add_tcPr().append(parse_xml(r'<w:shd {} w:fill="153A2D"/>'.format(nsdecls('w'))))
+        doc.add_paragraph(f"Generated: {utc_now()} | Aurora AI document engine")
 
         # ── Executive Summary ──
         exec_summary = rd.get("executive_summary") or aurora.summary
@@ -621,7 +739,9 @@ class ExportService:
 
     def _build_pptx(self, project: dict, task: dict, full_results: dict, aurora) -> bytes:
         from pptx import Presentation
-        from pptx.util import Pt, Inches, Emu
+        from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE
+        from pptx.enum.text import PP_ALIGN
+        from pptx.util import Pt, Inches
         from pptx.dml.color import RGBColor as PPTXColor
 
         prs = Presentation()
@@ -643,10 +763,89 @@ class ExportService:
                 slide.notes_slide.notes_text_frame.text = notes
             return slide
 
+        def _apply_slide_background(slide, *, dark=False):
+            slide.background.fill.solid()
+            slide.background.fill.fore_color.rgb = PPTXColor(0x15, 0x3A, 0x2D) if dark else PPTXColor(0xF5, 0xF7, 0xF4)
+            band = slide.shapes.add_shape(MSO_AUTO_SHAPE_TYPE.RECTANGLE, Inches(0), Inches(0), Inches(13.33), Inches(0.55))
+            band.fill.solid()
+            band.fill.fore_color.rgb = PPTXColor(0x15, 0x3A, 0x2D)
+            band.line.fill.background()
+
+        def _figure_file_for_ref(visual_ref):
+            ref = str(visual_ref or "").lower()
+            if "contour" in ref:
+                return "contour.png"
+            if "3d" in ref or "surface" in ref:
+                return "surface.png"
+            return "heatmap.png"
+
+        def _add_designed_slide(title_text, bullets, notes="", visual_ref=None):
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            _apply_slide_background(slide)
+            title_box = slide.shapes.add_textbox(Inches(0.65), Inches(0.72), Inches(6.1), Inches(0.8))
+            title_frame = title_box.text_frame
+            title_run = title_frame.paragraphs[0].add_run()
+            title_run.text = title_text
+            title_run.font.size = Pt(24)
+            title_run.font.bold = True
+            title_run.font.color.rgb = PPTXColor(0x15, 0x3A, 0x2D)
+            body_box = slide.shapes.add_textbox(Inches(0.7), Inches(1.65), Inches(5.2), Inches(4.9))
+            tf = body_box.text_frame
+            tf.word_wrap = True
+            for i, line in enumerate(bullets[:5]):
+                p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+                p.text = str(line).lstrip("â€¢-* ").strip()
+                p.font.size = Pt(16)
+                p.font.color.rgb = PPTXColor(0x2E, 0x3C, 0x36)
+                p.space_after = Pt(9)
+            image_name = _figure_file_for_ref(visual_ref)
+            image_bytes = self._try_get_image_bytes(task, image_name) if image_name else None
+            if image_bytes:
+                slide.shapes.add_picture(io.BytesIO(image_bytes), Inches(6.2), Inches(1.5), width=Inches(6.2), height=Inches(3.8))
+            else:
+                placeholder = slide.shapes.add_textbox(Inches(6.2), Inches(1.5), Inches(6.0), Inches(3.7))
+                placeholder.fill.solid()
+                placeholder.fill.fore_color.rgb = PPTXColor(0xE7, 0xEF, 0xEA)
+                placeholder.line.color.rgb = PPTXColor(0x15, 0x3A, 0x2D)
+                frame = placeholder.text_frame
+                frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+                run = frame.paragraphs[0].add_run()
+                run.text = visual_ref or "Map"
+                run.font.size = Pt(18)
+                run.font.bold = True
+                run.font.color.rgb = PPTXColor(0x15, 0x3A, 0x2D)
+            if notes:
+                slide.notes_slide.notes_text_frame.text = notes
+            return slide
+
         # ── Title slide ──
-        title_slide = prs.slides.add_slide(prs.slide_layouts[0])
-        title_slide.shapes.title.text = project.get("name", "Magnetic Survey")
-        title_slide.placeholders[1].text = f"{task.get('name', '')}  |  GAIA Magnetics"
+        title_slide = prs.slides.add_slide(prs.slide_layouts[6])
+        _apply_slide_background(title_slide, dark=True)
+        title_box = title_slide.shapes.add_textbox(Inches(0.8), Inches(1.0), Inches(8.3), Inches(1.2))
+        title_frame = title_box.text_frame
+        title_run = title_frame.paragraphs[0].add_run()
+        title_run.text = project.get("name", "Magnetic Survey")
+        title_run.font.size = Pt(28)
+        title_run.font.bold = True
+        title_run.font.color.rgb = PPTXColor(0xFF, 0xFF, 0xFF)
+        subtitle = title_slide.shapes.add_textbox(Inches(0.82), Inches(2.0), Inches(8.0), Inches(1.2))
+        subtitle_run = subtitle.text_frame.paragraphs[0].add_run()
+        subtitle_run.text = f"{task.get('name', '')} | Aurora AI"
+        subtitle_run.font.size = Pt(15)
+        subtitle_run.font.color.rgb = PPTXColor(0xD7, 0xE7, 0xDE)
+        stats_box = title_slide.shapes.add_textbox(Inches(0.85), Inches(4.6), Inches(4.8), Inches(1.2))
+        stats_frame = stats_box.text_frame
+        stats_frame.paragraphs[0].add_run().text = f"{stats.get('point_count', 0)} survey points"
+        stats_frame.paragraphs[0].runs[0].font.size = Pt(20)
+        stats_frame.paragraphs[0].runs[0].font.bold = True
+        stats_frame.paragraphs[0].runs[0].font.color.rgb = PPTXColor(0xFF, 0xFF, 0xFF)
+        stats_p = stats_frame.add_paragraph()
+        stats_p.text = f"Mean {stats.get('mean', 0):.2f} nT | Std {stats.get('std', 0):.2f} nT"
+        stats_p.font.size = Pt(13)
+        stats_p.font.color.rgb = PPTXColor(0xD7, 0xE7, 0xDE)
+        hero_image = self._try_get_image_bytes(task, "heatmap.png")
+        if hero_image:
+            title_slide.shapes.add_picture(io.BytesIO(hero_image), Inches(7.25), Inches(0.95), width=Inches(5.0), height=Inches(5.0))
 
         if slides_data:
             # Use AI-generated slide structure
@@ -657,30 +856,30 @@ class ExportService:
                 bullets = sl.get("bullets") or []
                 notes = sl.get("speaker_notes") or sl.get("notes") or ""
                 if title_text:
-                    _add_content_slide(title_text, bullets, notes)
+                    _add_designed_slide(title_text, bullets, notes, sl.get("visual_ref"))
         else:
             # Fallback structure using aurora highlights
             exec_summary = rd.get("executive_summary") or aurora.summary
             if exec_summary:
-                _add_content_slide("Survey Summary", [exec_summary[:300]])
+                _add_designed_slide("Survey Summary", [exec_summary[:300]], visual_ref="TMF")
 
             if aurora.highlights:
-                _add_content_slide("Key Findings", [f"• {h}" for h in aurora.highlights])
+                _add_designed_slide("Key Findings", [str(h) for h in aurora.highlights], visual_ref="TMF")
 
             corrections = ", ".join(config.get("corrections") or []) or "None"
             add_ons = ", ".join(config.get("add_ons") or []) or "None"
             model = config.get("model") or "Not specified"
-            _add_content_slide(
+            _add_designed_slide(
                 "Processing Configuration",
                 [
                     f"Model: {model}",
                     f"Corrections: {corrections}",
                     f"Add-ons: {add_ons}",
-                    f"Scenario: {task.get('scenario', '—').capitalize()}",
-                    f"Platform: {task.get('platform', '—').capitalize()}",
+                    f"Scenario: {str(task.get('scenario') or 'off').capitalize()}",
+                    f"Platform: {str(task.get('platform') or '—').capitalize()}",
                 ],
             )
-            _add_content_slide(
+            _add_designed_slide(
                 "Magnetic Statistics",
                 [
                     f"Mean field: {stats.get('mean', 0):.2f} nT",
@@ -690,7 +889,7 @@ class ExportService:
                     f"Anomaly count (>mean+1σ): {stats.get('anomaly_count', 0)}",
                 ],
             )
-            _add_content_slide(
+            _add_designed_slide(
                 "Notes & Limitations",
                 [
                     "Results are model-dependent; account for survey geometry in interpretation.",

@@ -2,10 +2,6 @@
 import {renderWorkflowProgress} from "./progress.js";
 import {appState, setTask} from "../state.js";
 import {formatBytes} from "../shared/format.js";
-import {initAIChat} from "../shared/ai_chat.js";
-
-let _exportChat = null;
-
 const CARD_TO_FORMAT = {
   "ec-pdf": "pdf",
   "ec-pptx": "pptx",
@@ -24,17 +20,9 @@ function getRoots() {
     progress: document.getElementById("exportProg"),
     done: document.getElementById("exportDone"),
     aiBody: document.getElementById("exportAIBody"),
+    aiInputRow: document.querySelector("#screen-export .a-input-row"),
+    aiPanel: document.querySelector("#screen-export .a-panel"),
   };
-}
-
-function _ensureExportChat() {
-  if (_exportChat) return;
-  const bodyEl = document.getElementById("exportAIBody");
-  const inputEl = document.getElementById("exportAIInput");
-  const sendEl = document.getElementById("exportAISend");
-  if (bodyEl && inputEl && sendEl) {
-    _exportChat = initAIChat(bodyEl, inputEl, sendEl, {location: "export"});
-  }
 }
 
 function getSelectedFormats() {
@@ -88,8 +76,16 @@ function renderDownloads(job) {
 }
 
 async function renderAIPanel() {
-  _ensureExportChat();
-  if (!_exportChat) return;
+  const roots = getRoots();
+  if (roots.aiPanel) {
+    roots.aiPanel.style.display = "";
+  }
+  if (roots.aiInputRow) {
+    roots.aiInputRow.style.display = "none";
+  }
+  if (roots.aiBody) {
+    roots.aiBody.innerHTML = "<div class='chat-empty'>Aurora chat is available on Preview and Visualisation. Export generation still uses Aurora behind the scenes when building document deliverables.</div>";
+  }
 }
 
 export async function loadExportView() {
@@ -107,7 +103,7 @@ export async function loadExportView() {
     getRoots().done.style.display = "none";
     getRoots().progress.style.display = "none";
     const ab = document.getElementById("exportAIBody");
-    if (ab) ab.innerHTML = "<div class='amsg'>Select a processed task to generate export artifacts. The AI will provide delivery guidance once a task is active.</div>";
+    if (ab) ab.innerHTML = "<div class='amsg'>Select a processed task to generate export artifacts.</div>";
     throw new Error("Run a processed task before opening Export.");
   }
   const task = await fetchTask(appState.project.id, appState.task.id);
@@ -144,7 +140,6 @@ export function initExport() {
   renderSelectionCount();
   getRoots().done.style.display = "none";
   getRoots().progress.style.display = "none";
-  _ensureExportChat();
   window.toggleEx = (card) => {
     card.classList.toggle("on");
     renderSelectionCount();

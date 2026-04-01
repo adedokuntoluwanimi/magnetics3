@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import sys
+import types
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 
-from backend.services.processing_service import ProcessingRuntime, ProcessingService
+from backend.services.processing_service import (
+    ProcessingRuntime,
+    ProcessingService,
+    _compute_igrf_total_supported,
+)
 
 
 class _FakeStore:
@@ -17,7 +24,18 @@ class _FakeStore:
 
 
 class _FakeStorage:
-    pass
+    def __init__(self):
+        self.uploads = []
+
+    def upload_result(self, **kwargs):
+        self.uploads.append(kwargs)
+        return types.SimpleNamespace(
+            model_dump=lambda mode="json": {
+                "file_name": kwargs["file_name"],
+                "bucket": "results-bucket",
+                "object_name": kwargs["file_name"],
+            }
+        )
 
 
 class ProcessingServiceTests(unittest.TestCase):
@@ -144,6 +162,67 @@ class ProcessingServiceTests(unittest.TestCase):
         qa = self.service._build_qa_report({}, prep, results, {"metadata": {}}, runtime)
         self.assertEqual(qa["status"], "degraded")
         self.assertTrue(qa["blocking_issues"])
+
+    def test_igrf_prefers_ppigrf_backend_when_available(self):
+        fake_module = types.SimpleNamespace(
+            igrf=lambda lon, lat, h_km, dt: (1000.0 + lon, 2000.0 + lat, 3000.0 + h_km)
+        )
+        with mock.patch.dict(sys.modules, {"ppigrf": fake_module}, clear=False):
+            result = _compute_igrf_total_supported(
+                np.array([3.0, 3.1], dtype=float),
+                np.array([7.0, 7.1], dtype=float),
+                2026.25,
+                elevation_m=np.array([120.0, 130.0], dtype=float),
+            )
+        self.assertIsNotNone(result)
+        self.assertEqual(result["backend"], "ppigrf")
+        self.assertEqual(result["reference_model"], "IGRF-14")
+        self.assertEqual(len(result["values"]), 2)
+        self.assertTrue(np.all(np.isfinite(result["values"])))
+
+    def test_igrf_returns_none_when_no_backend_is_available(self):
+        def raising_import(name):
+            raise ModuleNotFoundError(name)
+
+        with mock.patch("backend.services.processing_service.importlib.import_module", side_effect=raising_import):
+            result = _compute_igrf_total_supported(
+                np.array([3.0], dtype=float),
+                np.array([7.0], dtype=float),
+                2026.25,
+            )
+        self.assertIsNone(result)
+
+    def test_persist_outputs_keeps_support_mask_out_of_firestore_payload(self):
+        prep = {
+            "train_frame": pd.DataFrame({"longitude": [3.0], "latitude": [7.0], "magnetic": [100.0]}),
+            "predict_frame": pd.DataFrame({"longitude": [], "latitude": [], "magnetic": []}),
+        }
+        results = {
+            "grid_x": np.array([[3.0, 3.1], [3.0, 3.1]]),
+            "grid_y": np.array([[7.0, 7.0], [7.1, 7.1]]),
+            "surface": np.array([[100.0, 101.0], [102.0, 103.0]]),
+            "uncertainty": np.array([[1.0, 2.0], [3.0, 4.0]]),
+            "points": [{"latitude": 7.0, "longitude": 3.0, "magnetic": 100.0}],
+            "stats": {"mean": 101.5},
+            "model_used": "none",
+            "model_metadata": {},
+            "uncertainty_metadata": {},
+            "support_mask": [[True, True], [True, False]],
+        }
+        with (
+            mock.patch.object(self.service, "_render_heatmap_png", return_value=b"png"),
+            mock.patch.object(self.service, "_render_contour_png", return_value=b"png"),
+            mock.patch.object(self.service, "_render_surface_png", return_value=b"png"),
+        ):
+            stored = self.service._persist_outputs(
+                {"project_id": "project-1", "id": "task-1"},
+                prep,
+                results,
+                {"selected_add_ons": [], "metadata": {}},
+                {"status": "valid"},
+                {"status": "valid"},
+            )
+        self.assertNotIn("support_mask", stored["data"])
 
 
 if __name__ == "__main__":

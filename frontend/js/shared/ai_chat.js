@@ -1,25 +1,58 @@
-/**
- * Shared AI chat component.
- *
- * Usage:
- *   const chat = initAIChat(bodyEl, inputEl, sendEl, { location: "preview" });
- *   await chat.autoLoad("What does this survey show?");   // initial load
- *   // User can then type follow-up questions freely
- */
-
 import {askAurora} from "../api.js";
 import {appState} from "../state.js";
 
+function storageKey(location) {
+  const projectId = appState.project?.id || "no-project";
+  const taskId = appState.task?.id || "no-task";
+  return `gaiaAuroraChat:${location}:${projectId}:${taskId}`;
+}
+
+function readHistory(location) {
+  try {
+    const raw = localStorage.getItem(storageKey(location));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((item) => item?.role && item?.content) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeHistory(location, history) {
+  try {
+    localStorage.setItem(storageKey(location), JSON.stringify(history.slice(-20)));
+  } catch {
+    // Ignore storage failures and keep the chat usable.
+  }
+}
+
 export function initAIChat(bodyEl, inputEl, sendEl, {location}) {
   let busy = false;
-  // Each entry: { role: "user" | "assistant", content: "..." }
-  let history = [];
+  let history = readHistory(location);
+
+  function renderHistory() {
+    bodyEl.innerHTML = "";
+    if (!history.length) {
+      bodyEl.innerHTML = "<div class='chat-empty'>Ask Aurora about this task, the uploaded data, or the processed outputs.</div>";
+      return;
+    }
+    for (const message of history) {
+      if (message.role === "user") {
+        _appendUserMessage(bodyEl, message.content);
+      } else {
+        _appendAIMessage(bodyEl, message.content);
+      }
+    }
+    bodyEl.scrollTop = bodyEl.scrollHeight;
+  }
+
+  function persist() {
+    writeHistory(location, history);
+  }
 
   async function _call(question) {
     if (busy || !appState.project || !appState.task) return;
     busy = true;
     _setInputDisabled(true);
-
     const thinking = _appendThinking(bodyEl);
     bodyEl.scrollTop = bodyEl.scrollHeight;
 
@@ -32,23 +65,15 @@ export function initAIChat(bodyEl, inputEl, sendEl, {location}) {
         history,
       });
 
-      thinking.remove();
-
-      // The full conversational text lives in `message`; fall back to `summary`
       const fullText = (res.message && res.message.trim()) ? res.message : res.summary;
-
+      thinking.remove();
       _appendAIMessage(bodyEl, fullText);
-
-      // Persist conversation for follow-up context
       if (question) {
         history.push({role: "user", content: question});
       }
       history.push({role: "assistant", content: fullText});
-
-      // Cap history to last 20 messages to avoid ever-growing payloads
-      if (history.length > 20) {
-        history = history.slice(history.length - 20);
-      }
+      history = history.slice(-20);
+      persist();
     } catch {
       thinking.remove();
       _appendAIMessage(bodyEl, "AI service unavailable. Check your connection and try again.");
@@ -60,11 +85,14 @@ export function initAIChat(bodyEl, inputEl, sendEl, {location}) {
   }
 
   function _send() {
-    const q = inputEl.value.trim();
-    if (!q || busy) return;
-    _appendUserMessage(bodyEl, q);
+    const question = inputEl.value.trim();
+    if (!question || busy) return;
+    if (!history.length && bodyEl.querySelector(".chat-empty")) {
+      bodyEl.innerHTML = "";
+    }
+    _appendUserMessage(bodyEl, question);
     inputEl.value = "";
-    _call(q);
+    _call(question);
   }
 
   function _setInputDisabled(disabled) {
@@ -73,34 +101,40 @@ export function initAIChat(bodyEl, inputEl, sendEl, {location}) {
   }
 
   sendEl.addEventListener("click", _send);
-  inputEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
+  inputEl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
       _send();
     }
   });
 
+  renderHistory();
+
   return {
     async autoLoad(initialQuestion) {
+      history = readHistory(location);
+      renderHistory();
       if (!appState.project || !appState.task) {
-        bodyEl.innerHTML =
-          "<div class='chat-empty'>Open a project and task to enable AI analysis.</div>";
+        bodyEl.innerHTML = "<div class='chat-empty'>Open a project and task to enable Aurora chat.</div>";
         return;
       }
-      // Reset history and UI for a fresh context (e.g. layer change)
-      history = [];
-      bodyEl.innerHTML = "";
-      await _call(initialQuestion || null);
+      if (!history.length && initialQuestion) {
+        await _call(initialQuestion);
+      }
     },
 
     clear() {
       history = [];
-      bodyEl.innerHTML = "";
+      persist();
+      renderHistory();
+    },
+
+    refresh() {
+      history = readHistory(location);
+      renderHistory();
     },
   };
 }
-
-// ── DOM helpers ───────────────────────────────────────────────────────────────
 
 function _appendUserMessage(container, text) {
   const el = document.createElement("div");
@@ -121,16 +155,10 @@ function _appendAIMessage(container, text) {
 function _appendThinking(container) {
   const el = document.createElement("div");
   el.className = "chat-ai chat-thinking";
-  el.innerHTML =
-    '<span class="chat-dot"></span><span class="chat-dot"></span><span class="chat-dot"></span>';
+  el.innerHTML = '<span class="chat-dot"></span><span class="chat-dot"></span><span class="chat-dot"></span>';
   container.appendChild(el);
   return el;
 }
-
-// ── Markdown renderer ─────────────────────────────────────────────────────────
-// Handles: bold, bullet lists, numbered lists, headers, paragraphs.
-// Uses textContent for all user data paths (no XSS risk from Claude output,
-// but we sanitize anyway by building DOM nodes, not innerHTML from raw text).
 
 function _escape(str) {
   return str
@@ -141,19 +169,17 @@ function _escape(str) {
 }
 
 function _renderInline(text) {
-  // **bold**
   return _escape(text).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
 }
 
 function _renderMarkdown(text) {
   if (!text) return "";
-
   const lines = text.split("\n");
   const html = [];
   let inList = false;
   let listType = "";
 
-  function _closeList() {
+  function closeList() {
     if (inList) {
       html.push(`</${listType}>`);
       inList = false;
@@ -161,67 +187,53 @@ function _renderMarkdown(text) {
     }
   }
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  for (const line of lines) {
     const trimmed = line.trim();
-
     if (!trimmed) {
-      _closeList();
+      closeList();
       html.push("<br>");
       continue;
     }
-
-    // ### Heading 3
     if (/^###\s+/.test(trimmed)) {
-      _closeList();
+      closeList();
       html.push(`<div class="chat-h3">${_renderInline(trimmed.replace(/^###\s+/, ""))}</div>`);
       continue;
     }
-
-    // ## Heading 2
     if (/^##\s+/.test(trimmed)) {
-      _closeList();
+      closeList();
       html.push(`<div class="chat-h2">${_renderInline(trimmed.replace(/^##\s+/, ""))}</div>`);
       continue;
     }
-
-    // # Heading 1
     if (/^#\s+/.test(trimmed)) {
-      _closeList();
+      closeList();
       html.push(`<div class="chat-h1">${_renderInline(trimmed.replace(/^#\s+/, ""))}</div>`);
       continue;
     }
-
-    // Numbered list: 1. item
-    const numMatch = trimmed.match(/^(\d+)\.\s+(.*)/);
-    if (numMatch) {
+    const numberMatch = trimmed.match(/^(\d+)\.\s+(.*)/);
+    if (numberMatch) {
       if (!inList || listType !== "ol") {
-        _closeList();
+        closeList();
         html.push("<ol class='chat-ol'>");
         inList = true;
         listType = "ol";
       }
-      html.push(`<li>${_renderInline(numMatch[2])}</li>`);
+      html.push(`<li>${_renderInline(numberMatch[2])}</li>`);
       continue;
     }
-
-    // Unordered list: -, *, •
-    if (/^[-\*\•]\s+/.test(trimmed)) {
+    if (/^[-*•]\s+/.test(trimmed)) {
       if (!inList || listType !== "ul") {
-        _closeList();
+        closeList();
         html.push("<ul class='chat-ul'>");
         inList = true;
         listType = "ul";
       }
-      html.push(`<li>${_renderInline(trimmed.replace(/^[-\*\•]\s+/, ""))}</li>`);
+      html.push(`<li>${_renderInline(trimmed.replace(/^[-*•]\s+/, ""))}</li>`);
       continue;
     }
-
-    // Regular paragraph line
-    _closeList();
+    closeList();
     html.push(`<p class="chat-p">${_renderInline(trimmed)}</p>`);
   }
 
-  _closeList();
+  closeList();
   return html.join("");
 }

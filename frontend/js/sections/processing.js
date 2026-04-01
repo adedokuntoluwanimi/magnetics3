@@ -158,21 +158,20 @@ function renderConfigSummary(task) {
   const corrections = (config.corrections || []).map((c) => CORRECTION_LABELS[c] || c);
   const addOns = (config.add_ons || []).map((a) => ADD_ON_LABELS[a] || a);
   const model = MODEL_LABELS[config.model] || config.model || "Machine learning";
-  const scenario = task?.scenario || "automatic";
-  const spacing = task?.station_spacing
-    ? `${task.station_spacing} ${task.station_spacing_unit || "m"}`
-    : null;
   const runPrediction = config.run_prediction !== false;
+  const filterMode = config.filter_type
+    ? titleCase(String(config.filter_type).replace(/-/g, " "))
+    : null;
 
   const badge = (text, color) =>
     `<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10.5px;font-weight:700;background:var(--${color}-bg,var(--bg2));color:var(--${color},var(--text2));margin:2px 3px 2px 0">${text}</span>`;
 
   const rows = [
-    ["Scenario", badge(scenario === "automatic" ? "Optional / automatic" : titleCase(scenario), "g5")],
-    ...(spacing ? [["Grid spacing", badge(spacing, "blue")]] : []),
+    ["Prediction modelling", badge(runPrediction ? "On" : "Off", runPrediction ? "amber" : "text4")],
     ["Model", badge(model, runPrediction ? "amber" : "text4")],
-    corrections.length ? ["Corrections", corrections.map((c) => badge(c, "g5")).join("")] : null,
-    addOns.length ? ["Add-ons", addOns.map((a) => badge(a, "blue")).join("")] : null,
+    filterMode ? ["Filter mode", badge(filterMode, "blue")] : null,
+    ["Corrections", corrections.length ? corrections.map((c) => badge(c, "g5")).join("") : badge("None selected", "text4")],
+    ["Add-ons", addOns.length ? addOns.map((a) => badge(a, "blue")).join("") : badge("None selected", "text4")],
   ].filter(Boolean);
 
   card.innerHTML = `

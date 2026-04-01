@@ -114,9 +114,9 @@ const LAYER_META = {
 };
 
 const VISUALISATION_TAB_LABELS = {
-  Surface: "Surface",
-  Heatmap: "Surface",
-  Contour: "Surface",
+  Surface: "Contour map",
+  Heatmap: "Contour map",
+  Contour: "Contour map",
   "3D": "3D surface",
   Map: "Map overlay",
   "Line Profiles": "Line profiles",
@@ -841,7 +841,7 @@ export async function loadVisualisation() {
   const layers = buildAvailableLayers(results, task);
   const activeLayer = getActiveLayer(layers);
   const stats = computeLayerStats(activeLayer);
-  const mode = appState.activeVisualisation || "Surface";
+  const mode = appState.activeVisualisation || "Contour";
 
   // Detect single-traverse to show a hint (never force-redirect — let user choose their tab)
   const _lineIds = new Set((results?.points || []).map((p) => (p.line_id != null ? String(p.line_id) : null)).filter(Boolean));
@@ -878,6 +878,9 @@ export async function loadVisualisation() {
     displayData = filterDisplayData(buildDisplayDatasets(results, activeLayer));
   }
   renderInterpretation(activeLayer, stats, displayData);
+  if (_visChat?.refresh) {
+    _visChat.refresh();
+  }
 }
 
 export function initVisualisation() {
@@ -919,14 +922,14 @@ export function initVisualisation() {
     loadVisualisation();
   };
   window.pickVis = async (element, mode) => {
-    const resolvedMode = mode === "3D surface" ? "3D" : mode;
+    const resolvedMode = mode === "3D surface" ? "3D" : mode === "Contour map" ? "Contour" : mode;
     document.querySelectorAll("#screen-visualisation .vt").forEach((node) => node.classList.remove("on"));
     element?.classList.add("on");
     setActiveVisualisation(resolvedMode);
     await loadVisualisation();
   };
   window.drawVis = async (mode) => {
-    const resolvedMode = mode === "3D surface" ? "3D" : mode;
+    const resolvedMode = mode === "3D surface" ? "3D" : mode === "Contour map" ? "Contour" : mode;
     setActiveVisualisation(resolvedMode);
     syncVisualisationTabs(resolvedMode);
     await loadVisualisation();

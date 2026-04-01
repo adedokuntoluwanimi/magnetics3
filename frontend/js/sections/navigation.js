@@ -69,10 +69,12 @@ export function initNavigation() {
   window.openProjectSetup = () => {
     document.getElementById("sidebar")?.classList.remove("off");
     window.go("setup");
+    window.restoreSetupFromState?.();
   };
   window.openTaskSetup = () => {
     document.getElementById("sidebar")?.classList.remove("off");
     window.go("setup");
+    window.restoreSetupFromState?.();
   };
   window.openProjectsHub = async () => {
     const {openProjectsList} = await import("./sidebar.js");
@@ -172,6 +174,8 @@ export function initNavigation() {
       hideGlobalNotice();
       if (target === "analysis") {
         if (appState.task) loadAnalysis(appState.task);
+      } else if (target === "setup") {
+        window.restoreSetupFromState?.();
       } else if (target === "preview") {
         await loadPreview();
       } else if (target === "processing") {

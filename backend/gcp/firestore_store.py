@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from backend.config import Settings
@@ -32,7 +33,7 @@ class FirestoreStore:
         return payload
 
     def update_task(self, task_id: str, fields: dict[str, Any]) -> dict[str, Any]:
-        self._tasks.document(task_id).update(fields)
+        self._tasks.document(task_id).update(self._sanitize_firestore_value(fields))
         return self.get_task(task_id)
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
@@ -53,11 +54,11 @@ class FirestoreStore:
         return doc.to_dict() if doc.exists else None
 
     def update_processing_run(self, run_id: str, fields: dict[str, Any]) -> dict[str, Any]:
-        self._runs.document(run_id).update(fields)
+        self._runs.document(run_id).update(self._sanitize_firestore_value(fields))
         return self.get_processing_run(run_id)
 
     def update_project(self, project_id: str, fields: dict[str, Any]) -> dict[str, Any]:
-        self._projects.document(project_id).update(fields)
+        self._projects.document(project_id).update(self._sanitize_firestore_value(fields))
         return self.get_project(project_id)
 
     def delete_project(self, project_id: str) -> None:
@@ -78,5 +79,20 @@ class FirestoreStore:
         return doc.to_dict() if doc.exists else None
 
     def update_export_job(self, export_job_id: str, fields: dict[str, Any]) -> dict[str, Any]:
-        self._exports.document(export_job_id).update(fields)
+        self._exports.document(export_job_id).update(self._sanitize_firestore_value(fields))
         return self.get_export_job(export_job_id)
+
+    def _sanitize_firestore_value(self, value: Any) -> Any:
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            if math.isnan(value) or math.isinf(value):
+                return None
+            return value
+        if isinstance(value, dict):
+            return {key: self._sanitize_firestore_value(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._sanitize_firestore_value(item) for item in value]
+        if hasattr(value, "item"):
+            return self._sanitize_firestore_value(value.item())
+        return value

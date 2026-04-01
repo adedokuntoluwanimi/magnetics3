@@ -219,6 +219,11 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 
 /* AURORA PANEL */
 .a-panel{width:278px;flex-shrink:0;background:var(--bg2);border-left:1px solid var(--border);border:2px solid #000;box-shadow:0 10px 26px rgba(0,0,0,0.14);display:flex;flex-direction:column;overflow:hidden}
+#previewAIPanel{width:320px;min-width:320px}
+.a-input-row{display:flex;align-items:flex-end;gap:10px;padding:12px;border-top:1px solid var(--border);background:var(--bg2)}
+#previewAIPanel .a-input-row{align-items:stretch}
+#previewAIPanel textarea{min-height:88px}
+#previewAIPanel .a-body{padding:16px 16px 10px!important}
 .a-hdr{padding:15px 17px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
 .a-title{display:flex;align-items:center;gap:9px;font-family:'Roboto',sans-serif;font-size:15px;font-weight:600;color:var(--text);}
 .a-gem{width:22px;height:22px;border-radius:50%;background:var(--g50);border:2px solid var(--g300);display:flex;align-items:center;justify-content:center;flex-shrink:0}
@@ -1085,7 +1090,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
       <div class="screen" id="screen-visualisation">
         <div style="padding:13px 20px 11px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap">
           <div class="vis-bar">
-            <div class="vt on" onclick="pickVis(this,'Surface')">Surface</div>
+            <div class="vt on" onclick="pickVis(this,'Contour')">Contour map</div>
             <div class="vt" onclick="pickVis(this,'3D')">3D surface</div>
             <div class="vt" onclick="pickVis(this,'Map')">Map overlay</div>
             <div class="vt" onclick="pickVis(this,'Line Profiles')">Line profiles</div>
@@ -1159,23 +1164,23 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
               <div style="display:flex;gap:6px;margin-top:8px"></div>
             </div>
             <div class="ec" id="ec-geojson" onclick="toggleEx(this)">
-              <div><div style="font-size:13px;font-weight:700;color:var(--text)">GeoJSON</div><div style="font-size:11px;color:var(--text3);margin-top:2px">TMF values, anomaly flags, ML scores - QGIS / ArcGIS</div></div>
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">GeoJSON bundle</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Zipped GeoJSON package with measured points, traverses, predicted points, and compatible layers</div></div>
               <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bg">GIS ready</span></div>
             </div>
             <div class="ec" id="ec-kml" onclick="toggleEx(this)">
-              <div><div style="font-size:13px;font-weight:700;color:var(--text)">KML / KMZ</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Google Earth - anomaly placemarks, lineaments</div></div>
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">KML / KMZ bundle</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Zipped Google Earth package with KML layers and a quick-look KMZ</div></div>
               <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bg">Google Earth</span></div>
             </div>
             <div class="ec" id="ec-csv" onclick="toggleEx(this)">
-              <div><div style="font-size:13px;font-weight:700;color:var(--text)">CSV + XYZ grid</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Corrected TMF, anomaly scores, uncertainty - Petrel / Montaj</div></div>
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">CSV bundle</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Zipped CSV package with measured points, predicted points, grids, and metadata</div></div>
               <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bgr">Geosoft / Petrel</span></div>
             </div>
             <div class="ec" id="ec-gdb" onclick="toggleEx(this)">
-              <div><div style="font-size:13px;font-weight:700;color:var(--text)">File GDB</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Esri feature classes - full ArcGIS schema</div></div>
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">File GDB bundle</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Zipped ArcGIS-style package with points, traverses, grids, and metadata</div></div>
               <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bb">ArcGIS</span></div>
             </div>
             <div class="ec" id="ec-png" onclick="toggleEx(this)">
-              <div><div style="font-size:13px;font-weight:700;color:var(--text)">PNG / JPG maps</div><div style="font-size:11px;color:var(--text3);margin-top:2px">High-resolution raster exports at 300 DPI</div></div>
+              <div><div style="font-size:13px;font-weight:700;color:var(--text)">Map image bundle</div><div style="font-size:11px;color:var(--text3);margin-top:2px">Zipped PNG and JPG package with every generated map image</div></div>
               <div style="display:flex;gap:6px;margin-top:8px"><span class="badge bgr">300 DPI</span></div>
             </div>
           </div>
@@ -1280,7 +1285,7 @@ function go(el){
   cur=s;
   setStatus(smap[s]||'Ready',sorder.indexOf(s)-1);
   if(s==='processing'){if(!procStarted)startProc();}
-  if(s==='visualisation')drawVis('Surface');
+  if(s==='visualisation')drawVis('Contour');
   if(s==='preview')drawPreviewMap();
 }
 
@@ -1295,7 +1300,7 @@ function toggleDark(){
   var dark=document.documentElement.getAttribute('data-theme')==='dark';
   document.documentElement.setAttribute('data-theme',dark?'light':'dark');
   document.getElementById('dmBtn').textContent=dark?'\u2600':'\u263D';
-  if(cur==='visualisation')drawVis(document.querySelector('.vt.on')?.textContent||'Surface');
+  if(cur==='visualisation')drawVis(document.querySelector('.vt.on')?.textContent||'Contour');
   if(cur==='preview')drawPreviewMap();
 }
 
@@ -1628,7 +1633,7 @@ window.addEventListener('DOMContentLoaded',function(){
   setPlatform('ground');
   drawPreviewMap();
   renderProcMap();
-  drawVis('Surface');
+  drawVis('Contour');
 });
 </script>
 <script type="module" src="/frontend/js/app.js"></script>

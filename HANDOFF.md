@@ -21,66 +21,65 @@ Read these first:
 - AI project:
   `app-01-488817-ai`
 - Latest live revision:
-  `gaia-magnetics-00067-b5x`
+  `gaia-magnetics-00073-87x`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
-> Revision `gaia-magnetics-00067-b5x` is live and `/api/health` returned `{"status":"ok"}` after deploy.
+> Revision `gaia-magnetics-00073-87x` is live, `/api/health` returned `{"status":"ok"}`, and a full live smoke test completed after deploy.
 
 ## What Changed Most Recently
 
-### Product and UI updates
+### Processing and persistence fixes
 
-- User-visible assistant branding is `Aurora AI`.
-- Setup now treats scenario selection as optional and includes an explicit `Off` option.
-- Predicted traverse mode is simplified to a single active choice:
-  `infill` or `offset`.
-- Sidebar project arrow was enlarged.
-- Preview and downstream state now preserve predicted traverse metadata more accurately.
-- Visualisation now supports viewing all traverses together or focusing on a selected traverse.
-- Combined heatmap/contour presentation remains the main surface view.
-- Aurora panels have a black border treatment and the canned “Aurora AI is ready...” placeholder text was removed.
-- Dark-mode contrast was improved in visualisation plots and assistant surfaces.
+- Fixed the Firestore task-result persistence failure that was causing completed processing runs to end as failed.
+- `support_mask` now stays in `results.json` only and is excluded from the Firestore task payload.
+- Added Firestore update sanitization for task, run, project, and export-job updates.
+- Added regression coverage for the `support_mask` persistence case.
 
-### Processing and wording updates
+### Aurora routing and live AI behavior
 
-- Predicted stations now carry values intended for overlay/readout use.
-- Some fallback and processing descriptions were simplified to remove unnecessary jargon.
-- Frontend result loading was tightened to reduce repeated fetches and improve perceived load time.
-- Blank scenario no longer defaults to `explicit`; it now follows an automatic analysis-only path.
-- Single uploaded traverses are intended to remain single instead of being split into many inferred lines.
-- Derived layers/add-ons can still be generated when predictive modelling is turned off.
+- Aurora chat is now split by function:
+  `Gemini on Vertex AI` for Preview and Visualisation chat,
+  `Claude` remains intended for export drafting.
+- The live Cloud Run service account now has `Vertex AI User` access on the infra project.
+- Live smoke test confirmed Preview and Visualisation Aurora now return real model responses instead of the old fallback text.
+- Export screen chat remains intentionally disabled.
 
-### Mojibake cleanup
+### Current export AI state
 
-- `frontend/index.html` received a full mojibake cleanup sweep.
-- Corrupted arrows, placeholders, checkmarks, separators, map attribution text, upload controls, and default placeholders were fixed across all frontend pages.
-- Frontend scan for common mojibake sequences is clean.
+- Export jobs themselves complete successfully.
+- Bundled export outputs are still being generated correctly.
+- The remaining AI gap is export drafting:
+  Aurora export-authoring can still fall back to saved-data-only content instead of a live Claude-authored draft.
 
 ## Most Important Files To Check First
 
+- `backend/config.py`
+- `backend/gcp/firestore_store.py`
+- `backend/gcp/vertex_ai.py`
+- `backend/services/ai_service.py`
+- `backend/services/container.py`
+- `backend/services/export_service.py`
+- `backend/services/processing_service.py`
+- `backend/routes/ai.py`
+- `backend/routes/tasks.py`
 - `frontend/index.html`
 - `frontend/js/state.js`
+- `frontend/js/shared/ai_chat.js`
 - `frontend/js/sections/setup.js`
+- `frontend/js/sections/navigation.js`
 - `frontend/js/sections/preview.js`
 - `frontend/js/sections/processing.js`
 - `frontend/js/sections/visualisation.js`
-- `frontend/js/sections/maps.js`
 - `frontend/js/sections/export.js`
-- `frontend/js/sections/analysis.js`
-- `backend/services/preview_service.py`
-- `backend/services/processing_service.py`
-- `backend/services/ai_service.py`
-- `backend/routes/tasks.py`
 
 ## Remaining Gaps
 
-1. Manual browser click-through on the latest live build.
-2. End-to-end confirmation on a real dataset that predicted overlay values render exactly as expected.
-3. Per-traverse grid rendering is still a potential follow-up if current filtering is not enough.
-4. Exports still execute in the API path rather than a dedicated job flow.
-5. Watch live processing and export latency after the recent UI and metadata changes.
-6. Re-run older tasks if they still show pre-fix line splitting or skipped derived layers, because stored results may have been generated before the latest processing changes.
+1. Fix Claude-backed export drafting so PDF/DOCX/PPTX AI narratives stop falling back.
+2. Manual browser click-through on the latest live build.
+3. End-to-end confirmation on a larger real dataset that uploaded-data analysis and visualisations still behave well.
+4. Watch live processing and export latency now that chat and export use different AI paths.
+5. Re-run older tasks if they still show pre-fix line splitting or stale task-result payloads.
 
 ## Deploy Command
 

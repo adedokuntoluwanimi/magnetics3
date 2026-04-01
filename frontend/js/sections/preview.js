@@ -222,6 +222,7 @@ function _loadPreviewAI() {
   if (!_previewChat) {
     _previewChat = initAIChat(bodyEl, inputEl, sendEl, {location: "preview"});
   }
+  _previewChat.refresh();
 }
 
 window.drawPreviewMap = async () => {

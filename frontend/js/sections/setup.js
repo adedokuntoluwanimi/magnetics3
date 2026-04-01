@@ -694,6 +694,26 @@ function fullReset({preserveProject = false} = {}) {
   setStep(preserveProject ? 2 : 1);
 }
 
+function restoreSetupFromState() {
+  clearFlash(flash());
+  if (appState.task?.id && appState.task?.name) {
+    window.loadTaskForEdit?.(appState.task, appState.project || null);
+    return;
+  }
+  if (appState.project?.id && appState.project?.name) {
+    setupFlow = "existing-project";
+    taskFlow = "new-task";
+    fullReset({preserveProject: true});
+    syncProjectInputs(appState.project);
+    updateSetupActionLabels();
+    setStep(2);
+    return;
+  }
+  setupFlow = "new-project";
+  taskFlow = "new-task";
+  fullReset();
+}
+
 export function initSetup() {
   renderBasemap();
   renderSurveyFiles();
@@ -820,6 +840,7 @@ export function initSetup() {
   window.goSetupTaskStep = async () => {
     await saveProjectDetails();
   };
+  window.restoreSetupFromState = restoreSetupFromState;
   window.beginNewProjectFlow = () => {
     setupFlow = "new-project";
     taskFlow = "new-task";
@@ -881,6 +902,8 @@ export function initSetup() {
     getEl("setupScroll")?.scrollTo({top: 0, behavior: "smooth"});
     window.go?.("setup");
   };
+
+  restoreSetupFromState();
 
   // Wire "Start Project" buttons from the home screen
   document.querySelectorAll("button").forEach((btn) => {
