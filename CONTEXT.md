@@ -1,6 +1,6 @@
 # GAIA Magnetics Context
 
-Last updated: `2026-04-01`
+Last updated: `2026-04-03`
 
 ## Purpose
 
@@ -23,7 +23,7 @@ This file captures the current working context for `gaia-magnetics`.
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00073-87x`
+  `gaia-magnetics-00077-hxg`
 - Region:
   `us-central1`
 - Infra project:
@@ -41,7 +41,7 @@ This file captures the current working context for `gaia-magnetics`.
   Firestore, Cloud Storage, Cloud Run, Google Maps, Vertex AI.
 - Do not reintroduce dummy data or misleading labels.
 - User-visible assistant branding should remain `Aurora AI`.
-- The frontend currently mixes static shell markup and modular JS; changes often need both.
+- The frontend still mixes static shell markup and modular JS; meaningful changes often need both.
 
 ## Current Functional Shape
 
@@ -51,7 +51,8 @@ This file captures the current working context for `gaia-magnetics`.
 - Core route sequence is:
   `Home -> Projects -> Setup -> Analysis -> Preview -> Processing -> Visualisation -> Export`
 - Sidebar project controls and project/task launch actions are active.
-- Selected project and task IDs now persist across refreshes.
+- Selected project and task IDs persist across refreshes.
+- Project deletion now returns the user to the projects/workspace view instead of Home.
 
 ### Setup
 
@@ -59,75 +60,70 @@ This file captures the current working context for `gaia-magnetics`.
   `Project details -> Task setup`
 - Scenario selection is optional and includes an explicit `Off` option.
 - Setup restores from the saved task/project state after refresh.
-- Prediction mode expects one selected predicted-traverse type:
-  `infill` or `offset`.
+- Saved uploads are shown when reopening an existing task.
 - Survey upload supports CSV/XLSX with coordinate mapping, raw-data mapping, and base-station handling.
 
 ### Preview
 
 - Preview renders Google Maps-backed station maps.
 - Summary cards show survey traverses and predicted traverses separately.
-- Single uploaded traverses are meant to remain a single traverse through preview and processing.
-- Aurora chat is enabled on Preview and is now using the Vertex/Gemini chat path.
-- Live smoke test confirmed Preview Aurora returns a real model response.
+- Uploaded CSVs are treated as one traverse per file.
+- Preview now carries enough metadata to expose detected base-station revisits and preserve file-level traverse identity.
+- Aurora chat is enabled on Preview.
 
 ### Processing
 
 - Processing pipeline persists richer metadata and keeps the full heavy result payload in GCS.
-- Firestore task documents now only keep Firestore-safe result metadata and artifact references.
-- `support_mask` stays in `results.json` but is excluded from the Firestore task payload.
-- Blank scenario now resolves to an automatic analysis-only path instead of defaulting to `explicit`.
-- Derived layers/add-ons can still be generated when predictive modelling is disabled.
-- IGRF is currently working in live runs via `ppigrf`.
+- Firestore task documents keep only Firestore-safe result metadata and artifact references.
+- Base-station detection now respects repeated same-coordinate revisits and CSV `BS`-style markers.
+- Diurnal correction now uses consecutive base-station pairs as signed piecewise correction windows.
+- Single-traverse workflows now support spreadsheet-style regional/residual separation using a line-fit against traverse distance.
+- Regional and residual remain separate outputs.
+- Derived layers can still be generated when predictive modelling is disabled.
 
 ### Visualisation
 
 - Contour map is the current default surface-style view.
-- Users can now choose to view all traverses together or focus on a selected traverse.
-- Dark-mode contrast for plots and assistant surfaces was improved.
-- Aurora chat is enabled on Visualisation and is using the Vertex/Gemini chat path.
-- Live smoke test confirmed Visualisation Aurora returns a real model response.
+- Users can choose to view all traverses together or focus on a selected traverse.
+- Visualisation line profiles now use preserved raw magnetic values for the magnetic layer.
+- Manual horizontal and vertical axis controls are available on line profiles.
+- Regional field and residual field are exposed as separate outputs.
+- Aurora chat is enabled on Visualisation and is shown in its own dedicated panel.
 
 ### Export
 
 - Export jobs complete and bundle outputs are being generated.
-- Export screen chat is intentionally disabled for now.
-- AI export drafting still has a remaining reliability gap: export jobs can complete while the Aurora export-authoring step falls back to saved-data-only content instead of a live Claude-authored narrative.
+- Export filenames now use `task_project` naming.
+- Export screen chat is intentionally removed.
+- Claude-backed narrative generation still needs another quality pass to become consistently specific and reliable.
 
 ## Important Files
 
 ### Backend
 
-- `backend/config.py`
-- `backend/gcp/firestore_store.py`
-- `backend/gcp/vertex_ai.py`
-- `backend/services/ai_service.py`
-- `backend/services/container.py`
-- `backend/services/export_service.py`
 - `backend/services/processing_service.py`
-- `backend/routes/ai.py`
+- `backend/services/preview_service.py`
+- `backend/services/ai_service.py`
+- `backend/services/export_service.py`
+- `backend/services/task_service.py`
 - `backend/routes/tasks.py`
 
 ### Frontend
 
 - `frontend/index.html`
-- `frontend/js/state.js`
-- `frontend/js/shared/ai_chat.js`
-- `frontend/js/sections/analysis.js`
 - `frontend/js/sections/setup.js`
-- `frontend/js/sections/navigation.js`
-- `frontend/js/sections/preview.js`
+- `frontend/js/sections/sidebar.js`
 - `frontend/js/sections/processing.js`
+- `frontend/js/sections/preview.js`
 - `frontend/js/sections/visualisation.js`
 - `frontend/js/sections/export.js`
 
 ## Known Follow-Up Areas
 
-1. Fix Claude-backed export drafting so PDF/DOCX/PPTX narrative generation stops falling back.
+1. Improve Claude-backed export drafting quality and reliability.
 2. Manual browser QA on the newest deploy.
-3. Confirm uploaded-data analysis and visualisation behavior again on a larger real dataset.
+3. Verify the new piecewise diurnal and line-fit regional/residual outputs against more real datasets.
 4. Keep an eye on live processing latency and export response time.
-5. Re-run older tasks if they still show pre-fix line splitting or stale task-result payloads.
 
 ## Deployment Note
 

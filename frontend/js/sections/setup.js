@@ -18,6 +18,69 @@ import {showConfirm} from "../shared/modal.js";
 
 let setupFlow = "new-project";
 let taskFlow = "new-task";
+const SETUP_DRAFT_KEY = "gaiaSetupDraft";
+
+function loadSetupDraft() {
+  try {
+    return JSON.parse(localStorage.getItem(SETUP_DRAFT_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveSetupDraft() {
+  const draft = {
+    projectName: getEl("projectNameInput")?.value || "",
+    projectContext: getEl("projectContextInput")?.value || "",
+    taskName: getEl("taskNameInput")?.value || "",
+    taskDesc: getEl("taskDescInput")?.value || "",
+    mapping: {
+      latitude: getEl("latSelect")?.value || "",
+      longitude: getEl("lonSelect")?.value || "",
+      magnetic_field: getEl("magSelect")?.value || "",
+      hour: getEl("hourSelect")?.value || "",
+      minute: getEl("minuteSelect")?.value || "",
+      second: getEl("secondSelect")?.value || "",
+    },
+    step: Number(document.getElementById("screen-setup")?.dataset?.setupStep || 1),
+    platform: window.state?.platform || "ground",
+    mode: window.state?.mode || "single",
+    scenario: window.state?.scenario || "",
+    coordSystem: window.state?.coordSystem || "wgs84",
+    predictedTraverses: window.state?.predictedTraverses || [],
+    predictedTraverseMode: window.state?.predictedTraverseMode || "offset",
+    dataState: getEl("state-corr")?.classList.contains("selected") ? "corr" : "raw",
+    utmZone: getEl("utmZoneInput")?.value || "",
+    utmHemisphere: getEl("utmHemisphere")?.value || "N",
+  };
+  localStorage.setItem(SETUP_DRAFT_KEY, JSON.stringify(draft));
+}
+
+function clearSetupDraft() {
+  localStorage.removeItem(SETUP_DRAFT_KEY);
+}
+
+function applySetupDraft() {
+  const draft = loadSetupDraft();
+  if (!draft || appState.task?.id) return;
+  if (getEl("projectNameInput") && !getEl("projectNameInput").value) getEl("projectNameInput").value = draft.projectName || "";
+  if (getEl("projectContextInput") && !getEl("projectContextInput").value) getEl("projectContextInput").value = draft.projectContext || "";
+  if (getEl("taskNameInput") && !getEl("taskNameInput").value) getEl("taskNameInput").value = draft.taskName || "";
+  if (getEl("taskDescInput") && !getEl("taskDescInput").value) getEl("taskDescInput").value = draft.taskDesc || "";
+  if (window.state) {
+    window.state.platform = draft.platform || window.state.platform;
+    window.state.predictedTraverses = draft.predictedTraverses || [];
+    window.state.predictedTraverseMode = draft.predictedTraverseMode || "offset";
+  }
+  if (draft.mode) window.setMode?.(draft.mode);
+  if (draft.scenario !== undefined) window.setScenario?.(draft.scenario);
+  if (draft.coordSystem) window.setCoordSystem?.(draft.coordSystem);
+  if (draft.dataState) window.setState?.(draft.dataState);
+  if (getEl("utmZoneInput") && draft.utmZone) getEl("utmZoneInput").value = draft.utmZone;
+  if (getEl("utmHemisphere") && draft.utmHemisphere) getEl("utmHemisphere").value = draft.utmHemisphere;
+  renderPredictedTraverseList();
+  setStep(Number(draft.step || 1));
+}
 
 function splitCsvHeader(text) {
   const first = (text || "").split(/\r?\n/, 1)[0] || "";
@@ -207,6 +270,7 @@ function syncProjectInputs(project = appState.project) {
   const pCtx = getEl("projectContextInput");
   if (pName) pName.value = project?.name || "";
   if (pCtx) pCtx.value = project?.context || "";
+  saveSetupDraft();
 }
 
 function updateSetupActionLabels() {
@@ -284,6 +348,7 @@ function hydrateTaskFormFromRecord(task) {
   if (getEl("hourSelect")) getEl("hourSelect").value = mapping.hour || "";
   if (getEl("minuteSelect")) getEl("minuteSelect").value = mapping.minute || "";
   if (getEl("secondSelect")) getEl("secondSelect").value = mapping.second || "";
+  saveSetupDraft();
 }
 
 function buildUploadRow(name, meta, onRemove) {
@@ -299,7 +364,12 @@ function buildUploadRow(name, meta, onRemove) {
   `;
   div.querySelector(".upload-item-name").textContent = name;
   div.querySelector(".upload-item-info").textContent = meta;
-  div.querySelector(".upload-item-rm").addEventListener("click", onRemove);
+  const removeBtn = div.querySelector(".upload-item-rm");
+  if (typeof onRemove === "function") {
+    removeBtn.addEventListener("click", onRemove);
+  } else {
+    removeBtn.style.display = "none";
+  }
   return div;
 }
 
@@ -368,16 +438,22 @@ function renderSurveyFiles() {
   const list = getEl("uploadList");
   if (!list) return;
   list.innerHTML = "";
-  appState.surveyFiles.forEach((file, idx) => {
-    const meta = `${(file.size / 1024).toFixed(1)} KB`;
-    list.appendChild(
-      buildUploadRow(file.name, meta, () => {
-        const updated = appState.surveyFiles.filter((_, i) => i !== idx);
-        setSurveyFiles(updated);
-        renderSurveyFiles();
-        if (!updated.length) resetColumnMapping();
-      })
-    );
+  if (appState.surveyFiles.length) {
+    appState.surveyFiles.forEach((file, idx) => {
+      const meta = `${(file.size / 1024).toFixed(1)} KB`;
+      list.appendChild(
+        buildUploadRow(file.name, meta, () => {
+          const updated = appState.surveyFiles.filter((_, i) => i !== idx);
+          setSurveyFiles(updated);
+          renderSurveyFiles();
+          if (!updated.length) resetColumnMapping();
+        })
+      );
+    });
+    return;
+  }
+  (appState.task?.survey_files || []).forEach((file) => {
+    list.appendChild(buildUploadRow(file.file_name || file.name || "uploaded_file.csv", "Saved upload"));
   });
 }
 
@@ -385,7 +461,7 @@ function renderBasemap() {
   const zone = getEl("basemapZone");
   const done = getEl("basemapDone");
   if (!zone || !done) return;
-  if (!appState.basemapFile) {
+  if (!appState.basemapFile && !appState.task?.basemap_file) {
     zone.style.display = "block";
     done.style.display = "none";
     done.innerHTML = "";
@@ -394,6 +470,10 @@ function renderBasemap() {
   zone.style.display = "none";
   done.style.display = "block";
   done.innerHTML = "";
+  if (!appState.basemapFile && appState.task?.basemap_file) {
+    done.appendChild(buildUploadRow(appState.task.basemap_file.file_name || "basemap", "Saved upload"));
+    return;
+  }
   done.appendChild(
     buildUploadRow(
       appState.basemapFile.name,
@@ -648,6 +728,7 @@ async function submitTaskFlow() {
       : await createTask(appState.project.id, fd);
     setTask(task);
     taskFlow = "edit-task";
+    clearSetupDraft();
     await refreshSidebar();
     renderWorkflowProgress();
     setFlash(flash(), isEditingTask ? "Task updated." : "Task saved.", "success");
@@ -692,6 +773,7 @@ function fullReset({preserveProject = false} = {}) {
   taskFlow = "new-task";
   updateSetupActionLabels();
   setStep(preserveProject ? 2 : 1);
+  if (!preserveProject) clearSetupDraft();
 }
 
 function restoreSetupFromState() {
@@ -786,6 +868,7 @@ export function initSetup() {
         resetTimeMapping();
       }
     }
+    saveSetupDraft();
   };
 
   // Override legacy inline setMode to also update upload zone
@@ -797,6 +880,7 @@ export function initSetup() {
       setSurveyFiles(appState.surveyFiles.slice(0, 1));
       renderSurveyFiles();
     }
+    saveSetupDraft();
   };
 
   const legacySetScenario = window.setScenario?.bind(window);
@@ -820,6 +904,7 @@ export function initSetup() {
       window.state.predictedTraverses = [];
       renderPredictedTraverseList();
     }
+    saveSetupDraft();
   };
 
   // Global hooks
@@ -830,6 +915,7 @@ export function initSetup() {
     getEl("cs-utm")?.classList.toggle("selected", cs === "utm");
     const zoneRow = getEl("utm-zone-row");
     if (zoneRow) zoneRow.style.display = cs === "utm" ? "block" : "none";
+    saveSetupDraft();
   };
   window.addBasemap = () => basemapInput.click();
   window.removeBasemap = () => {
@@ -904,6 +990,15 @@ export function initSetup() {
   };
 
   restoreSetupFromState();
+  applySetupDraft();
+
+  ["projectNameInput", "projectContextInput", "taskNameInput", "taskDescInput", "utmZoneInput", "utmHemisphere"].forEach((id) => {
+    getEl(id)?.addEventListener("input", saveSetupDraft);
+    getEl(id)?.addEventListener("change", saveSetupDraft);
+  });
+  ["latSelect", "lonSelect", "magSelect", "hourSelect", "minuteSelect", "secondSelect"].forEach((id) => {
+    getEl(id)?.addEventListener("change", saveSetupDraft);
+  });
 
   // Wire "Start Project" buttons from the home screen
   document.querySelectorAll("button").forEach((btn) => {
@@ -932,6 +1027,7 @@ window.setPredictedTraverseMode = function(type) {
     ));
   }
   renderPredictedTraverseList();
+  saveSetupDraft();
 };
 
 window.addPredictedTraverse = function(type) {
@@ -942,6 +1038,7 @@ window.addPredictedTraverse = function(type) {
   const t = resetPredictedTraverseForMode(activeType, idx);
   window.state.predictedTraverses.push(t);
   renderPredictedTraverseList();
+  saveSetupDraft();
 };
 
 window.removePredictedTraverse = function(idx) {
@@ -950,11 +1047,13 @@ window.removePredictedTraverse = function(idx) {
   // Re-label remaining traverses
   window.state.predictedTraverses.forEach((t, i) => { t.label = `Predicted Traverse ${i + 1}`; });
   renderPredictedTraverseList();
+  saveSetupDraft();
 };
 
 window.updatePredictedTraverse = function(idx, field, value) {
   if (!window.state?.predictedTraverses?.[idx]) return;
   window.state.predictedTraverses[idx][field] = value;
+  saveSetupDraft();
 };
 
 function renderPredictedTraverseList() {

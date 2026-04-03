@@ -93,13 +93,22 @@ const LAYER_META = {
     description: "Horizontal gradient magnitude for delineating lateral edges and structures.",
     palette: ["#3f2d14", "#8e6528", "#d6a55c", "#f9ebca"],
   },
+  regional_field: {
+    label: "Regional field",
+    shortLabel: "Regional",
+    key: "regional_field",
+    unit: "nT",
+    tone: "Trend",
+    description: "Regional magnetic trend separated from the corrected field; single traverses use a line-fit trend and broader surfaces fall back to grid smoothing.",
+    palette: ["#133b54", "#2f6e8f", "#7bb4c9", "#e0f3fa"],
+  },
   emag2_residual: {
     label: "Regional residual",
     shortLabel: "Residual",
     key: "emag2_residual",
     unit: "nT",
     tone: "Comparison",
-    description: "Gaussian regional-residual separation built from the processed surface.",
+    description: "Residual magnetic field after subtracting the regional field from the corrected data.",
     palette: ["#3e1847", "#8b3e91", "#cf7ad7", "#f3def8"],
   },
   uncertainty: {
@@ -423,6 +432,7 @@ function buildAvailableLayers(results, task) {
   pushLayer("analytic_signal", selectedAddOns.has("analytic_signal"));
   pushLayer("first_vertical_derivative", selectedAddOns.has("first_vertical_derivative"));
   pushLayer("horizontal_derivative", selectedAddOns.has("horizontal_derivative"));
+  pushLayer("regional_field", selectedAddOns.has("emag2"));
   pushLayer("emag2_residual", selectedAddOns.has("emag2"));
   pushLayer("uncertainty", selectedAddOns.has("uncertainty"));
   return layers;
@@ -495,8 +505,11 @@ function buildDisplayDatasets(results, layer) {
 
   const measuredDisplay = measured.map((point) => {
     const sampled = sampler(Number(point.latitude), Number(point.longitude));
-    const displayValue = layer.id === "magnetic" && Number.isFinite(Number(point.magnetic))
-      ? Number(point.magnetic)
+    const directLayerValue = Number(point[layer.key]);
+    const displayValue = layer.id === "magnetic" && Number.isFinite(Number(point.raw_magnetic ?? point.magnetic))
+      ? Number(point.raw_magnetic ?? point.magnetic)
+      : Number.isFinite(directLayerValue)
+        ? directLayerValue
       : sampled;
     const item = {
       ...point,
@@ -511,8 +524,11 @@ function buildDisplayDatasets(results, layer) {
   });
 
   const predictedDisplay = predicted.map((point) => {
-    const displayValue = layer.id === "magnetic" && Number.isFinite(Number(point.predicted_magnetic ?? point.magnetic))
-      ? Number(point.predicted_magnetic ?? point.magnetic)
+    const directLayerValue = Number(point[layer.key]);
+    const displayValue = layer.id === "magnetic" && Number.isFinite(Number(point.raw_magnetic ?? point.predicted_magnetic ?? point.magnetic))
+      ? Number(point.raw_magnetic ?? point.predicted_magnetic ?? point.magnetic)
+      : Number.isFinite(directLayerValue)
+        ? directLayerValue
       : sampler(Number(point.latitude), Number(point.longitude));
     const item = {
       ...point,
@@ -602,6 +618,24 @@ function renderLayerControls(layers, activeLayer, mode) {
     </div>
     ${mode === "Line Profiles" ? `
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+        <label style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <span style="font-size:11px;color:var(--text2)">Horizontal axis max (m)</span>
+          <input id="visXAxisMax" type="number" min="0" step="1" value="${Number.isFinite(Number(appState.visXAxisMax)) ? Number(appState.visXAxisMax) : ""}" placeholder="auto" style="width:92px">
+        </label>
+        <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px">
+          <span style="font-size:11px;color:var(--text2)">Vertical axis min</span>
+          <input id="visYAxisMin" type="number" step="0.01" value="${Number.isFinite(Number(appState.visYAxisMin)) ? Number(appState.visYAxisMin) : ""}" placeholder="auto" style="width:92px">
+        </label>
+        <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px">
+          <span style="font-size:11px;color:var(--text2)">Vertical axis max</span>
+          <input id="visYAxisMax" type="number" step="0.01" value="${Number.isFinite(Number(appState.visYAxisMax)) ? Number(appState.visYAxisMax) : ""}" placeholder="auto" style="width:92px">
+        </label>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button type="button" class="btn btn-white btn-sm" onclick="window.applyProfileAxes()">Apply axes</button>
+          <button type="button" class="btn btn-white btn-sm" onclick="window.resetProfileAxes()">Auto</button>
+        </div>
+      </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
         <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
           <input type="checkbox" ${appState.stackProfiles ? "checked" : ""} onchange="window.toggleProfileStacking(this.checked)" style="width:14px;height:14px;accent-color:var(--g500);margin-top:2px">
           <span>
@@ -614,24 +648,53 @@ function renderLayerControls(layers, activeLayer, mode) {
   `;
 }
 
+async function renderBaseStationDrift(host, baseStations) {
+  if (!host) return;
+  const series = (baseStations || [])
+    .filter((point) => Number.isFinite(Number(point.time_s)) && Number.isFinite(Number(point.magnetic ?? point.display_value)))
+    .sort((a, b) => Number(a.time_s) - Number(b.time_s));
+  if (!series.length) {
+    host.innerHTML = "";
+    return;
+  }
+  const Plotly = await ensurePlotly();
+  host.innerHTML = "";
+  await Plotly.newPlot(host, [{
+    x: series.map((point) => Number(point.time_s) / 3600),
+    y: series.map((point) => Number(point.magnetic ?? point.display_value)),
+    type: "scatter",
+    mode: "lines+markers",
+    line: {color: appState.mapColors.baseStation, width: 2},
+    marker: {color: appState.mapColors.baseStation, size: 6},
+    hovertemplate: "Time %{x:.2f} h<br>Base %{y:.2f} nT<extra></extra>",
+  }], {
+    margin: {t: 8, r: 8, b: 34, l: 42},
+    paper_bgcolor: "transparent",
+    plot_bgcolor: "transparent",
+    font: {color: getPlotTheme().text, size: 10},
+    xaxis: {title: "Time (hours)", gridcolor: getPlotTheme().grid},
+    yaxis: {title: "Base station (nT)", gridcolor: getPlotTheme().grid},
+    showlegend: false,
+  }, {displayModeBar: false, responsive: true});
+}
+
 function renderInterpretation(layer, stats, displayData) {
   const roots = getRoots();
   if (!roots.interpretation) return;
 
-  // Ensure persistent sub-containers exist. Only the layer card is replaced on each call;
-  // the AI chat body persists across layer/vis mode changes.
+  // Ensure persistent sub-containers exist. Only the layer/base cards are replaced on each call.
   let layerCard = document.getElementById("visLayerCard");
-  let aiBody = document.getElementById("visAIBody");
+  let baseCard = document.getElementById("visBaseCard");
   if (!layerCard) {
     layerCard = document.createElement("div");
     layerCard.id = "visLayerCard";
     roots.interpretation.appendChild(layerCard);
   }
-  if (!aiBody) {
-    aiBody = document.createElement("div");
-    aiBody.id = "visAIBody";
-    aiBody.style.marginTop = "10px";
-    roots.interpretation.appendChild(aiBody);
+  if (!baseCard) {
+    baseCard = document.createElement("div");
+    baseCard.id = "visBaseCard";
+    baseCard.style.marginTop = "10px";
+    roots.interpretation.appendChild(baseCard);
   }
 
   layerCard.innerHTML = `
@@ -647,7 +710,19 @@ function renderInterpretation(layer, stats, displayData) {
       </div>
     </div>
   `;
-
+  const baseStations = displayData.measured.filter((point) => point.is_base_station);
+  if (baseStations.length) {
+    baseCard.innerHTML = `
+      <div style="font-size:10px;font-weight:700;color:var(--text3);letter-spacing:0.6px;text-transform:uppercase;margin-bottom:8px">Base-station drift</div>
+      <div class="card card-sm" style="padding:12px">
+        <div style="font-size:11px;color:var(--text2);line-height:1.7;margin-bottom:10px">${baseStations.length} detected base-station revisit${baseStations.length === 1 ? "" : "s"} are shown here so drift through time can be checked against the diurnal correction.</div>
+        <div id="visBaseDriftChart" style="height:180px"></div>
+      </div>
+    `;
+    renderBaseStationDrift(document.getElementById("visBaseDriftChart"), baseStations);
+  } else {
+    baseCard.innerHTML = "";
+  }
 }
 
 async function renderLineProfiles(results, layer, stats) {
@@ -710,13 +785,24 @@ async function renderLineProfiles(results, layer, stats) {
   });
 
   const plotTheme = getPlotTheme();
+  const xMax = Number(appState.visXAxisMax);
+  const yMin = Number(appState.visYAxisMin);
+  const yMax = Number(appState.visYAxisMax);
   await Plotly.newPlot(host, traces, {
     margin: {t: 20, r: 12, b: 48, l: 56},
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
     font: {color: plotTheme.text, size: 11},
-    xaxis: {title: "Distance along traverse (m)", gridcolor: plotTheme.grid},
-    yaxis: {title: appState.stackProfiles ? `${layer.shortLabel} (${layer.unit}) - stacked` : `${layer.shortLabel} (${layer.unit})`, gridcolor: plotTheme.grid},
+    xaxis: {
+      title: "Distance along traverse (m)",
+      gridcolor: plotTheme.grid,
+      range: Number.isFinite(xMax) && xMax > 0 ? [0, xMax] : undefined,
+    },
+    yaxis: {
+      title: appState.stackProfiles ? `${layer.shortLabel} (${layer.unit}) - stacked` : `${layer.shortLabel} (${layer.unit})`,
+      gridcolor: plotTheme.grid,
+      range: Number.isFinite(yMin) && Number.isFinite(yMax) && yMax > yMin ? [yMin, yMax] : undefined,
+    },
     showlegend: true,
     legend: {font: {size: 9}},
     hovermode: "closest",
@@ -940,6 +1026,18 @@ export function initVisualisation() {
   };
   window.toggleProfileStacking = async (value) => {
     setStackProfiles(value);
+    await loadVisualisation();
+  };
+  window.applyProfileAxes = async () => {
+    appState.visXAxisMax = document.getElementById("visXAxisMax")?.value || "";
+    appState.visYAxisMin = document.getElementById("visYAxisMin")?.value || "";
+    appState.visYAxisMax = document.getElementById("visYAxisMax")?.value || "";
+    await loadVisualisation();
+  };
+  window.resetProfileAxes = async () => {
+    appState.visXAxisMax = "";
+    appState.visYAxisMin = "";
+    appState.visYAxisMax = "";
     await loadVisualisation();
   };
   window.setTraverseFilter = async (value) => {

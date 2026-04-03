@@ -130,6 +130,30 @@ class AIServiceTests(unittest.TestCase):
         self.assertIn("survey.csv", prompt)
         self.assertIn("notes.txt", prompt)
 
+    def test_generate_export_report_falls_back_to_structured_report_data(self):
+        blobs = {
+            ("uploads", "survey.csv"): b"latitude,longitude,magnetic\n6.1,3.2,10.5\n",
+            ("uploads", "notes.txt"): b"Reference note",
+        }
+        chat_client = _FakeClient("Chat response")
+        export_client = _FakeClient("not-json")
+        service = AIService(_FakeStore(self._build_project(), self._build_task()), chat_client, export_client, _FakeStorage(blobs))
+
+        result = service.generate_export_report(
+            "project-1",
+            "task-1",
+            {
+                "stats": {"mean": 10.0, "std": 1.0, "min": 8.0, "max": 12.0, "point_count": 1, "anomaly_count": 0},
+                "points": [],
+                "validation_summary": {"base_station_count": 3},
+                "qa_report": {"status": "valid_with_warnings", "quality_score": 0.82, "fallback_events": []},
+            },
+        )
+
+        self.assertIn("executive_summary", result.report_data)
+        self.assertEqual(result.report_data["report"]["survey_context"]["project_name"], "Project")
+        self.assertEqual(result.report_data["report"]["survey_context"]["task_name"], "Task")
+
 
 if __name__ == "__main__":
     unittest.main()

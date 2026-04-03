@@ -107,6 +107,26 @@ class AIService:
             logger.exception("Aurora export report generation failed", extra={"task_id": task_id, "project_id": project_id, "error": str(exc)})
             report_data = None
 
+        if not report_data:
+            try:
+                compact_prompt = self._build_export_data_prompt(
+                    project,
+                    task,
+                    config,
+                    full_results,
+                    stats,
+                    (upload_context or "")[:1200],
+                )
+                text = self._export_client.generate(
+                    system_prompt=_EXPORT_SYSTEM_PROMPT,
+                    user_prompt=compact_prompt,
+                    max_tokens=2500,
+                )
+                report_data = self._parse_export_json(text)
+            except Exception as exc:
+                logger.exception("Aurora export retry failed", extra={"task_id": task_id, "project_id": project_id, "error": str(exc)})
+                report_data = None
+
         if report_data:
             report = report_data.get("report", {})
             highlights = []
@@ -126,8 +146,15 @@ class AIService:
                 report_data=report_data,
             )
 
-        fallback_text = self._fallback_text(project, task, full_results, "export", None)
-        return self._parse_chat_response(fallback_text, "export")
+        fallback_report = self._build_fallback_report_data(project, task, config, full_results, stats, upload_context)
+        fallback_summary = fallback_report.get("executive_summary", "")
+        return AuroraResponse(
+            location="export",
+            summary=fallback_summary,
+            highlights=fallback_report.get("report", {}).get("recommendations", "").splitlines()[:4],
+            message=fallback_summary,
+            report_data=fallback_report,
+        )
 
     def _parse_chat_response(self, text: str, location: str) -> AuroraResponse:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -188,10 +215,11 @@ class AIService:
                 f"points={stats.get('point_count', 0)}, anomalies={stats.get('anomaly_count', 0)}\n"
             )
         validation = outputs.get("validation_summary") or {}
+        base_station_count = self._resolved_base_station_count(outputs)
         if validation:
             prompt += (
                 f"Validation status: {validation.get('status', 'unknown')}; "
-                f"rows={validation.get('row_count', 0)}; warnings={len(validation.get('warnings') or [])}\n"
+                f"rows={validation.get('row_count', 0)}; base-station readings recognised={base_station_count}; warnings={len(validation.get('warnings') or [])}\n"
             )
         qa_report = outputs.get("qa_report") or {}
         if qa_report:
@@ -200,6 +228,9 @@ class AIService:
                 f"quality={qa_report.get('quality_score', 'n/a')}; "
                 f"fallback events={len(qa_report.get('fallback_events') or [])}\n"
             )
+        correction_path = qa_report.get("correction_path") or []
+        if correction_path:
+            prompt += "Applied correction path: " + " | ".join(correction_path[:8]) + "\n"
         layers = self._list_available_layers(outputs)
         if layers:
             prompt += "Available layers: " + ", ".join(layers) + "\n"
@@ -233,7 +264,7 @@ class AIService:
     ) -> str:
         return (
             "You are Aurora AI, a practical magnetic-survey assistant. "
-            "Answer directly in plain language using only the project/task/results summary below.\n"
+            "Answer directly in plain language using only the project/task/results summary below. Never expose raw field names, internal keys, or code-style identifiers.\n"
             f"Project: {project.get('name', '')}\n"
             f"Task: {task.get('name', '')}\n"
             f"Screen: {location}\n"
@@ -241,6 +272,7 @@ class AIService:
             f"Corrections: {', '.join(config.get('corrections') or []) or 'none'}\n"
             f"Outputs: {', '.join(config.get('add_ons') or []) or 'none'}\n"
             f"Stats: mean={stats.get('mean', 0):.2f} nT, range={float(stats.get('max', 0) or 0) - float(stats.get('min', 0) or 0):.2f} nT, points={stats.get('point_count', 0)}\n"
+            f"Base-station readings recognised: {self._resolved_base_station_count(outputs)}\n"
             f"Available layers: {', '.join(self._list_available_layers(outputs)) or 'TMF only'}\n"
         )
 
@@ -302,6 +334,7 @@ class AIService:
                 "observed_points": len([p for p in (full_results.get("points") or []) if not p.get("is_predicted")]),
                 "predicted_points": len(full_results.get("predicted_points") or []),
             },
+            "base_station_readings": int((validation or {}).get("base_station_count", 0)),
             "add_ons_enabled": add_ons,
             "derived_layers": derived_layers,
             "all_layers": ["Total Magnetic Field (TMF)"] + derived_layers,
@@ -482,18 +515,36 @@ class AIService:
         qa_report = outputs.get("qa_report") or {}
         model_metadata = outputs.get("model_metadata") or {}
         uncertainty_metadata = outputs.get("uncertainty_metadata") or {}
+        base_station_count = self._resolved_base_station_count(outputs)
         if validation:
-            lines.append("Validation summary:")
-            lines.append(json.dumps(validation, indent=2)[:2500])
+            lines.append(
+                "Validation summary: "
+                f"status={validation.get('status', 'unknown')}, "
+                f"rows={validation.get('row_count', 0)}, "
+                f"base-station readings={base_station_count}, "
+                f"warnings={len(validation.get('warnings') or [])}"
+            )
         if qa_report:
-            lines.append("QA report:")
-            lines.append(json.dumps(qa_report, indent=2)[:4000])
+            lines.append(
+                "QA report: "
+                f"status={qa_report.get('status', 'unknown')}, "
+                f"quality={qa_report.get('quality_score', 'n/a')}, "
+                f"fallbacks={len(qa_report.get('fallback_events') or [])}"
+            )
         if model_metadata:
-            lines.append("Model metadata:")
-            lines.append(json.dumps(model_metadata, indent=2)[:2500])
+            lines.append(
+                "Model metadata: "
+                f"algorithm={model_metadata.get('algorithm') or 'not specified'}, "
+                f"rmse={model_metadata.get('rmse')}, "
+                f"mae={model_metadata.get('mae')}, "
+                f"r2={model_metadata.get('r2')}"
+            )
         if uncertainty_metadata:
-            lines.append("Uncertainty metadata:")
-            lines.append(json.dumps(uncertainty_metadata, indent=2)[:1500])
+            lines.append(
+                "Uncertainty metadata: "
+                f"algorithm={uncertainty_metadata.get('algorithm') or 'not specified'}, "
+                f"detail={uncertainty_metadata.get('detail') or 'n/a'}"
+            )
         layer_summaries = []
         for label in self._list_available_layers(outputs):
             key = self._output_key_for_layer(label)
@@ -505,6 +556,14 @@ class AIService:
             lines.extend(layer_summaries[:10])
         return "\n".join(lines)
 
+    def _resolved_base_station_count(self, outputs: dict) -> int:
+        points = outputs.get("points") or []
+        counted = sum(1 for point in points if point.get("is_base_station"))
+        if counted:
+            return int(counted)
+        validation = outputs.get("validation_summary") or {}
+        return int(validation.get("base_station_count", 0) or 0)
+
     def _list_available_layers(self, outputs: dict) -> list[str]:
         layer_map = {
             "surface": "Total Magnetic Field (TMF)",
@@ -513,6 +572,7 @@ class AIService:
             "analytic_signal": "Analytic Signal",
             "first_vertical_derivative": "First Vertical Derivative (FVD)",
             "horizontal_derivative": "Horizontal Derivative",
+            "regional_field": "Regional Field",
             "regional_residual": "Regional Residual",
             "emag2_residual": "Regional Residual",
             "uncertainty": "Uncertainty Surface",
@@ -533,12 +593,95 @@ class AIService:
             "Analytic Signal": "analytic_signal",
             "First Vertical Derivative (FVD)": "first_vertical_derivative",
             "Horizontal Derivative": "horizontal_derivative",
+            "Regional Field": "regional_field",
             "Regional Residual": "regional_residual",
             "Uncertainty Surface": "uncertainty",
             "Tilt Derivative": "tilt_derivative",
             "Total Gradient": "total_gradient",
         }
         return reverse.get(label, "")
+
+    def _build_fallback_report_data(
+        self,
+        project: dict,
+        task: dict,
+        config: dict,
+        full_results: dict,
+        stats: dict,
+        upload_context: str | None,
+    ) -> dict:
+        qa_report = full_results.get("qa_report") or {}
+        validation = full_results.get("validation_summary") or {}
+        layers = self._list_available_layers(full_results)
+        corrections = ", ".join(config.get("corrections") or []) or "None"
+        add_ons = ", ".join(config.get("add_ons") or []) or "None"
+        recommendations = [
+            "Review the QA warnings and fallback events before treating the export as final.",
+            "Use the regional/residual and derivative layers together when comparing shallow versus broad responses.",
+            "Verify any interpretation against survey geometry, support coverage, and uncertainty before drilling or engineering decisions.",
+        ]
+        if int(validation.get("base_station_count", 0) or 0) == 0:
+            recommendations.insert(0, "This run did not recognise base-station readings, so diurnal correction fell back and should be reviewed.")
+        executive_summary = (
+            f"{task.get('name', 'Task')} for project {project.get('name', 'Project')} processed "
+            f"{stats.get('point_count', 0)} points with {qa_report.get('status', 'unknown')} QA status. "
+            f"Configured corrections were {corrections}; configured add-ons were {add_ons}."
+        )
+        return {
+            "executive_summary": executive_summary,
+            "report": {
+                "survey_context": {
+                    "project_name": project.get("name", ""),
+                    "project_context": project.get("context", ""),
+                    "task_name": task.get("name", ""),
+                    "task_description": task.get("description", ""),
+                    "platform": task.get("platform"),
+                    "scenario": task.get("scenario") or "automatic",
+                    "processing_mode": task.get("processing_mode"),
+                    "configured_corrections": config.get("corrections") or [],
+                    "configured_add_ons": config.get("add_ons") or [],
+                    "configured_model": config.get("model") or "not specified",
+                },
+                "project_overview": f"Project: {project.get('name', '')}. Context: {project.get('context', '')}",
+                "data_description": f"Task: {task.get('name', '')}. Description: {task.get('description', '')}. Uploaded context: {(upload_context or 'No uploaded-file summary was available.')[:1200]}",
+                "processing_workflow": {
+                    "project_and_task": f"Platform={task.get('platform')}, scenario={task.get('scenario') or 'automatic'}, processing_mode={task.get('processing_mode')}",
+                    "configured_pipeline": f"Corrections={corrections}. Model={config.get('model') or 'not specified'}. Add-ons={add_ons}.",
+                    "qa_and_fallbacks": json.dumps(
+                        {
+                            "qa_status": qa_report.get("status"),
+                            "fallback_events": qa_report.get("fallback_events") or [],
+                            "warnings": qa_report.get("warnings") or [],
+                        },
+                        indent=2,
+                    ),
+                },
+                "results_interpretation": [
+                    {
+                        "layer": layer,
+                        "description": f"{layer} was generated for this run.",
+                        "observations": f"Overall range: {stats.get('min', 0):.2f} to {stats.get('max', 0):.2f} nT across {stats.get('point_count', 0)} points.",
+                        "interpretation": "Interpretation should be tied to the actual QA status, fallback path, and survey support shown in the processing outputs.",
+                        "implication": "Use this layer alongside uncertainty and QA metadata before drawing operational conclusions.",
+                    }
+                    for layer in layers[:6]
+                ],
+                "modelling": json.dumps(full_results.get("model_metadata") or {}, indent=2),
+                "data_quality": json.dumps(
+                    {
+                        "validation": validation,
+                        "qa_report": qa_report,
+                    },
+                    indent=2,
+                ),
+                "conclusions": (
+                    f"QA status: {qa_report.get('status', 'unknown')}\n"
+                    f"Base-station readings recognised: {validation.get('base_station_count', 0)}\n"
+                    f"Available layers: {', '.join(layers) or 'TMF only'}"
+                ),
+                "recommendations": "\n".join(recommendations),
+            },
+        }
 
     def _summarize_numeric_grid(self, values: Any) -> str | None:
         if not isinstance(values, list) or not values:

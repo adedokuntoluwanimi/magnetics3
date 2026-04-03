@@ -21,65 +21,57 @@ Read these first:
 - AI project:
   `app-01-488817-ai`
 - Latest live revision:
-  `gaia-magnetics-00073-87x`
+  `gaia-magnetics-00077-hxg`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
-> Revision `gaia-magnetics-00073-87x` is live, `/api/health` returned `{"status":"ok"}`, and a full live smoke test completed after deploy.
+> Revision `gaia-magnetics-00077-hxg` is live and `/api/health` returned `{"status":"ok"}` after deploy.
 
 ## What Changed Most Recently
 
-### Processing and persistence fixes
+### Diurnal correction
 
-- Fixed the Firestore task-result persistence failure that was causing completed processing runs to end as failed.
-- `support_mask` now stays in `results.json` only and is excluded from the Firestore task payload.
-- Added Firestore update sanitization for task, run, project, and export-job updates.
-- Added regression coverage for the `support_mask` persistence case.
+- Reworked diurnal correction to use consecutive base-station pairs as separate time windows.
+- Drift is now treated as signed and time-varying inside each interval instead of one global base mean adjustment.
+- Survey points outside valid base-station windows remain explicitly flagged instead of being silently forced through the same correction path.
+- Diurnal metadata now stores interval details and per-point offset support more cleanly.
 
-### Aurora routing and live AI behavior
+### Regional and residual separation
 
-- Aurora chat is now split by function:
-  `Gemini on Vertex AI` for Preview and Visualisation chat,
-  `Claude` remains intended for export drafting.
-- The live Cloud Run service account now has `Vertex AI User` access on the infra project.
-- Live smoke test confirmed Preview and Visualisation Aurora now return real model responses instead of the old fallback text.
-- Export screen chat remains intentionally disabled.
+- Single-traverse workflows now generate spreadsheet-style `regional_field` and `regional_residual` from the corrected profile using a linear fit against traverse distance.
+- Multi-point grid workflows still keep the broader smoothed surface fallback where a line-fit method is not appropriate.
+- Regional and residual remain separate user-visible outputs rather than one blended product.
 
-### Current export AI state
+### Visualisation and AI behavior
 
-- Export jobs themselves complete successfully.
-- Bundled export outputs are still being generated correctly.
-- The remaining AI gap is export drafting:
-  Aurora export-authoring can still fall back to saved-data-only content instead of a live Claude-authored draft.
+- Visualisation line profiles now use preserved raw magnetic values for the magnetic layer instead of collapsing everything to anomaly-scale processed values.
+- Manual horizontal and vertical axis controls were added to line profiles.
+- Aurora AI now resolves base-station count from actual processed points where available and its prompt/context was cleaned to avoid leaking internal field names like `is_base_station`.
+- Uploaded CSVs now remain one traverse per file through preview/processing logic.
 
 ## Most Important Files To Check First
 
-- `backend/config.py`
-- `backend/gcp/firestore_store.py`
-- `backend/gcp/vertex_ai.py`
-- `backend/services/ai_service.py`
-- `backend/services/container.py`
-- `backend/services/export_service.py`
 - `backend/services/processing_service.py`
-- `backend/routes/ai.py`
-- `backend/routes/tasks.py`
+- `backend/services/preview_service.py`
+- `backend/services/ai_service.py`
+- `backend/services/export_service.py`
+- `backend/services/task_service.py`
 - `frontend/index.html`
-- `frontend/js/state.js`
-- `frontend/js/shared/ai_chat.js`
 - `frontend/js/sections/setup.js`
-- `frontend/js/sections/navigation.js`
-- `frontend/js/sections/preview.js`
 - `frontend/js/sections/processing.js`
 - `frontend/js/sections/visualisation.js`
 - `frontend/js/sections/export.js`
+- `frontend/js/sections/sidebar.js`
+- `tests/test_processing_service.py`
+- `tests/test_ai_service.py`
+- `tests/test_export_service.py`
 
 ## Remaining Gaps
 
-1. Fix Claude-backed export drafting so PDF/DOCX/PPTX AI narratives stop falling back.
-2. Manual browser click-through on the latest live build.
-3. End-to-end confirmation on a larger real dataset that uploaded-data analysis and visualisations still behave well.
-4. Watch live processing and export latency now that chat and export use different AI paths.
-5. Re-run older tasks if they still show pre-fix line splitting or stale task-result payloads.
+1. Claude-backed export drafting still needs another quality pass so PDF/DOCX/PPTX narratives stop falling back and become more project-specific.
+2. Manual browser QA is still needed on the latest live build, especially for spreadsheet-style diurnal/regional/residual comparison.
+3. A fresh live `Book1`/`Site C` processing rerun should be used to confirm the visual outputs now match the intended field workflow closely enough.
+4. Keep watching latency on longer processing and export jobs.
 
 ## Deploy Command
 

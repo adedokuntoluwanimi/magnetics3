@@ -103,7 +103,7 @@ function renderProjectScreen(project, tasks) {
             syncContext(null);
             await refreshSidebar();
             renderWorkflowProgress();
-            window.goHome?.();
+            await openProjectsList();
           } catch (err) { showAlert(err.message || "Delete failed."); }
         },
       });
@@ -551,10 +551,10 @@ function renderProjectList(projects, tasksForActive = []) {
               clearTask();
               clearProcessingRun();
               syncContext(null);
-              window.goHome?.();
             }
             await refreshSidebar();
             renderWorkflowProgress();
+            await openProjectsList();
           } catch (err) { showAlert(err.message || "Delete failed."); }
         },
       });

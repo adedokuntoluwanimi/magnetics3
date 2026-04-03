@@ -95,6 +95,31 @@ def _mad(values: np.ndarray) -> float:
     return float(np.median(np.abs(finite - median)))
 
 
+def _infer_base_station_mask(frame: pd.DataFrame, lon_col: str, lat_col: str) -> pd.Series:
+    mask = pd.Series(False, index=frame.index, dtype=bool)
+    if "__is_base_station__" in frame.columns:
+        mask |= pd.to_numeric(frame["__is_base_station__"], errors="coerce").fillna(0).astype(int) > 0
+
+    for column in frame.columns:
+        series = frame[column]
+        if series.dtype == object or pd.api.types.is_string_dtype(series):
+            text = series.astype(str).str.strip().str.lower()
+            if text.isin({"bs", "base", "base station", "base_station"}).any():
+                mask |= text.isin({"bs", "base", "base station", "base_station"})
+
+    lon = pd.to_numeric(frame.get(lon_col), errors="coerce")
+    lat = pd.to_numeric(frame.get(lat_col), errors="coerce")
+    valid = lon.notna() & lat.notna()
+    if valid.any():
+        tolerance = 1.0
+        coord_key = (lon[valid] / tolerance).round().astype("Int64").astype(str) + "," + (lat[valid] / tolerance).round().astype("Int64").astype(str)
+        repeated = set(coord_key.value_counts()[lambda counts: counts > 1].index)
+        repeated_mask = pd.Series(False, index=frame.index, dtype=bool)
+        repeated_mask.loc[valid.index[valid]] = coord_key.isin(repeated).to_numpy()
+        mask |= repeated_mask
+    return mask.astype(int)
+
+
 def _datetime_from_decimal_year(decimal_yr: float) -> datetime:
     year = int(math.floor(decimal_yr))
     fraction = min(max(float(decimal_yr) - year, 0.0), 1.0)
@@ -842,9 +867,14 @@ class ProcessingService:
                     "uncertainty": uncertainty,
                     "model_used": "none",
                     "points": leveled[["latitude", "longitude", "magnetic"]
+                        + (["time_s"] if "time_s" in leveled.columns else [])
+                        + (["along_line_m"] if "along_line_m" in leveled.columns else [])
+                        + (["diurnal_offset"] if "diurnal_offset" in leveled.columns else [])
                         + (["__is_base_station__"] if "__is_base_station__" in leveled.columns else [])
+                        + (["raw_magnetic"] if "raw_magnetic" in leveled.columns else [])
+                        + (["__source_file_name__"] if "__source_file_name__" in leveled.columns else [])
                         + (["_line_id"] if "_line_id" in leveled.columns else [])
-                    ].rename(columns={"__is_base_station__": "is_base_station", "_line_id": "line_id"}).to_dict(orient="records"),
+                    ].rename(columns={"__is_base_station__": "is_base_station", "_line_id": "line_id", "__source_file_name__": "source_file_name"}).to_dict(orient="records"),
                     "stats": {
                         "min": float(leveled["magnetic"].min()), "max": float(leveled["magnetic"].max()),
                         "mean": float(leveled["magnetic"].mean()), "std": float(leveled["magnetic"].std()),
@@ -901,19 +931,26 @@ class ProcessingService:
 
             self._update_run(run_id, 8, "running", "Building the QA report and scientific provenance...")
             qa_report = self._build_qa_report(task, prep, results, add_on_payload, runtime)
-            self._update_run(run_id, 8, "completed", f"QA status: {qa_report['status']}")
+            qa_detail = (
+                f"QA status: {qa_report['status']} | "
+                f"warnings: {len(qa_report.get('warnings') or [])} | "
+                f"fallbacks: {len(qa_report.get('fallback_events') or [])}"
+            )
+            self._update_run(run_id, 8, "completed", qa_detail)
             self._push_stage_report(
                 runtime,
                 name="QA report",
                 status="completed",
-                detail=f"QA status: {qa_report['status']}",
+                detail=qa_detail,
                 warnings=list(qa_report.get("warnings") or []),
                 metadata=qa_report,
             )
 
             self._update_run(run_id, 9, "running", "Saving results, QA metadata, and artifacts...")
             stored = self._persist_outputs(task, prep, results, add_on_payload, qa_report, runtime.validation_summary)
-            self._update_run(run_id, 9, "completed", "Saved outputs, QA report, and grid artifacts")
+            saved_layers = len(self._persisted_result_keys(results))
+            saved_artifacts = len(((stored or {}).get("artifacts") or []))
+            self._update_run(run_id, 9, "completed", f"Saved {saved_layers} result layers, {saved_artifacts} downloadable artifact(s), and refreshed QA metadata")
 
             self._store.update_processing_run(
                 run_id,
@@ -1028,6 +1065,8 @@ class ProcessingService:
         for artifact in task.get("survey_files") or []:
             csv_text = self._storage.download_text(artifact["bucket"], artifact["object_name"])
             frame = pd.read_csv(io.StringIO(csv_text))
+            frame["__source_file_name__"] = artifact.get("file_name") or artifact.get("object_name") or "survey.csv"
+            frame["__source_file_index__"] = len(frames)
             missing_cols = [mapping["latitude"], mapping["longitude"]]
             if any(col not in frame.columns for col in missing_cols):
                 log_event(
@@ -1042,6 +1081,7 @@ class ProcessingService:
             frame["_raw_lat"] = pd.to_numeric(frame[mapping["latitude"]], errors="coerce")
             frame["_raw_lon"] = pd.to_numeric(frame[mapping["longitude"]], errors="coerce")
             frame["magnetic"] = pd.to_numeric(frame.get(mapping["magnetic_field"], pd.Series(dtype=float)), errors="coerce")
+            frame["raw_magnetic"] = frame["magnetic"]
 
             for col_key, dest in [("hour", "_hour"), ("minute", "_minute"), ("second", "_second")]:
                 col_name = mapping.get(col_key)
@@ -1073,8 +1113,7 @@ class ProcessingService:
                 frame["latitude"] = frame["_raw_lat"]
                 frame["longitude"] = frame["_raw_lon"]
 
-            if "__is_base_station__" in frame.columns:
-                frame["__is_base_station__"] = pd.to_numeric(frame["__is_base_station__"], errors="coerce").fillna(0).astype(int)
+            frame["__is_base_station__"] = _infer_base_station_mask(frame, mapping["longitude"], mapping["latitude"])
 
             frame = frame.dropna(subset=["latitude", "longitude"])
             if not frame.empty:
@@ -1141,7 +1180,20 @@ class ProcessingService:
         cleaned = frame.copy()
         warnings: list[str] = []
 
-        # Tolerance-based spatial deduplication
+        # Build time_s first so repeated base-station revisits are preserved as distinct
+        # time anchors during spatial deduplication.
+        if "_hour" in cleaned.columns and "_minute" in cleaned.columns:
+            _sec = cleaned["_second"].fillna(0) if "_second" in cleaned.columns else 0
+            cleaned["time_s"] = (
+                cleaned["_hour"].fillna(0) * 3600.0
+                + cleaned["_minute"].fillna(0) * 60.0
+                + _sec
+            ).astype(np.float64)
+        else:
+            cleaned["time_s"] = np.arange(len(cleaned), dtype=np.float64)
+
+        # Tolerance-based spatial deduplication. Preserve repeated base-station revisits
+        # because they carry the diurnal time series even when coordinates repeat.
         xy = cleaned[["longitude", "latitude"]].to_numpy(dtype=np.float64)
         tol = 1e-6
         scale = 1.0 / max(tol, 1e-12)
@@ -1149,8 +1201,14 @@ class ProcessingService:
         seen: set = set()
         keep = []
         for i, key in enumerate(map(tuple, rounded)):
-            if key not in seen:
-                seen.add(key)
+            is_base_station = bool(cleaned.iloc[i].get("__is_base_station__", 0))
+            dedupe_key = key
+            if "time_s" in cleaned.columns:
+                time_value = cleaned.iloc[i].get("time_s")
+                if pd.notna(time_value):
+                    dedupe_key = (*key, round(float(time_value), 3))
+            if is_base_station or dedupe_key not in seen:
+                seen.add(dedupe_key)
                 keep.append(i)
         n_removed = len(cleaned) - len(keep)
         if n_removed > 0:
@@ -1173,24 +1231,15 @@ class ProcessingService:
                 )
                 warnings.append(f"{n_jumps} large spatial jumps were detected during cleaning.")
 
-        # Build time_s for time-aware corrections
-        if "_hour" in cleaned.columns and "_minute" in cleaned.columns:
-            _sec = cleaned["_second"].fillna(0) if "_second" in cleaned.columns else 0
-            cleaned["time_s"] = (
-                cleaned["_hour"].fillna(0) * 3600.0
-                + cleaned["_minute"].fillna(0) * 60.0
-                + _sec
-            ).astype(np.float64)
-        else:
-            cleaned["time_s"] = np.arange(len(cleaned), dtype=np.float64)
-
         lat_range = float(cleaned["latitude"].max() - cleaned["latitude"].min()) if len(cleaned) else 0.0
         lon_range = float(cleaned["longitude"].max() - cleaned["longitude"].min()) if len(cleaned) else 0.0
         group_by_lat = lat_range < lon_range
         grouping_col = "latitude" if group_by_lat else "longitude"
         along_col = "longitude" if group_by_lat else "latitude"
 
-        if str(task.get("processing_mode") or "").lower() == "single":
+        if "__source_file_index__" in cleaned.columns:
+            cleaned["_line_id"] = pd.to_numeric(cleaned["__source_file_index__"], errors="coerce").fillna(0).astype(int)
+        elif str(task.get("processing_mode") or "").lower() == "single":
             cleaned["_line_id"] = 0
         else:
             step = np.median(np.abs(np.diff(np.sort(cleaned[grouping_col].to_numpy(dtype=np.float64))))) if len(cleaned) > 2 else 0.0
@@ -1500,48 +1549,67 @@ class ProcessingService:
                 overlap_mask = (survey_t >= float(np.min(t_bs))) & (survey_t <= float(np.max(t_bs)))
                 overlap_ratio = float(np.mean(overlap_mask)) if survey_t.size else 0.0
                 extrapolated = int(np.count_nonzero(~overlap_mask))
+                segment_count = max(len(t_bs) - 1, 0)
                 report.update(
                     {
                         "status": "completed",
-                        "algorithm": "base_station_cubic_spline",
+                        "algorithm": "piecewise_base_station_interpolation",
                         "overlap_ratio": overlap_ratio,
                         "max_gap_seconds": max_gap,
                         "extrapolated_points": extrapolated,
                         "affected_points": int(len(survey)),
+                        "segment_count": segment_count,
+                        "base_station_readings": int(len(t_bs)),
                     }
                 )
-                try:
-                    cs = CubicSpline(t_bs, m_bs, extrapolate=True)
-                    diurnal_at_survey = cs(survey_t)
-                except Exception:
-                    diurnal_at_survey = np.interp(survey_t, t_bs, m_bs)
-                    report["algorithm"] = "base_station_linear_interpolation"
-                    report["fallbacks"].append(
-                        {
-                            "stage": "diurnal",
-                            "requested": "base_station_cubic_spline",
-                            "actual": "base_station_linear_interpolation",
-                            "reason": "CubicSpline failed, so linear interpolation was used.",
-                            "severity": "warning",
-                        }
-                    )
-                bs_mean = float(np.mean(m_bs))
                 before = survey["magnetic"].to_numpy(dtype=np.float64)
                 survey = survey.copy()
-                survey["magnetic"] = before - diurnal_at_survey + bs_mean
+                corrected_values = before.copy()
+                in_window_mask = np.zeros_like(survey_t, dtype=bool)
+                interval_offsets = np.full_like(survey_t, np.nan, dtype=np.float64)
+                segment_rows = []
+                for index in range(len(t_bs) - 1):
+                    start_t = float(t_bs[index])
+                    end_t = float(t_bs[index + 1])
+                    start_mag = float(m_bs[index])
+                    end_mag = float(m_bs[index + 1])
+                    if not np.isfinite(start_t) or not np.isfinite(end_t) or end_t <= start_t:
+                        continue
+                    segment_mask = (survey_t >= start_t) & (survey_t <= end_t)
+                    if not np.any(segment_mask):
+                        continue
+                    ratio = (survey_t[segment_mask] - start_t) / max(end_t - start_t, 1e-9)
+                    interpolated_base = start_mag + ratio * (end_mag - start_mag)
+                    offset = interpolated_base - start_mag
+                    interval_offsets[segment_mask] = offset
+                    corrected_values[segment_mask] = before[segment_mask] - offset
+                    in_window_mask |= segment_mask
+                    segment_rows.append(
+                        {
+                            "start_time_s": start_t,
+                            "end_time_s": end_t,
+                            "start_magnetic": start_mag,
+                            "end_magnetic": end_mag,
+                            "drift_delta": end_mag - start_mag,
+                            "corrected_points": int(np.count_nonzero(segment_mask)),
+                        }
+                    )
+                survey["magnetic"] = corrected_values
+                survey["diurnal_offset"] = interval_offsets
                 out = pd.concat([bs, survey]).sort_values("time_s").reset_index(drop=True)
-                residual_before = float(np.nanstd(before - bs_mean))
-                residual_after = float(np.nanstd(survey["magnetic"].to_numpy(dtype=np.float64) - bs_mean))
+                residual_before = float(np.nanstd(before[in_window_mask])) if np.any(in_window_mask) else float(np.nanstd(before))
+                residual_after = float(np.nanstd(survey.loc[in_window_mask, "magnetic"].to_numpy(dtype=np.float64))) if np.any(in_window_mask) else residual_before
                 report["residual_drift_before"] = residual_before
                 report["residual_drift_after"] = residual_after
                 report["quality"] = float(max(0.0, min(1.0, (overlap_ratio * 0.7) + (0.3 if residual_after <= residual_before else 0.1))))
+                report["segments"] = segment_rows
                 if max_gap > 3600.0 * 2:
                     report["warnings"].append("Base-station data contain gaps larger than two hours.")
                 if extrapolated:
-                    report["warnings"].append(f"{extrapolated} survey points were extrapolated outside the base-station time range.")
+                    report["warnings"].append(f"{extrapolated} survey points fell outside the valid base-station windows and were left uncorrected.")
                 _proc_log("3.2.diurnal", out["magnetic"].to_numpy(dtype=np.float64))
                 out.attrs["diurnal_report"] = report
-                return out, "diurnal correction via base-station interpolation"
+                return out, "diurnal correction via piecewise base-station interpolation"
 
         # FFT physical fallback
         if has_time:
@@ -2241,9 +2309,14 @@ class ProcessingService:
             "model_metadata": model_metadata,
             "support_mask": support_mask.tolist(),
             "points": prep["frame"][["latitude", "longitude", "magnetic"]
+                + (["time_s"] if "time_s" in prep["frame"].columns else [])
+                + (["along_line_m"] if "along_line_m" in prep["frame"].columns else [])
+                + (["diurnal_offset"] if "diurnal_offset" in prep["frame"].columns else [])
                 + (["__is_base_station__"] if "__is_base_station__" in prep["frame"].columns else [])
+                + (["raw_magnetic"] if "raw_magnetic" in prep["frame"].columns else [])
+                + (["__source_file_name__"] if "__source_file_name__" in prep["frame"].columns else [])
                 + (["_line_id"] if "_line_id" in prep["frame"].columns else [])
-            ].rename(columns={"__is_base_station__": "is_base_station", "_line_id": "line_id"}).to_dict(orient="records"),
+            ].rename(columns={"__is_base_station__": "is_base_station", "_line_id": "line_id", "__source_file_name__": "source_file_name"}).to_dict(orient="records"),
             "stats": {
                 "min": float(np.nanmin(surface)),
                 "max": float(np.nanmax(surface)),
@@ -2491,10 +2564,40 @@ class ProcessingService:
 
         # ── EMAG2 regional residual (Gaussian separation) ────────────────────
         from scipy.ndimage import gaussian_filter
-        sigma = min(5.0, max(surface.shape) / 4.0) if surface.size > 1 else 0.0
-        regional_residual = surface - gaussian_filter(surface, sigma=sigma) if sigma > 0 else np.zeros_like(surface)
+        points = results.get("points") or []
+        non_base_points = [point for point in points if not point.get("is_base_station")]
+        point_regional: list[float] = []
+        point_residual: list[float] = []
+        along_values = np.asarray([point.get("along_line_m") for point in non_base_points], dtype=np.float64) if non_base_points else np.array([])
+        magnetic_values = np.asarray([point.get("magnetic") for point in non_base_points], dtype=np.float64) if non_base_points else np.array([])
+        line_ids = {point.get("line_id") for point in non_base_points if point.get("line_id") is not None}
+        use_line_fit = len(line_ids) <= 1 and along_values.size >= 2 and np.all(np.isfinite(along_values)) and np.nanmax(along_values) > np.nanmin(along_values)
+        if use_line_fit:
+            slope, intercept = np.polyfit(along_values, magnetic_values, 1)
+            metadata["regional_method"] = "single_traverse_linear_fit"
+            metadata["regional_intercept"] = float(intercept)
+            metadata["regional_slope_nT_per_m"] = float(slope)
+            for point in non_base_points:
+                along = float(point.get("along_line_m") or 0.0)
+                regional_value = float((slope * along) + intercept)
+                residual_value = float(point.get("magnetic") or 0.0) - regional_value
+                point_regional.append(regional_value)
+                point_residual.append(residual_value)
+                point["regional_field"] = regional_value
+                point["regional_residual"] = residual_value
+                point["emag2_residual"] = residual_value
+            x_pts = np.asarray([float(point["longitude"]) for point in non_base_points], dtype=np.float64)
+            y_pts = np.asarray([float(point["latitude"]) for point in non_base_points], dtype=np.float64)
+            regional_field = self._nearest_surface(x_pts, y_pts, np.asarray(point_regional, dtype=np.float64), results["grid_x"], results["grid_y"])
+            regional_residual = self._nearest_surface(x_pts, y_pts, np.asarray(point_residual, dtype=np.float64), results["grid_x"], results["grid_y"])
+        else:
+            sigma = min(5.0, max(surface.shape) / 4.0) if surface.size > 1 else 0.0
+            regional_field = gaussian_filter(surface, sigma=sigma) if sigma > 0 else surface.copy()
+            regional_residual = surface - regional_field if sigma > 0 else np.zeros_like(surface)
+            metadata["regional_method"] = "gaussian_surface_separation"
         metadata["layer_labels"]["emag2_residual"] = "Regional residual"
         metadata["layer_labels"]["regional_residual"] = "Regional residual"
+        metadata["layer_labels"]["regional_field"] = "Regional field"
 
         # ── Filtered surface ─────────────────────────────────────────────────
         filter_type = config.get("filter_type", "")
@@ -2534,6 +2637,7 @@ class ProcessingService:
             "first_vertical_derivative": fvd.tolist(),
             "horizontal_derivative": horizontal_derivative.tolist(),
             "filtered_surface": filtered_surface.tolist(),
+            "regional_field": regional_field.tolist(),
             "emag2_residual": regional_residual.tolist(),
             "regional_residual": regional_residual.tolist(),
             "rtp_surface": rtp_surface.tolist(),
@@ -2697,6 +2801,7 @@ class ProcessingService:
             "first_vertical_derivative",
             "horizontal_derivative",
             "filtered_surface",
+            "regional_field",
             "emag2_residual",
             "regional_residual",
             "rtp_surface",
@@ -2709,6 +2814,26 @@ class ProcessingService:
         if "predicted_points" in firestore_data:
             firestore_data["predicted_points"] = firestore_data["predicted_points"][:500]
         return {"data": firestore_data, "artifacts": artifacts}
+
+    @staticmethod
+    def _persisted_result_keys(results: dict) -> list[str]:
+        keys = ["surface"]
+        for key in [
+            "filtered_surface",
+            "rtp_surface",
+            "analytic_signal",
+            "first_vertical_derivative",
+            "horizontal_derivative",
+            "regional_field",
+            "regional_residual",
+            "emag2_residual",
+            "uncertainty",
+            "tilt_derivative",
+            "total_gradient",
+        ]:
+            if results.get(key) is not None:
+                keys.append(key)
+        return keys
 
     def _sanitize_payload(self, value):
         if value is None:

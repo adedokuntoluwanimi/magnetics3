@@ -5,6 +5,7 @@ import io
 import pandas as pd
 
 from backend.logging_utils import log_event
+from backend.services.processing_service import _infer_base_station_mask
 
 
 def _utm_to_wgs84(easting: float, northing: float, zone: int, hemisphere: str) -> tuple[float, float]:
@@ -56,6 +57,10 @@ class PreviewService:
             "task": task,
             "preview_points": preview_points,
             "predicted_points": predicted_points,
+            "base_station_series": [
+                point for point in preview_points
+                if point.get("is_base_station")
+            ],
             "traverse_count": traverse_count,
             "predicted_traverse_count": predicted_traverse_count,
             "aurora": aurora.model_dump(mode="json"),
@@ -294,59 +299,70 @@ class PreviewService:
         utm_hemi = mapping.get("utm_hemisphere") or "N"
 
         try:
-            artifact = survey_files[0]
-            csv_text = self._storage.download_text(artifact["bucket"], artifact["object_name"])
-            frame = pd.read_csv(io.StringIO(csv_text))
-            needed = [c for c in [lat_col, lon_col] if c and c in frame.columns]
-            frame = frame.dropna(subset=needed).copy()
-            frame["_raw_lat"] = pd.to_numeric(frame[lat_col], errors="coerce")
-            frame["_raw_lon"] = pd.to_numeric(frame[lon_col], errors="coerce")
-            if mag_col and mag_col in frame.columns:
-                frame["magnetic"] = pd.to_numeric(frame[mag_col], errors="coerce")
-            else:
-                frame["magnetic"] = float("nan")
-            frame = frame.dropna(subset=["_raw_lat", "_raw_lon"]).head(500)
-
-            if coord_sys == "utm":
-                # Determine zone — use saved zone or auto-detect from first coordinate
-                if utm_zone:
-                    zone = int(utm_zone)
-                    hemi = str(utm_hemi)
+            frames = []
+            for file_index, artifact in enumerate(survey_files):
+                csv_text = self._storage.download_text(artifact["bucket"], artifact["object_name"])
+                frame = pd.read_csv(io.StringIO(csv_text))
+                needed = [c for c in [lat_col, lon_col] if c and c in frame.columns]
+                frame = frame.dropna(subset=needed).copy()
+                frame["_raw_lat"] = pd.to_numeric(frame[lat_col], errors="coerce")
+                frame["_raw_lon"] = pd.to_numeric(frame[lon_col], errors="coerce")
+                if mag_col and mag_col in frame.columns:
+                    frame["magnetic"] = pd.to_numeric(frame[mag_col], errors="coerce")
                 else:
-                    first_e = float(frame["_raw_lon"].iloc[0])
-                    first_n = float(frame["_raw_lat"].iloc[0])
-                    zone, hemi = _auto_utm_zone(first_e, first_n)
+                    frame["magnetic"] = float("nan")
+                frame["raw_magnetic"] = frame["magnetic"]
+                frame["line_id"] = file_index
+                frame["source_file_name"] = artifact.get("file_name") or artifact.get("object_name") or f"survey_{file_index + 1}.csv"
+                if {"hour", "minute"}.issubset(mapping):
+                    hour_col = mapping.get("hour")
+                    minute_col = mapping.get("minute")
+                    second_col = mapping.get("second")
+                    if hour_col in frame.columns and minute_col in frame.columns:
+                        sec_series = pd.to_numeric(frame.get(second_col, 0), errors="coerce").fillna(0) if second_col else 0
+                        frame["time_s"] = (
+                            pd.to_numeric(frame[hour_col], errors="coerce").fillna(0) * 3600.0
+                            + pd.to_numeric(frame[minute_col], errors="coerce").fillna(0) * 60.0
+                            + sec_series
+                        )
+                frame = frame.dropna(subset=["_raw_lat", "_raw_lon"]).head(500)
 
-                lats, lons = [], []
-                for _, row in frame.iterrows():
-                    try:
-                        lat, lon = _utm_to_wgs84(float(row["_raw_lon"]), float(row["_raw_lat"]), zone, hemi)
-                        lats.append(lat)
-                        lons.append(lon)
-                    except Exception:
-                        lats.append(None)
-                        lons.append(None)
-                frame["latitude"] = lats
-                frame["longitude"] = lons
-            else:
-                frame["latitude"] = frame["_raw_lat"]
-                frame["longitude"] = frame["_raw_lon"]
+                if coord_sys == "utm":
+                    if utm_zone:
+                        zone = int(utm_zone)
+                        hemi = str(utm_hemi)
+                    else:
+                        first_e = float(frame["_raw_lon"].iloc[0])
+                        first_n = float(frame["_raw_lat"].iloc[0])
+                        zone, hemi = _auto_utm_zone(first_e, first_n)
 
-            frame = frame.dropna(subset=["latitude", "longitude"])
+                    lats, lons = [], []
+                    for _, row in frame.iterrows():
+                        try:
+                            lat, lon = _utm_to_wgs84(float(row["_raw_lon"]), float(row["_raw_lat"]), zone, hemi)
+                            lats.append(lat)
+                            lons.append(lon)
+                        except Exception:
+                            lats.append(None)
+                            lons.append(None)
+                    frame["latitude"] = lats
+                    frame["longitude"] = lons
+                else:
+                    frame["latitude"] = frame["_raw_lat"]
+                    frame["longitude"] = frame["_raw_lon"]
 
-            # Detect base stations: explicit column or duplicate (lat, lon) pairs
-            bs_col = mapping.get("base_station_column")
-            bs_val = str(mapping.get("base_station_value") or "1")
-            if bs_col and bs_col in frame.columns:
-                frame["is_base_station"] = (frame[bs_col].astype(str).str.strip() == bs_val).astype(int)
-            else:
-                # Duplicate coordinate detection — same (lat, lon) appears more than once
-                dup_mask = frame.duplicated(subset=["latitude", "longitude"], keep=False)
-                frame["is_base_station"] = dup_mask.astype(int)
+                frame = frame.dropna(subset=["latitude", "longitude"])
+                frame["is_base_station"] = _infer_base_station_mask(frame, lon_col, lat_col)
+                frame["is_predicted_target"] = frame["magnetic"].isna().astype(int)
+                frames.append(frame)
 
-            frame["is_predicted_target"] = frame["magnetic"].isna().astype(int)
-
-            return frame[["latitude", "longitude", "magnetic", "is_base_station", "is_predicted_target"]].to_dict(orient="records")
+            if not frames:
+                return []
+            frame = pd.concat(frames, ignore_index=True)
+            keep_cols = ["latitude", "longitude", "magnetic", "raw_magnetic", "is_base_station", "is_predicted_target", "line_id", "source_file_name"]
+            if "time_s" in frame.columns:
+                keep_cols.append("time_s")
+            return frame[keep_cols].to_dict(orient="records")
         except Exception as exc:
             log_event("WARNING", "Preview point extraction failed", error=str(exc), task_id=task.get("id"))
             return []

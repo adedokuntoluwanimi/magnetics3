@@ -23,7 +23,7 @@ const ADD_ON_LABELS = {
   analytic_signal: "Analytic signal",
   first_vertical_derivative: "First vertical derivative",
   horizontal_derivative: "Horizontal derivative",
-  emag2: "Regional residual",
+  emag2: "Regional field + residual",
   uncertainty: "Uncertainty",
 };
 

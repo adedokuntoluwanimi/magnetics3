@@ -54,20 +54,24 @@ class ExportServiceTests(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             names = set(archive.namelist())
             self.assertIn("metadata/qa_report.json", names)
-            self.assertIn("points/measured_points.csv", names)
-            self.assertIn("points/predicted_points.csv", names)
-            self.assertIn("grids/tmf.csv", names)
-            self.assertIn("grids/analytic_signal.csv", names)
+            self.assertIn("points/measured/measured_points.csv", names)
+            self.assertIn("points/predicted/predicted_points.csv", names)
+            self.assertIn("analysis/tmf/grid.csv", names)
+            self.assertIn("analysis/analytic_signal/grid.csv", names)
 
     def test_geojson_bundle_contains_traverses_and_grid_layers(self):
         payload = self.service._build_geojson_bundle(self.project, self.task, self.data)
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             names = set(archive.namelist())
             self.assertIn("traverses/traverses.geojson", names)
-            self.assertIn("grids/tmf.geojson", names)
-            self.assertIn("points/measured_points.geojson", names)
+            self.assertIn("analysis/tmf/grid.geojson", names)
+            self.assertIn("points/measured/measured_points.geojson", names)
             traverses = json.loads(archive.read("traverses/traverses.geojson"))
             self.assertEqual(traverses["type"], "FeatureCollection")
+
+    def test_artifact_stem_uses_task_and_project_names(self):
+        stem = self.service._artifact_stem({"name": "Site C"}, {"name": "Permanent Site"})
+        self.assertEqual(stem, "site_c_permanent_site")
 
     def test_pptx_builder_handles_missing_scenario(self):
         try:

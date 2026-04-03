@@ -47,21 +47,32 @@ def _xlsx_to_csv_bytes(raw_bytes: bytes) -> bytes:
     return out.getvalue().encode("utf-8")
 
 
-def _auto_detect_base_stations(csv_bytes: bytes, lat_col: str, lon_col: str) -> bytes:
-    """Mark base station rows by detecting duplicate coordinates.
-
-    Any (lat, lon) pair that appears more than once is a base station reading.
-    """
+def _auto_detect_base_stations(csv_bytes: bytes, lat_col: str, lon_col: str, coordinate_system: str = "wgs84") -> bytes:
+    """Mark base station rows by detecting repeated coordinates within a small tolerance."""
     import io
     import pandas as pd
 
     frame = pd.read_csv(io.StringIO(csv_bytes.decode("utf-8", errors="replace")))
     if lat_col not in frame.columns or lon_col not in frame.columns:
         return csv_bytes
-    coord_key = frame[lat_col].astype(str) + "," + frame[lon_col].astype(str)
-    counts = coord_key.value_counts()
+    lat = pd.to_numeric(frame[lat_col], errors="coerce")
+    lon = pd.to_numeric(frame[lon_col], errors="coerce")
+    is_utm = str(coordinate_system or "wgs84").lower() == "utm"
+    tolerance = 1.0 if is_utm else 1e-5
+    lat_key = (lat / tolerance).round().astype("Int64")
+    lon_key = (lon / tolerance).round().astype("Int64")
+    coord_key = lat_key.astype(str) + "," + lon_key.astype(str)
+    valid_mask = lat.notna() & lon.notna()
+    counts = coord_key[valid_mask].value_counts()
     repeated = set(counts[counts > 1].index)
-    frame["__is_base_station__"] = coord_key.isin(repeated).astype(int)
+    base_mask = (valid_mask & coord_key.isin(repeated)).astype(int)
+    for column in frame.columns:
+        series = frame[column]
+        if series.dtype == object:
+            text = series.astype(str).str.strip().str.lower()
+            if text.isin({"bs", "base", "base station", "base_station"}).any():
+                base_mask = ((base_mask > 0) | text.isin({"bs", "base", "base station", "base_station"})).astype(int)
+    frame["__is_base_station__"] = base_mask
     return frame.to_csv(index=False).encode("utf-8")
 
 
@@ -105,7 +116,12 @@ class TaskService:
                 normalised_survey.append((base_name, "text/csv", csv_bytes))
             else:
                 # Always auto-detect by duplicate coordinates
-                data = _auto_detect_base_stations(data, payload.column_mapping.latitude, payload.column_mapping.longitude)
+                data = _auto_detect_base_stations(
+                    data,
+                    payload.column_mapping.latitude,
+                    payload.column_mapping.longitude,
+                    payload.column_mapping.coordinate_system,
+                )
                 normalised_survey.append((file_name, content_type, data))
 
         dataset_profile = self._build_dataset_profile(
@@ -192,7 +208,12 @@ class TaskService:
                 base_name = file_name.rsplit(".", 1)[0] + ".csv"
                 normalised_survey.append((base_name, "text/csv", csv_bytes))
             else:
-                data = _auto_detect_base_stations(data, payload.column_mapping.latitude, payload.column_mapping.longitude)
+                data = _auto_detect_base_stations(
+                    data,
+                    payload.column_mapping.latitude,
+                    payload.column_mapping.longitude,
+                    payload.column_mapping.coordinate_system,
+                )
                 normalised_survey.append((file_name, content_type, data))
 
         dataset_profile = self._build_dataset_profile(

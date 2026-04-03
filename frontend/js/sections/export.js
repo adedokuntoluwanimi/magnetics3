@@ -19,9 +19,6 @@ function getRoots() {
     count: document.getElementById("exCnt"),
     progress: document.getElementById("exportProg"),
     done: document.getElementById("exportDone"),
-    aiBody: document.getElementById("exportAIBody"),
-    aiInputRow: document.querySelector("#screen-export .a-input-row"),
-    aiPanel: document.querySelector("#screen-export .a-panel"),
   };
 }
 
@@ -75,19 +72,6 @@ function renderDownloads(job) {
   ` : "";
 }
 
-async function renderAIPanel() {
-  const roots = getRoots();
-  if (roots.aiPanel) {
-    roots.aiPanel.style.display = "";
-  }
-  if (roots.aiInputRow) {
-    roots.aiInputRow.style.display = "none";
-  }
-  if (roots.aiBody) {
-    roots.aiBody.innerHTML = "<div class='chat-empty'>Aurora chat is available on Preview and Visualisation. Export generation still uses Aurora behind the scenes when building document deliverables.</div>";
-  }
-}
-
 export async function loadExportView() {
   renderSelectionCount();
   document.querySelectorAll("#screen-export .ec .badge.bgr").forEach((badge) => {
@@ -102,8 +86,6 @@ export async function loadExportView() {
   if (!appState.project || !appState.task) {
     getRoots().done.style.display = "none";
     getRoots().progress.style.display = "none";
-    const ab = document.getElementById("exportAIBody");
-    if (ab) ab.innerHTML = "<div class='amsg'>Select a processed task to generate export artifacts.</div>";
     throw new Error("Run a processed task before opening Export.");
   }
   const task = await fetchTask(appState.project.id, appState.task.id);
@@ -113,11 +95,9 @@ export async function loadExportView() {
   if (latestJob) {
     renderProgress(latestJob.formats || [], latestJob.details?.artifacts || []);
     renderDownloads(latestJob);
-    await renderAIPanel();
   } else {
     getRoots().progress.style.display = "none";
     getRoots().done.style.display = "none";
-    await renderAIPanel();
   }
 }
 
@@ -133,7 +113,6 @@ export async function runExport() {
   renderWorkflowProgress();
   renderProgress(formats, job.details?.artifacts || []);
   renderDownloads(job);
-  await renderAIPanel();
 }
 
 export function initExport() {

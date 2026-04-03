@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import zipfile
 from datetime import datetime, timezone
 
@@ -90,7 +91,7 @@ class ExportService:
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name="csv_bundle.zip",
+                file_name=f"{self._artifact_stem(task, project)}_csv_bundle.zip",
                 content_type="application/zip",
                 data=self._build_csv_bundle(project, task, data),
                 kind="export",
@@ -99,7 +100,7 @@ class ExportService:
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name="geojson_bundle.zip",
+                file_name=f"{self._artifact_stem(task, project)}_geojson_bundle.zip",
                 content_type="application/zip",
                 data=self._build_geojson_bundle(project, task, data),
                 kind="export",
@@ -108,7 +109,7 @@ class ExportService:
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name="kmz_bundle.zip",
+                file_name=f"{self._artifact_stem(task, project)}_kmz_bundle.zip",
                 content_type="application/zip",
                 data=self._build_kmz_bundle(project, task, data),
                 kind="export",
@@ -117,7 +118,7 @@ class ExportService:
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name="gdb_bundle.zip",
+                file_name=f"{self._artifact_stem(task, project)}_gdb_bundle.zip",
                 content_type="application/zip",
                 data=self._build_gdb_bundle(project, task, data),
                 kind="export",
@@ -126,7 +127,7 @@ class ExportService:
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name="report.pdf",
+                file_name=f"{self._artifact_stem(task, project)}.pdf",
                 content_type="application/pdf",
                 data=self._build_pdf(project, task, data, aurora),
                 kind="export",
@@ -135,7 +136,7 @@ class ExportService:
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name="report.docx",
+                file_name=f"{self._artifact_stem(task, project)}.docx",
                 content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 data=self._build_docx(project, task, data, aurora),
                 kind="export",
@@ -144,7 +145,7 @@ class ExportService:
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name="presentation.pptx",
+                file_name=f"{self._artifact_stem(task, project)}.pptx",
                 content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 data=self._build_pptx(project, task, data, aurora),
                 kind="export",
@@ -153,12 +154,17 @@ class ExportService:
             return self._storage.upload_result(
                 project_id=task["project_id"],
                 task_id=task["id"],
-                file_name="map_bundle.zip",
+                file_name=f"{self._artifact_stem(task, project)}_map_bundle.zip",
                 content_type="application/zip",
                 data=self._build_raster_bundle(project, task),
                 kind="export",
             )
         return None
+
+    def _artifact_stem(self, task: dict, project: dict) -> str:
+        raw = f"{task.get('name', 'task')}_{project.get('name', 'project')}"
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._")
+        return (safe or "gaia_export").lower()
 
     def _layer_specs(self, data: dict) -> list[dict]:
         specs = [
@@ -169,6 +175,7 @@ class ExportService:
             {"key": "analytic_signal", "slug": "analytic_signal", "label": "Analytic Signal"},
             {"key": "first_vertical_derivative", "slug": "first_vertical_derivative", "label": "First Vertical Derivative"},
             {"key": "horizontal_derivative", "slug": "horizontal_derivative", "label": "Horizontal Derivative"},
+            {"key": "regional_field", "slug": "regional_field", "label": "Regional Field"},
             {"key": "regional_residual", "slug": "regional_residual", "label": "Regional Residual"},
             {"key": "emag2_residual", "slug": "regional_residual", "label": "Regional Residual"},
             {"key": "tilt_derivative", "slug": "tilt_derivative", "label": "Tilt Derivative"},
@@ -273,68 +280,72 @@ class ExportService:
             archive.writestr("metadata/project.json", json.dumps({"project": project, "task": task}, default=str, indent=2))
             archive.writestr("metadata/qa_report.json", json.dumps(data.get("qa_report") or {}, indent=2))
             archive.writestr("metadata/validation_summary.json", json.dumps(data.get("validation_summary") or {}, indent=2))
-            archive.writestr("points/measured_points.csv", pd.DataFrame(self._point_rows(data.get("points") or [])).to_csv(index=False))
+            archive.writestr("metadata/model_metadata.json", json.dumps(data.get("model_metadata") or {}, indent=2))
+            archive.writestr("metadata/uncertainty_metadata.json", json.dumps(data.get("uncertainty_metadata") or {}, indent=2))
+            archive.writestr("points/measured/measured_points.csv", pd.DataFrame(self._point_rows(data.get("points") or [])).to_csv(index=False))
             if data.get("predicted_points"):
-                archive.writestr("points/predicted_points.csv", pd.DataFrame(self._point_rows(data["predicted_points"])).to_csv(index=False))
+                archive.writestr("points/predicted/predicted_points.csv", pd.DataFrame(self._point_rows(data["predicted_points"])).to_csv(index=False))
             for spec in self._layer_specs(data):
                 rows = self._grid_rows(data, spec["key"], spec["slug"])
                 if rows:
-                    archive.writestr(f"grids/{spec['slug']}.csv", pd.DataFrame(rows).to_csv(index=False))
+                    archive.writestr(f"analysis/{spec['slug']}/grid.csv", pd.DataFrame(rows).to_csv(index=False))
             archive.writestr("traverses/traverses.csv", pd.DataFrame(self._point_rows(data.get("points") or [])).to_csv(index=False))
-            archive.writestr("README.txt", "CSV bundle contains measured points, predicted points when available, grid exports for every compatible output layer, and processing metadata.")
+            archive.writestr("README.txt", "CSV bundle contains task metadata, measured and predicted points, and one folder per exported analysis layer.")
         return buffer.getvalue()
 
     def _build_geojson_bundle(self, project: dict, task: dict, data: dict) -> bytes:
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("metadata/project.json", json.dumps({"project": project.get("name"), "task": task.get("name")}, indent=2))
-            archive.writestr("points/measured_points.geojson", json.dumps(self._points_geojson(data.get("points") or [])))
+            archive.writestr("metadata/project.json", json.dumps({"project": project, "task": task}, default=str, indent=2))
+            archive.writestr("points/measured/measured_points.geojson", json.dumps(self._points_geojson(data.get("points") or [])))
             if data.get("predicted_points"):
-                archive.writestr("points/predicted_points.geojson", json.dumps(self._points_geojson(data["predicted_points"], value_field="predicted_magnetic")))
+                archive.writestr("points/predicted/predicted_points.geojson", json.dumps(self._points_geojson(data["predicted_points"], value_field="predicted_magnetic")))
             archive.writestr("traverses/traverses.geojson", json.dumps(self._traverse_geojson(data.get("points") or [])))
             for spec in self._layer_specs(data):
                 rows = self._grid_rows(data, spec["key"], spec["slug"])
                 if rows:
-                    archive.writestr(f"grids/{spec['slug']}.geojson", json.dumps(self._points_geojson(rows, value_field=spec["slug"])))
-            archive.writestr("README.txt", "GeoJSON bundle contains measured points, predicted points when available, traverse lines, and gridded layers exported as point features.")
+                    archive.writestr(f"analysis/{spec['slug']}/grid.geojson", json.dumps(self._points_geojson(rows, value_field=spec["slug"])))
+            archive.writestr("README.txt", "GeoJSON bundle contains structured folders for measured data, predicted data, traverses, and each generated analysis layer.")
         return buffer.getvalue()
 
     def _build_kmz_bundle(self, project: dict, task: dict, data: dict) -> bytes:
         outer = io.BytesIO()
         with zipfile.ZipFile(outer, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("kml/measured_points.kml", self._build_kml(data.get("points") or [], name=f"{project.get('name', 'Project')} measured points"))
+            archive.writestr("metadata/project.json", json.dumps({"project": project, "task": task}, default=str, indent=2))
+            archive.writestr("points/measured/measured_points.kml", self._build_kml(data.get("points") or [], name=f"{project.get('name', 'Project')} measured points"))
             if data.get("predicted_points"):
                 archive.writestr(
-                    "kml/predicted_points.kml",
+                    "points/predicted/predicted_points.kml",
                     self._build_kml(data["predicted_points"], name=f"{project.get('name', 'Project')} predicted points", value_field="predicted_magnetic"),
                 )
             for spec in self._layer_specs(data):
                 rows = self._grid_rows(data, spec["key"], spec["slug"])
                 if rows:
-                    archive.writestr(f"kml/{spec['slug']}.kml", self._build_kml(rows, name=spec["label"], value_field=spec["slug"]))
+                    archive.writestr(f"analysis/{spec['slug']}/{spec['slug']}.kml", self._build_kml(rows, name=spec["label"], value_field=spec["slug"]))
             kmz_buffer = io.BytesIO()
             with zipfile.ZipFile(kmz_buffer, "w", zipfile.ZIP_DEFLATED) as kmz:
                 kmz.writestr("doc.kml", self._build_kml(data.get("points") or [], name=f"{project.get('name', 'Project')} measured points"))
-            archive.writestr("google_earth/overview.kmz", kmz_buffer.getvalue())
-            archive.writestr("README.txt", "KMZ bundle contains KML layers and a quick-look KMZ for Google Earth.")
+            archive.writestr("overview/google_earth_overview.kmz", kmz_buffer.getvalue())
+            archive.writestr("README.txt", "KMZ bundle contains structured KML/KMZ outputs for each generated analysis layer.")
         return outer.getvalue()
 
     def _build_gdb_bundle(self, project: dict, task: dict, data: dict) -> bytes:
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("gaia_export.gdb/measured_points.geojson", json.dumps(self._points_geojson(data.get("points") or [])))
+            archive.writestr("gaia_export.gdb/metadata/project.json", json.dumps({"project": project, "task": task}, default=str, indent=2))
+            archive.writestr("gaia_export.gdb/points/measured_points.geojson", json.dumps(self._points_geojson(data.get("points") or [])))
             if data.get("predicted_points"):
-                archive.writestr("gaia_export.gdb/predicted_points.geojson", json.dumps(self._points_geojson(data["predicted_points"], value_field="predicted_magnetic")))
-            archive.writestr("gaia_export.gdb/traverses.geojson", json.dumps(self._traverse_geojson(data.get("points") or [])))
+                archive.writestr("gaia_export.gdb/points/predicted_points.geojson", json.dumps(self._points_geojson(data["predicted_points"], value_field="predicted_magnetic")))
+            archive.writestr("gaia_export.gdb/traverses/traverses.geojson", json.dumps(self._traverse_geojson(data.get("points") or [])))
             for spec in self._layer_specs(data):
                 rows = self._grid_rows(data, spec["key"], spec["slug"])
                 if rows:
-                    archive.writestr(f"gaia_export.gdb/{spec['slug']}.csv", pd.DataFrame(rows).to_csv(index=False))
-                    archive.writestr(f"gaia_export.gdb/{spec['slug']}.geojson", json.dumps(self._points_geojson(rows, value_field=spec["slug"])))
-            archive.writestr("gaia_export.gdb/qa_report.json", json.dumps(data.get("qa_report") or {}, indent=2))
+                    archive.writestr(f"gaia_export.gdb/analysis/{spec['slug']}/{spec['slug']}.csv", pd.DataFrame(rows).to_csv(index=False))
+                    archive.writestr(f"gaia_export.gdb/analysis/{spec['slug']}/{spec['slug']}.geojson", json.dumps(self._points_geojson(rows, value_field=spec["slug"])))
+            archive.writestr("gaia_export.gdb/metadata/qa_report.json", json.dumps(data.get("qa_report") or {}, indent=2))
             archive.writestr(
                 "gaia_export.gdb/README.txt",
-                "Bundle contains measured points, predicted points when available, traverse lines, gridded layers, and metadata prepared for downstream GIS ingestion.",
+                "Bundle contains measured points, predicted points, traverses, and one analysis folder per generated output layer.",
             )
         return buffer.getvalue()
 
@@ -344,15 +355,16 @@ class ExportService:
         buffer = io.BytesIO()
         image_names = ["heatmap.png", "contour.png", "surface.png"]
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("metadata/project.json", json.dumps({"project": project, "task": task}, default=str, indent=2))
             for image_name in image_names:
                 image_bytes = self._try_get_image_bytes(task, image_name)
                 if not image_bytes:
                     continue
-                archive.writestr(f"png/{image_name}", image_bytes)
+                archive.writestr(f"images/png/{image_name}", image_bytes)
                 jpg_output = io.BytesIO()
                 Image.open(io.BytesIO(image_bytes)).convert("RGB").save(jpg_output, format="JPEG", quality=92)
-                archive.writestr(f"jpg/{image_name.replace('.png', '.jpg')}", jpg_output.getvalue())
-            archive.writestr("README.txt", f"Raster bundle for {project.get('name', 'project')} includes all generated map images in PNG and JPG where available.")
+                archive.writestr(f"images/jpg/{image_name.replace('.png', '.jpg')}", jpg_output.getvalue())
+            archive.writestr("README.txt", f"Raster bundle for {project.get('name', 'project')} includes generated map images grouped by image format.")
         return buffer.getvalue()
 
     # ── Image helpers ─────────────────────────────────────────────────────────

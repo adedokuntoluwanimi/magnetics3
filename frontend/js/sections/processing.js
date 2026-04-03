@@ -31,10 +31,32 @@ const ADD_ON_LABELS = {
   analytic_signal: "Analytic signal",
   first_vertical_derivative: "First vertical derivative",
   horizontal_derivative: "Horizontal derivative",
-  emag2: "Regional residual",
+  emag2: "Regional field + residual",
   uncertainty: "Uncertainty",
 };
 const MODEL_LABELS = {kriging: "Kriging", ml: "Machine learning", hybrid: "Hybrid", none: "No modelling"};
+const EXECUTION_ETA = {
+  "validate inputs": 6,
+  "standardize dataset": 5,
+  "diurnal correction": 8,
+  "igrf removal": 8,
+  "lag correction": 8,
+  "heading correction": 8,
+  "filtering": 8,
+  "leveling and crossover": 10,
+  "prediction target preparation": 8,
+  "kriging modelling": 45,
+  "machine learning modelling": 45,
+  "hybrid modelling": 45,
+  "regional field + residual": 12,
+  "rtp": 12,
+  "analytic signal": 12,
+  "first vertical derivative": 12,
+  "horizontal derivative": 12,
+  "uncertainty": 8,
+  "qa report": 5,
+  "save results": 6,
+};
 
 function getRoots() {
   const screen = document.getElementById("screen-processing");
@@ -53,6 +75,8 @@ function simplifyProcessingDetail(detail, stepName = "") {
   if (!raw) return "Working...";
   const step = String(stepName || "").toLowerCase();
   if (step.includes("line-domain corrections")) return "Corrections checked and applied where data support was available.";
+  if (step.includes("qa report")) return raw.replace(/^QA status:\s*/i, "QA report prepared with status ");
+  if (step.includes("save results")) return raw.replace(/^Saved\s+/i, "Stored ");
   if (/igrf failed|pyigrf unavailable/i.test(raw)) {
     return raw
       .replace(/IGRF FAILED\s*[—-]?\s*/i, "IGRF could not run. ")
@@ -79,14 +103,11 @@ function statusBadge(status) {
 }
 
 function renderPipeline(run) {
-  const runPrediction = appState.task?.analysis_config?.run_prediction !== false;
   const roots = getRoots();
-  const visibleSteps = (run?.steps || [])
-    .map((step, originalIndex) => ({...step, originalIndex}))
-    .filter((step) => runPrediction || step.name?.toLowerCase() !== "modelling");
+  const visibleSteps = buildExecutionSteps(appState.task, run);
   roots.pipeWrap.innerHTML = visibleSteps.map((step, displayIndex) => {
     const isRunning = step.status === "running";
-    const etaSec = STEP_ETA[step.originalIndex] || 10;
+    const etaSec = EXECUTION_ETA[String(step.name || "").toLowerCase()] || STEP_ETA[step.originalIndex] || 10;
     const etaLabel = etaSec >= 60 ? `~${Math.round(etaSec / 60)} min` : `~${etaSec}s`;
     const etaHtml = step.status === "queued"
       ? `<div style="font-size:10px;color:var(--text4);margin-top:3px">Est. ${etaLabel}</div>`
@@ -112,12 +133,73 @@ function renderPipeline(run) {
 }
 
 function renderIdlePipeline() {
-  renderPipeline({
-    steps: IDLE_STEPS.map((step) => ({
+  renderPipeline(null);
+}
+
+function buildExecutionSteps(task, run) {
+  const config = task?.analysis_config || {};
+  const selectedCorrections = (config.corrections || []).map((item) => CORRECTION_LABELS[item] || titleCase(item));
+  const selectedAddOns = (config.add_ons || []).map((item) => ADD_ON_LABELS[item] || titleCase(item));
+  const runPrediction = config.run_prediction !== false;
+  const modelStep = runPrediction ? `${MODEL_LABELS[config.model] || titleCase(config.model || "Machine learning")} modelling` : null;
+  const synthetic = [
+    {name: "Validate inputs", detail: "Checking uploaded files, mapping, and coordinate fields."},
+    {name: "Standardize dataset", detail: "Cleaning rows and preserving supported measured and base-station records."},
+    ...selectedCorrections.map((name) => ({name, detail: detailForConfiguredStep(name)})),
+    {name: "Leveling and crossover", detail: "Comparing line consistency and applying leveling only if support exists."},
+    {name: "Prediction target preparation", detail: "Preparing the exact scenario you selected for modelling or observed-only output."},
+    ...(modelStep ? [{name: modelStep, detail: "Generating the model path you selected in Analysis."}] : []),
+    ...selectedAddOns.map((name) => ({name, detail: detailForConfiguredStep(name)})),
+    {name: "QA report", detail: "Summarising validation, applied paths, warnings, and scientific confidence."},
+    {name: "Save results", detail: "Packaging outputs, metadata, and downloadable deliverables."},
+  ];
+  if (!run?.steps?.length) {
+    return synthetic.map((step, index) => ({...step, status: "queued", originalIndex: index}));
+  }
+  const generic = run.steps || [];
+  const completedCount = generic.filter((step) => step.status === "completed").length;
+  const runningIndex = generic.findIndex((step) => step.status === "running");
+  return synthetic.map((step, index) => {
+    let status = "queued";
+    if (run.status === "completed") {
+      status = "completed";
+    } else if (index < completedCount) {
+      status = "completed";
+    } else if (runningIndex !== -1 && index === runningIndex) {
+      status = "running";
+    } else if (runningIndex === -1 && index === completedCount && run.status === "running") {
+      status = "running";
+    } else if (run.status === "failed" && index === Math.max(completedCount, 0)) {
+      status = "failed";
+    }
+    const sourceStep = generic[Math.min(index, generic.length - 1)] || {};
+    return {
       ...step,
-      status: "queued",
-    })),
+      status,
+      detail: status === "completed" || status === "running"
+        ? simplifyProcessingDetail(sourceStep.detail || step.detail, sourceStep.name || step.name)
+        : step.detail,
+      originalIndex: index,
+    };
   });
+}
+
+function detailForConfiguredStep(name) {
+  const key = String(name || "").toLowerCase();
+  const details = {
+    "diurnal correction": "Using repeated base-station revisits to correct each time segment between consecutive base readings.",
+    "igrf removal": "Removing only the supported regional reference field path and labelling any fallback honestly.",
+    "filtering": "Applying the exact filter mode chosen in Analysis to the processed magnetic data.",
+    "lag correction": "Checking line timing offsets conservatively before applying any lag shift.",
+    "heading correction": "Comparing directional bias between headings and only correcting where support is adequate.",
+    "rtp": "Generating reduction-to-pole only when the required magnetic-field parameters support it.",
+    "analytic signal": "Computing analytic signal to highlight magnetic source edges and contacts.",
+    "first vertical derivative": "Computing first vertical derivative to sharpen shallow responses.",
+    "horizontal derivative": "Computing horizontal derivative to emphasise lateral gradients.",
+    "regional field + residual": "Separating the broad regional field from the residual magnetic response for comparison.",
+    "uncertainty": "Combining support distance and model variance into an uncertainty surface.",
+  };
+  return details[key] || `${name} will run only where the uploaded data supports it.`;
 }
 
 function renderLogs(run) {
@@ -162,12 +244,14 @@ function renderConfigSummary(task) {
   const filterMode = config.filter_type
     ? titleCase(String(config.filter_type).replace(/-/g, " "))
     : null;
+  const scenario = task?.scenario ? titleCase(task.scenario) : "Automatic";
 
   const badge = (text, color) =>
     `<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10.5px;font-weight:700;background:var(--${color}-bg,var(--bg2));color:var(--${color},var(--text2));margin:2px 3px 2px 0">${text}</span>`;
 
   const rows = [
     ["Prediction modelling", badge(runPrediction ? "On" : "Off", runPrediction ? "amber" : "text4")],
+    ["Scenario", badge(scenario, "blue")],
     ["Model", badge(model, runPrediction ? "amber" : "text4")],
     filterMode ? ["Filter mode", badge(filterMode, "blue")] : null,
     ["Corrections", corrections.length ? corrections.map((c) => badge(c, "g5")).join("") : badge("None selected", "text4")],
