@@ -169,6 +169,7 @@ class ExportService:
     def _layer_specs(self, data: dict) -> list[dict]:
         specs = [
             {"key": "surface", "slug": "tmf", "label": "Total Magnetic Field"},
+            {"key": "corrected_field", "slug": "corrected_field", "label": "Corrected Magnetic Field"},
             {"key": "uncertainty", "slug": "uncertainty", "label": "Uncertainty"},
             {"key": "filtered_surface", "slug": "filtered_surface", "label": "Filtered Surface"},
             {"key": "rtp_surface", "slug": "rtp", "label": "Reduction to Pole"},
@@ -176,7 +177,9 @@ class ExportService:
             {"key": "first_vertical_derivative", "slug": "first_vertical_derivative", "label": "First Vertical Derivative"},
             {"key": "horizontal_derivative", "slug": "horizontal_derivative", "label": "Horizontal Derivative"},
             {"key": "regional_field", "slug": "regional_field", "label": "Regional Field"},
+            {"key": "regional_surface", "slug": "regional_field", "label": "Regional Field"},
             {"key": "regional_residual", "slug": "regional_residual", "label": "Regional Residual"},
+            {"key": "residual_surface", "slug": "regional_residual", "label": "Regional Residual"},
             {"key": "emag2_residual", "slug": "regional_residual", "label": "Regional Residual"},
             {"key": "tilt_derivative", "slug": "tilt_derivative", "label": "Tilt Derivative"},
             {"key": "total_gradient", "slug": "total_gradient", "label": "Total Gradient"},
@@ -353,7 +356,17 @@ class ExportService:
         from PIL import Image
 
         buffer = io.BytesIO()
-        image_names = ["heatmap.png", "contour.png", "surface.png"]
+        image_names = [
+            "heatmap.png",
+            "contour.png",
+            "surface.png",
+            "regional_heatmap.png",
+            "regional_contour.png",
+            "regional_surface.png",
+            "residual_heatmap.png",
+            "residual_contour.png",
+            "residual_surface.png",
+        ]
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("metadata/project.json", json.dumps({"project": project, "task": task}, default=str, indent=2))
             for image_name in image_names:
@@ -510,10 +523,19 @@ class ExportService:
             image_map = {
                 "total magnetic field": "heatmap.png",
                 "tmf": "heatmap.png",
+                "corrected magnetic field": "heatmap.png",
                 "magnetic surface": "heatmap.png",
                 "contour": "contour.png",
                 "magnetic contours": "contour.png",
                 "surface": "surface.png",
+                "regional field": "regional_heatmap.png",
+                "regional magnetic field": "regional_heatmap.png",
+                "regional magnetic contours": "regional_contour.png",
+                "regional magnetic surface": "regional_surface.png",
+                "regional residual": "residual_heatmap.png",
+                "residual magnetic field": "residual_heatmap.png",
+                "residual magnetic contours": "residual_contour.png",
+                "residual magnetic surface": "residual_surface.png",
             }
             for layer in results_interp:
                 layer_name = layer.get("layer", "Layer")
@@ -608,10 +630,19 @@ class ExportService:
             image_map = {
                 "total magnetic field": "heatmap.png",
                 "tmf": "heatmap.png",
+                "corrected magnetic field": "heatmap.png",
                 "magnetic surface": "heatmap.png",
                 "contour": "contour.png",
                 "magnetic contours": "contour.png",
                 "surface": "surface.png",
+                "regional field": "regional_heatmap.png",
+                "regional magnetic field": "regional_heatmap.png",
+                "regional magnetic contours": "regional_contour.png",
+                "regional magnetic surface": "regional_surface.png",
+                "regional residual": "residual_heatmap.png",
+                "residual magnetic field": "residual_heatmap.png",
+                "residual magnetic contours": "residual_contour.png",
+                "residual magnetic surface": "residual_surface.png",
             }
             img_key = layer_name.lower()
             img_file = image_map.get(img_key)
@@ -785,6 +816,18 @@ class ExportService:
 
         def _figure_file_for_ref(visual_ref):
             ref = str(visual_ref or "").lower()
+            if "regional" in ref and "residual" not in ref:
+                if "contour" in ref:
+                    return "regional_contour.png"
+                if "3d" in ref or "surface" in ref:
+                    return "regional_surface.png"
+                return "regional_heatmap.png"
+            if "residual" in ref:
+                if "contour" in ref:
+                    return "residual_contour.png"
+                if "3d" in ref or "surface" in ref:
+                    return "residual_surface.png"
+                return "residual_heatmap.png"
             if "contour" in ref:
                 return "contour.png"
             if "3d" in ref or "surface" in ref:

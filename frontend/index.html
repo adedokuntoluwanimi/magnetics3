@@ -832,6 +832,12 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
         <div class="scroll">
           <div class="sep first">A - Corrections</div>
           <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">Diurnal correction</div><div class="chk-d">Remove daily geomagnetic variation using base station reference data</div></div></div>
+          <div id="diurnalInfoCard" class="card card-sm" style="margin:-2px 0 10px 0;padding:10px 12px">
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px" id="diurnalInfoBadges"></div>
+            <div style="font-size:11px;color:var(--text2);line-height:1.7">When valid base station readings are present, station readings are corrected using linear interpolation between consecutive base station readings. This preserves local drift direction and magnitude.</div>
+            <div style="font-size:10.5px;color:var(--text3);line-height:1.7;margin-top:6px">If valid base station readings are unavailable, a fallback low-frequency trend correction is used.</div>
+            <div id="diurnalInfoNote" style="font-size:10.5px;color:var(--amber);line-height:1.6;margin-top:6px;display:none"></div>
+          </div>
           <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">IGRF removal</div><div class="chk-d">Subtract International Geomagnetic Reference Field at survey date and location</div></div></div>
           <div class="chk" id="chk-filtering" onclick="toggleFiltering(this)">
             <div class="chk-box"></div>
@@ -875,6 +881,37 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
           <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Reduction to Pole (RTP)</div><div class="chk-d">Uses supplied inclination and declination when available; QA will flag stabilized or fallback behaviour</div></div></div>
           <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">Analytic signal</div><div class="chk-d">Source body edge detection — maxima delineate geological contacts independent of inclination</div></div></div>
           <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Regional residual</div><div class="chk-d">Separate the processed surface into regional and residual components using Gaussian smoothing</div></div></div>
+          <div id="regionalSettingsCard" class="card card-sm" style="margin:-2px 0 12px 0;padding:12px 14px;display:none">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+              <div>
+                <div style="font-size:12px;font-weight:700;color:var(--text)">Generate regional and residual fields</div>
+                <div style="font-size:10.5px;color:var(--text3);line-height:1.6;margin-top:2px">Regional Magnetic Field and Residual Magnetic Field are shown and exported as separate interpretive products.</div>
+              </div>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;font-weight:700;color:var(--text3)">
+                <input type="checkbox" id="regionalResidualToggle" style="width:14px;height:14px;accent-color:var(--g500)">
+                Enabled
+              </label>
+            </div>
+            <div style="margin-bottom:10px">
+              <label style="display:block;font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:6px">Regional field method</label>
+              <select id="regionalMethodSelect" class="fsel" style="width:100%">
+                <option value="polynomial">Polynomial trend</option>
+                <option value="trend">Trend surface</option>
+                <option value="lowpass">Low-pass regional</option>
+                <option value="igrf_context">IGRF context</option>
+              </select>
+            </div>
+            <div id="regionalDegreeRow" style="display:none;margin-bottom:10px">
+              <label style="display:block;font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:6px">Polynomial degree</label>
+              <input id="regionalDegreeInput" class="fi" type="number" min="1" max="3" step="1" value="1" style="width:100%">
+            </div>
+            <div id="regionalScaleRow" style="display:none;margin-bottom:10px">
+              <label style="display:block;font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:6px">Filter / smoothing scale</label>
+              <input id="regionalScaleInput" class="fi" type="number" min="0.1" step="0.1" value="2.5" style="width:100%">
+            </div>
+            <div id="regionalMethodHelp" style="font-size:10.5px;color:var(--text2);line-height:1.7"></div>
+            <div id="regionalMethodNote" style="font-size:10.5px;color:var(--blue);line-height:1.7;margin-top:6px;display:none"></div>
+          </div>
           <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">First Vertical Derivative</div><div class="chk-d">Sharpen shallow anomalies and suppress broad regional trends for near-surface structure mapping</div></div></div>
           <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Horizontal Derivative</div><div class="chk-d">Highlight lateral gradients and edges along contacts, dykes, and fault traces</div></div></div>
 
@@ -1195,9 +1232,18 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
           </div>
 
           <div class="sep">Report options</div>
+          <div id="exportAvailabilityCard" class="card card-sm" style="margin-bottom:12px;padding:12px 14px">
+            <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px">Export content preview</div>
+            <div style="font-size:10.5px;color:var(--text3);line-height:1.7;margin-bottom:10px">Report and presentation structure will be generated from the processing options and result layers selected for this run.</div>
+            <div id="exportAvailabilityNote" style="font-size:10.5px;color:var(--g600);line-height:1.7;margin-bottom:10px;display:none"></div>
+            <div id="exportAvailabilityList" style="display:grid;gap:6px"></div>
+          </div>
           <div class="card card-g" style="margin-bottom:14px">
             <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:11px">Choose what to include in the report</div>
             <div class="g2" style="gap:8px">
+              <div class="chk on" id="export-corrected-field" style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)"><div class="chk-box on">✓</div><span class="chk-t" style="font-size:12px">Include corrected field</span></div>
+              <div class="chk" id="export-regional-field" style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)"><div class="chk-box"></div><span class="chk-t" style="font-size:12px">Include regional field</span></div>
+              <div class="chk" id="export-residual-field" style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)"><div class="chk-box"></div><span class="chk-t" style="font-size:12px">Include residual field</span></div>
               <div class="chk on" style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)"><div class="chk-box on">✓</div><span class="chk-t" style="font-size:12px">Anomaly catalogue</span></div>
               <div class="chk on" style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)"><div class="chk-box on">✓</div><span class="chk-t" style="font-size:12px">Drilling recommendations</span></div>
               <div class="chk on" style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)"><div class="chk-box on">✓</div><span class="chk-t" style="font-size:12px">Structural interpretation</span></div>

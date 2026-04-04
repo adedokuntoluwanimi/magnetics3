@@ -40,12 +40,12 @@ function getLayerPalette(layer) {
 
 const LAYER_META = {
   magnetic: {
-    label: "Corrected magnetic field",
-    shortLabel: "TMF",
+    label: "Corrected Magnetic Field",
+    shortLabel: "Corrected",
     key: "surface",
     unit: "nT",
     tone: "Core field",
-    description: "Main corrected magnetic surface used for modelling and interpretation.",
+    description: "Magnetic field after survey corrections. Represents the main processed dataset used for interpretation.",
     palette: ["#1a2980", "#0a9396", "#94d2bd", "#e9c46a", "#c0392b"],
   },
   filtered_surface: {
@@ -94,21 +94,21 @@ const LAYER_META = {
     palette: ["#3f2d14", "#8e6528", "#d6a55c", "#f9ebca"],
   },
   regional_field: {
-    label: "Regional field",
+    label: "Regional Magnetic Field",
     shortLabel: "Regional",
     key: "regional_field",
     unit: "nT",
     tone: "Trend",
-    description: "Regional magnetic trend separated from the corrected field; single traverses use a line-fit trend and broader surfaces fall back to grid smoothing.",
+    description: "Broad long-wavelength magnetic background derived using the selected regional method.",
     palette: ["#133b54", "#2f6e8f", "#7bb4c9", "#e0f3fa"],
   },
   emag2_residual: {
-    label: "Regional residual",
+    label: "Residual Magnetic Field",
     shortLabel: "Residual",
     key: "emag2_residual",
     unit: "nT",
     tone: "Comparison",
-    description: "Residual magnetic field after subtracting the regional field from the corrected data.",
+    description: "Local anomaly field obtained by subtracting the regional field from the corrected magnetic field.",
     palette: ["#3e1847", "#8b3e91", "#cf7ad7", "#f3def8"],
   },
   uncertainty: {
@@ -314,6 +314,37 @@ function paletteToPlotly(palette) {
   return palette.map((color, index) => [index / Math.max(palette.length - 1, 1), color]);
 }
 
+function layerGroup(layerId) {
+  if (layerId === "magnetic") return "Main processed field";
+  if (layerId === "regional_field") return "Regional field";
+  if (layerId === "emag2_residual") return "Residual field";
+  return "Derived products";
+}
+
+function layerCaption(layer) {
+  if (layer.id === "magnetic") return "Magnetic field after survey corrections and modelling; use as the main processed interpretive dataset.";
+  if (layer.id === "regional_field") return "Broad background trend highlighting long-wavelength magnetic character from the selected regional method.";
+  if (layer.id === "emag2_residual") return "Residual anomaly response showing local features after subtracting the regional magnetic field.";
+  return layer.description;
+}
+
+function visualTitle(layer, mode) {
+  if (mode === "Contour" || mode === "Surface" || mode === "Heatmap") return `${layer.label} Heatmap`;
+  if (mode === "3D") return `${layer.label} Surface`;
+  if (mode === "Map") return `${layer.label} Map Overlay`;
+  if (mode === "Line Profiles") return `${layer.label} Line Profiles`;
+  return layer.label;
+}
+
+function visualSubtitle(results, layer) {
+  const method = results?.regional_method_used
+    ? titleCase(String(results.regional_method_used).replace(/_/g, " "))
+    : null;
+  if (layer.id === "regional_field") return method ? `Regional method: ${method}` : "Regional method metadata was not supplied for this run.";
+  if (layer.id === "emag2_residual") return "Residual = Corrected − Regional";
+  return "Generated from the corrected magnetic processing workflow.";
+}
+
 function _showPalettePickerFor(layerId, currentPalette) {
   let picker = document.getElementById("_visPalPicker");
   if (!picker) {
@@ -395,7 +426,8 @@ function renderHeader(results, layer, stats) {
   roots.headerActions.innerHTML = `
     <span class="badge bgr">${results?.points?.length || 0} measured points</span>
     ${(results?.predicted_points?.length || 0) ? `<span class="badge bb">${results.predicted_points.length} predicted</span>` : ""}
-    <span class="badge bg">${layer.shortLabel}</span>
+    <span class="badge bg">${layer.label}</span>
+    <span class="badge bgr">${layerGroup(layer.id)}</span>
     ${modelLabel ? `<span class="badge" style="background:var(--amber-bg);color:var(--amber)">${modelLabel}</span>` : ""}
     ${stats.range != null ? `<span class="badge bgr">Range ${formatNumber(stats.range)} ${layer.unit}</span>` : ""}
     <button class="btn btn-sm btn-out" onclick="go(document.querySelector('[data-s=export]'))">Export →</button>
@@ -407,8 +439,8 @@ function renderLayerBar(layers, activeLayer) {
   if (!roots.headerLayerBar) return;
   roots.headerLayerBar.innerHTML = `
     <span style="font-size:10px;font-weight:700;color:var(--text4);letter-spacing:1px">ACTIVE RESULTS</span>
-    ${layers.map((layer) => `<span class="badge ${layer.id === activeLayer.id ? "bg" : "bgr"}">${layer.shortLabel}</span>`).join("")}
-    <span style="font-size:10px;color:var(--text4);margin-left:auto">${activeLayer.tone}</span>
+    ${layers.map((layer) => `<span class="badge ${layer.id === activeLayer.id ? "bg" : "bgr"}">${layer.label}</span>`).join("")}
+    <span style="font-size:10px;color:var(--text4);margin-left:auto">${layerGroup(activeLayer.id)}</span>
   `;
 }
 
@@ -416,6 +448,7 @@ function buildAvailableLayers(results, task) {
   const config = task?.analysis_config || {};
   const selectedAddOns = new Set(config.add_ons || []);
   const selectedCorrections = new Set(config.corrections || []);
+  const regionalResidualEnabled = Boolean((results?.regional_field && results?.regional_residual) || config.regional_residual_enabled || selectedAddOns.has("emag2"));
   const layers = [];
 
   const pushLayer = (id, enabled = true) => {
@@ -432,8 +465,8 @@ function buildAvailableLayers(results, task) {
   pushLayer("analytic_signal", selectedAddOns.has("analytic_signal"));
   pushLayer("first_vertical_derivative", selectedAddOns.has("first_vertical_derivative"));
   pushLayer("horizontal_derivative", selectedAddOns.has("horizontal_derivative"));
-  pushLayer("regional_field", selectedAddOns.has("emag2"));
-  pushLayer("emag2_residual", selectedAddOns.has("emag2"));
+  pushLayer("regional_field", regionalResidualEnabled);
+  pushLayer("emag2_residual", regionalResidualEnabled);
   pushLayer("uncertainty", selectedAddOns.has("uncertainty"));
   return layers;
 }
@@ -589,10 +622,23 @@ function renderLayerControls(layers, activeLayer, mode) {
   const fullDisplayData = buildDisplayDatasets(appState.taskResults || {}, activeLayer);
   const displayData = filterDisplayData(fullDisplayData);
   const traverseOptions = getTraverseFilterOptions(fullDisplayData);
+  const groupedLayers = [
+    ["Main processed field", layers.filter((layer) => layerGroup(layer.id) === "Main processed field")],
+    ["Regional field", layers.filter((layer) => layerGroup(layer.id) === "Regional field")],
+    ["Residual field", layers.filter((layer) => layerGroup(layer.id) === "Residual field")],
+    ["Derived products", layers.filter((layer) => layerGroup(layer.id) === "Derived products")],
+  ].filter(([, items]) => items.length);
   roots.layerToggles.innerHTML = `
     <div style="font-size:10px;font-weight:700;color:var(--text4);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:10px">Selected processing outputs</div>
-    <div style="display:flex;flex-direction:column;gap:6px">
-      ${layers.map((layer) => {
+    ${groupedLayers.some(([label]) => label === "Regional field") || groupedLayers.some(([label]) => label === "Residual field")
+      ? ""
+      : `<div style="font-size:10.5px;color:var(--text3);line-height:1.7;margin-bottom:10px">Regional and residual outputs were not generated for this run.</div>`}
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${groupedLayers.map(([groupLabel, groupItems]) => `
+        <div>
+          <div style="font-size:10px;font-weight:700;color:var(--text4);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:6px">${groupLabel}</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+      ${groupItems.map((layer) => {
         const active = layer.id === activeLayer.id;
         return `
           <button
@@ -601,13 +647,16 @@ function renderLayerControls(layers, activeLayer, mode) {
             style="display:flex;align-items:flex-start;gap:10px;text-align:left;padding:9px 10px;border-radius:8px;border:1px solid ${active ? "var(--g300)" : "var(--border)"};background:${active ? "var(--g50)" : "var(--bg)"};cursor:pointer"
           >
             <span style="width:10px;height:10px;border-radius:50%;background:${layer.palette[1]};margin-top:4px;flex-shrink:0"></span>
-            <span style="flex:1">
-              <span style="display:block;font-size:12px;font-weight:${active ? "700" : "600"};color:${active ? "var(--g600)" : "var(--text)"}">${layer.label}</span>
-              <span style="display:block;font-size:10px;color:var(--text3);margin-top:2px">${layer.description}</span>
-            </span>
+              <span style="flex:1">
+                <span style="display:block;font-size:12px;font-weight:${active ? "700" : "600"};color:${active ? "var(--g600)" : "var(--text)"}">${layer.label}</span>
+                <span style="display:block;font-size:10px;color:var(--text3);margin-top:2px">${layer.description}</span>
+              </span>
           </button>
         `;
       }).join("")}
+          </div>
+        </div>
+      `).join("")}
     </div>
     <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
       <div style="font-size:10px;font-weight:700;color:var(--text4);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:8px">Traverse view</div>
@@ -681,6 +730,10 @@ async function renderBaseStationDrift(host, baseStations) {
 function renderInterpretation(layer, stats, displayData) {
   const roots = getRoots();
   if (!roots.interpretation) return;
+  const results = appState.taskResults || {};
+  const regionalMethod = results?.regional_method_used
+    ? titleCase(String(results.regional_method_used).replace(/_/g, " "))
+    : "Not reported";
 
   // Ensure persistent sub-containers exist. Only the layer/base cards are replaced on each call.
   let layerCard = document.getElementById("visLayerCard");
@@ -702,11 +755,15 @@ function renderInterpretation(layer, stats, displayData) {
     <div class="card card-sm" style="padding:12px">
       <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">${layer.label}</div>
       <div style="font-size:11px;color:var(--text2);line-height:1.75;margin-bottom:10px">${layer.description}</div>
+      <div style="font-size:10.5px;color:var(--text3);line-height:1.7;margin-bottom:10px">${layerCaption(layer)}</div>
       <div style="font-size:11px;color:var(--text3);line-height:1.8">
         <div style="display:flex;justify-content:space-between"><span>Measured points</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">${displayData.measured.length}</span></div>
         <div style="display:flex;justify-content:space-between"><span>Predicted points</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">${displayData.predicted.length}</span></div>
         <div style="display:flex;justify-content:space-between"><span>Traverses</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">${displayData.traverses.length}</span></div>
         <div style="display:flex;justify-content:space-between"><span>Range</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">${formatNumber(stats.range)} ${layer.unit}</span></div>
+        ${layer.id === "regional_field" ? `<div style="display:flex;justify-content:space-between"><span>Regional method</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">${regionalMethod}</span></div>` : ""}
+        ${layer.id === "regional_field" && results?.regional_scale_or_degree ? `<div style="display:flex;justify-content:space-between"><span>Method setting</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">${JSON.stringify(results.regional_scale_or_degree)}</span></div>` : ""}
+        ${layer.id === "emag2_residual" ? `<div style="display:flex;justify-content:space-between"><span>Residual definition</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">Corrected − Regional</span></div>` : ""}
       </div>
     </div>
   `;
@@ -821,10 +878,35 @@ async function renderPlot(mode, results, layer) {
   }
 
   const commonLayout = {
-    margin: {t: 20, r: 12, b: 42, l: 48},
+    margin: {t: 70, r: 12, b: 60, l: 48},
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
     font: {color: getPlotTheme().text},
+    annotations: [
+      {
+        x: 0,
+        y: 1.14,
+        xref: "paper",
+        yref: "paper",
+        text: `<b>${visualTitle(layer, mode)}</b><br><span style="font-size:11px">${visualSubtitle(results, layer)}</span>`,
+        showarrow: false,
+        align: "left",
+        xanchor: "left",
+        yanchor: "top",
+      },
+      {
+        x: 0,
+        y: -0.18,
+        xref: "paper",
+        yref: "paper",
+        text: layerCaption(layer),
+        showarrow: false,
+        align: "left",
+        xanchor: "left",
+        yanchor: "top",
+        font: {size: 11, color: getPlotTheme().text},
+      },
+    ],
   };
   const colorscale = paletteToPlotly(getLayerPalette(layer));
 
@@ -925,6 +1007,11 @@ export async function loadVisualisation() {
   }
 
   const layers = buildAvailableLayers(results, task);
+  if (!layers.length) {
+    host.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px">Regional and residual outputs were not generated for this run.</div>`;
+    getRoots().layerToggles.innerHTML = `<div style="font-size:11px;color:var(--text3);line-height:1.7">Regional and residual outputs were not generated for this run.</div>`;
+    return;
+  }
   const activeLayer = getActiveLayer(layers);
   const stats = computeLayerStats(activeLayer);
   const mode = appState.activeVisualisation || "Contour";

@@ -68,10 +68,13 @@ class ProcessingServiceTests(unittest.TestCase):
         )
         corrected, _ = self.service._apply_diurnal_correction(frame, {"analysis_config": {}})
         report = corrected.attrs.get("diurnal_report") or {}
-        self.assertEqual(report.get("algorithm"), "piecewise_base_station_interpolation")
+        self.assertEqual(report.get("algorithm"), "interval_base_linear")
         self.assertEqual(report.get("segment_count"), len(time) - 1)
         self.assertGreater(report.get("quality", 0), 0.5)
         self.assertEqual(len(report.get("segments") or []), len(time) - 1)
+        self.assertEqual(report.get("diurnal_method"), "interval_base_linear")
+        self.assertAlmostEqual(report.get("diurnal_reference_value"), base[0], places=6)
+        self.assertAlmostEqual(report.get("diurnal_interval_coverage_pct"), 100.0, places=6)
 
     def test_diurnal_correction_uses_consecutive_base_intervals(self):
         frame = pd.DataFrame(
@@ -87,10 +90,32 @@ class ProcessingServiceTests(unittest.TestCase):
         survey = corrected[corrected["__is_base_station__"] != 1].sort_values("time_s")
         values = survey["magnetic"].to_numpy(dtype=float)
         self.assertAlmostEqual(values[0], 55.0, places=3)
-        self.assertAlmostEqual(values[1], 72.5, places=3)
+        self.assertAlmostEqual(values[1], 62.5, places=3)
         report = corrected.attrs.get("diurnal_report") or {}
         self.assertEqual(report.get("segment_count"), 2)
         self.assertEqual(len(report.get("segments") or []), 2)
+        self.assertAlmostEqual(report.get("diurnal_max_correction_nT"), 7.5, places=3)
+
+    def test_diurnal_correction_uses_constant_hold_outside_base_range(self):
+        frame = pd.DataFrame(
+            {
+                "time_s": [10.0, 20.0, 0.0, 15.0, 30.0],
+                "magnetic": [100.0, 110.0, 52.0, 65.0, 78.0],
+                "__is_base_station__": [1, 1, 0, 0, 0],
+                "longitude": [3.0, 3.0, 3.01, 3.02, 3.03],
+                "latitude": [7.0, 7.0, 7.01, 7.02, 7.03],
+            }
+        )
+        corrected, _ = self.service._apply_diurnal_correction(frame, {"analysis_config": {}})
+        survey = corrected[corrected["__is_base_station__"] != 1].sort_values("time_s")
+        values = survey["magnetic"].to_numpy(dtype=float)
+        self.assertAlmostEqual(values[0], 52.0, places=3)
+        self.assertAlmostEqual(values[1], 60.0, places=3)
+        self.assertAlmostEqual(values[2], 68.0, places=3)
+        report = corrected.attrs.get("diurnal_report") or {}
+        self.assertEqual(report.get("leading_constant_hold_points"), 1)
+        self.assertEqual(report.get("trailing_constant_hold_points"), 1)
+        self.assertLess(report.get("diurnal_interval_coverage_pct", 0), 100.0)
 
     def test_clean_dataframe_preserves_repeated_base_station_revisits(self):
         frame = pd.DataFrame(
@@ -116,9 +141,11 @@ class ProcessingServiceTests(unittest.TestCase):
         payload = self.service._apply_add_ons({"analysis_config": {"add_ons": ["emag2"]}}, results)
         self.assertIn("regional_field", payload)
         self.assertIn("regional_residual", payload)
+        self.assertIn("regional_surface", payload)
+        self.assertIn("residual_surface", payload)
         self.assertEqual(len(payload["regional_field"]), 2)
 
-    def test_add_ons_use_single_traverse_line_fit_for_regional_and_residual(self):
+    def test_add_ons_support_polynomial_regional_and_residual_consistency(self):
         results = {
             "surface": np.array([[32963.4, 32963.9], [32964.4, 32964.9]]),
             "grid_x": np.array([[3.0, 3.001], [3.0, 3.001]]),
@@ -128,13 +155,25 @@ class ProcessingServiceTests(unittest.TestCase):
                 {"longitude": 3.001, "latitude": 7.001, "magnetic": 11.0, "along_line_m": 10.0, "line_id": 0},
                 {"longitude": 3.002, "latitude": 7.002, "magnetic": 12.0, "along_line_m": 20.0, "line_id": 0},
             ],
+            "correction_report": {"igrf_applied": False},
         }
-        payload = self.service._apply_add_ons({"analysis_config": {"add_ons": ["emag2"]}}, results)
-        self.assertEqual(payload["metadata"].get("regional_method"), "single_traverse_linear_fit")
-        self.assertAlmostEqual(results["points"][0]["regional_field"], 10.0, places=3)
-        self.assertAlmostEqual(results["points"][1]["regional_field"], 11.0, places=3)
-        self.assertAlmostEqual(results["points"][2]["regional_field"], 12.0, places=3)
-        self.assertAlmostEqual(results["points"][1]["regional_residual"], 0.0, places=3)
+        payload = self.service._apply_add_ons(
+            {
+                "processing_mode": "single",
+                "analysis_config": {
+                    "add_ons": ["emag2"],
+                    "regional_residual_enabled": True,
+                    "regional_method": "polynomial",
+                    "regional_polynomial_degree": 1,
+                },
+            },
+            results,
+        )
+        self.assertEqual(payload["metadata"].get("regional_method_used"), "polynomial")
+        residual = np.asarray(payload["regional_residual"], dtype=float)
+        corrected = np.asarray(payload["corrected_field"], dtype=float)
+        regional = np.asarray(payload["regional_field"], dtype=float)
+        self.assertTrue(np.allclose(residual, corrected - regional))
 
     def test_leveling_reduces_crossover_rmse(self):
         frame = pd.DataFrame(

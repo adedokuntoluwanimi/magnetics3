@@ -567,13 +567,16 @@ class AIService:
     def _list_available_layers(self, outputs: dict) -> list[str]:
         layer_map = {
             "surface": "Total Magnetic Field (TMF)",
+            "corrected_field": "Corrected Magnetic Field",
             "filtered_surface": "Filtered Surface",
             "rtp_surface": "Reduction to Pole (RTP)",
             "analytic_signal": "Analytic Signal",
             "first_vertical_derivative": "First Vertical Derivative (FVD)",
             "horizontal_derivative": "Horizontal Derivative",
             "regional_field": "Regional Field",
+            "regional_surface": "Regional Field",
             "regional_residual": "Regional Residual",
+            "residual_surface": "Regional Residual",
             "emag2_residual": "Regional Residual",
             "uncertainty": "Uncertainty Surface",
             "tilt_derivative": "Tilt Derivative",
@@ -588,6 +591,7 @@ class AIService:
     def _output_key_for_layer(self, label: str) -> str:
         reverse = {
             "Total Magnetic Field (TMF)": "surface",
+            "Corrected Magnetic Field": "corrected_field",
             "Filtered Surface": "filtered_surface",
             "Reduction to Pole (RTP)": "rtp_surface",
             "Analytic Signal": "analytic_signal",
@@ -647,6 +651,15 @@ class AIService:
                 "processing_workflow": {
                     "project_and_task": f"Platform={task.get('platform')}, scenario={task.get('scenario') or 'automatic'}, processing_mode={task.get('processing_mode')}",
                     "configured_pipeline": f"Corrections={corrections}. Model={config.get('model') or 'not specified'}. Add-ons={add_ons}.",
+                    "regional_residual": json.dumps(
+                        {
+                            "regional_method_used": full_results.get("regional_method_used"),
+                            "regional_scale_or_degree": full_results.get("regional_scale_or_degree"),
+                            "residual_definition": full_results.get("residual_definition"),
+                            "regional_vs_residual_summary": full_results.get("regional_vs_residual_summary"),
+                        },
+                        indent=2,
+                    ),
                     "qa_and_fallbacks": json.dumps(
                         {
                             "qa_status": qa_report.get("status"),
@@ -659,7 +672,15 @@ class AIService:
                 "results_interpretation": [
                     {
                         "layer": layer,
-                        "description": f"{layer} was generated for this run.",
+                        "description": (
+                            "Broadly corrected magnetic field carried forward from the correction and modelling workflow."
+                            if layer == "Corrected Magnetic Field"
+                            else "Broad regional magnetic trend representing long-wavelength field behaviour."
+                            if layer == "Regional Field"
+                            else "Residual magnetic field isolating local anomaly expression after subtracting the regional field."
+                            if layer == "Regional Residual"
+                            else f"{layer} was generated for this run."
+                        ),
                         "observations": f"Overall range: {stats.get('min', 0):.2f} to {stats.get('max', 0):.2f} nT across {stats.get('point_count', 0)} points.",
                         "interpretation": "Interpretation should be tied to the actual QA status, fallback path, and survey support shown in the processing outputs.",
                         "implication": "Use this layer alongside uncertainty and QA metadata before drawing operational conclusions.",

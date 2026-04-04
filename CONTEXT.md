@@ -1,6 +1,6 @@
 # GAIA Magnetics Context
 
-Last updated: `2026-04-03`
+Last updated: `2026-04-04`
 
 ## Purpose
 
@@ -23,7 +23,7 @@ This file captures the current working context for `gaia-magnetics`.
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00077-hxg`
+  `gaia-magnetics-00078-hr7`
 - Region:
   `us-central1`
 - Infra project:
@@ -54,7 +54,7 @@ This file captures the current working context for `gaia-magnetics`.
 - Selected project and task IDs persist across refreshes.
 - Project deletion now returns the user to the projects/workspace view instead of Home.
 
-### Setup
+### Setup and analysis
 
 - Two-step setup flow:
   `Project details -> Task setup`
@@ -62,6 +62,7 @@ This file captures the current working context for `gaia-magnetics`.
 - Setup restores from the saved task/project state after refresh.
 - Saved uploads are shown when reopening an existing task.
 - Survey upload supports CSV/XLSX with coordinate mapping, raw-data mapping, and base-station handling.
+- Analysis now surfaces interval-based diurnal behaviour, fallback expectations, and dedicated regional/residual method controls.
 
 ### Preview
 
@@ -75,26 +76,29 @@ This file captures the current working context for `gaia-magnetics`.
 
 - Processing pipeline persists richer metadata and keeps the full heavy result payload in GCS.
 - Firestore task documents keep only Firestore-safe result metadata and artifact references.
-- Base-station detection now respects repeated same-coordinate revisits and CSV `BS`-style markers.
-- Diurnal correction now uses consecutive base-station pairs as signed piecewise correction windows.
-- Single-traverse workflows now support spreadsheet-style regional/residual separation using a line-fit against traverse distance.
-- Regional and residual remain separate outputs.
-- Derived layers can still be generated when predictive modelling is disabled.
+- Diurnal correction now prefers interval-based consecutive base-station interpolation and records explicit fallback metadata when that path cannot run.
+- Corrected, regional, and residual outputs are now persisted separately.
+- Regional methods now support:
+  `polynomial`, `trend`, `lowpass`, and `igrf_context`.
+- QA and correction reporting now expose diurnal method, interval coverage, regional method, quality state, and related badges/metadata.
 
 ### Visualisation
 
-- Contour map is the current default surface-style view.
-- Users can choose to view all traverses together or focus on a selected traverse.
-- Visualisation line profiles now use preserved raw magnetic values for the magnetic layer.
-- Manual horizontal and vertical axis controls are available on line profiles.
-- Regional field and residual field are exposed as separate outputs.
+- Visualisation now groups outputs into:
+  `Main processed field`, `Regional field`, `Residual field`, and `Derived products`.
+- The main layer is labelled `Corrected Magnetic Field`.
+- Regional and residual layers are labelled explicitly as `Regional Magnetic Field` and `Residual Magnetic Field`.
+- Layer descriptions, captions, and interpretation panels now explain the difference between corrected/regional/residual products.
+- Visualisation line profiles still use preserved raw magnetic values for the magnetic layer.
 - Aurora chat is enabled on Visualisation and is shown in its own dedicated panel.
 
 ### Export
 
 - Export jobs complete and bundle outputs are being generated.
-- Export filenames now use `task_project` naming.
-- Export screen chat is intentionally removed.
+- Export filenames still use `task_project` naming.
+- Export UI now previews which products are available for the current run.
+- Corrected/regional/residual report content can now be selected independently in the export UI.
+- Export bundles and report-generation context now distinguish corrected, regional, and residual maps as separate interpretive products.
 - Claude-backed narrative generation still needs another quality pass to become consistently specific and reliable.
 
 ## Important Files
@@ -105,14 +109,13 @@ This file captures the current working context for `gaia-magnetics`.
 - `backend/services/preview_service.py`
 - `backend/services/ai_service.py`
 - `backend/services/export_service.py`
-- `backend/services/task_service.py`
+- `backend/models/processing.py`
 - `backend/routes/tasks.py`
 
 ### Frontend
 
 - `frontend/index.html`
-- `frontend/js/sections/setup.js`
-- `frontend/js/sections/sidebar.js`
+- `frontend/js/sections/analysis.js`
 - `frontend/js/sections/processing.js`
 - `frontend/js/sections/preview.js`
 - `frontend/js/sections/visualisation.js`
@@ -121,8 +124,8 @@ This file captures the current working context for `gaia-magnetics`.
 ## Known Follow-Up Areas
 
 1. Improve Claude-backed export drafting quality and reliability.
-2. Manual browser QA on the newest deploy.
-3. Verify the new piecewise diurnal and line-fit regional/residual outputs against more real datasets.
+2. Manual browser QA on revision `gaia-magnetics-00078-hr7`.
+3. Verify the interval-based diurnal reporting and corrected/regional/residual outputs against more real datasets.
 4. Keep an eye on live processing latency and export response time.
 
 ## Deployment Note

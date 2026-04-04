@@ -21,33 +21,35 @@ Read these first:
 - AI project:
   `app-01-488817-ai`
 - Latest live revision:
-  `gaia-magnetics-00077-hxg`
+  `gaia-magnetics-00078-hr7`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
-> Revision `gaia-magnetics-00077-hxg` is live and `/api/health` returned `{"status":"ok"}` after deploy.
+> Revision `gaia-magnetics-00078-hr7` is live and `/api/health` returned `{"status":"ok"}` after deploy.
 
 ## What Changed Most Recently
 
-### Diurnal correction
+### Diurnal correction and correction reporting
 
-- Reworked diurnal correction to use consecutive base-station pairs as separate time windows.
-- Drift is now treated as signed and time-varying inside each interval instead of one global base mean adjustment.
-- Survey points outside valid base-station windows remain explicitly flagged instead of being silently forced through the same correction path.
-- Diurnal metadata now stores interval details and per-point offset support more cleanly.
+- Diurnal correction now prefers true interval-based consecutive base-station interpolation using the first valid base reading as the reference.
+- Leading and trailing samples outside the base-station range now use explicit constant-hold handling instead of being folded silently into the same interval logic.
+- Single-base and FFT fallback modes are still supported, but they are now labelled explicitly in correction metadata and QA outputs.
+- Diurnal metadata now records the method used, interval coverage, base-reading counts, max absolute correction, and interpolated-base statistics.
 
 ### Regional and residual separation
 
-- Single-traverse workflows now generate spreadsheet-style `regional_field` and `regional_residual` from the corrected profile using a linear fit against traverse distance.
-- Multi-point grid workflows still keep the broader smoothed surface fallback where a line-fit method is not appropriate.
-- Regional and residual remain separate user-visible outputs rather than one blended product.
+- Regional and residual are now first-class processing products rather than a narrow add-on alias.
+- The backend now supports configurable regional methods:
+  `polynomial`, `trend`, `lowpass`, and `igrf_context`.
+- Corrected, regional, and residual surfaces are now persisted separately, with residual defined explicitly as `Corrected - Regional`.
+- Separate regional/residual stats, report metadata, and export-ready image assets are now stored alongside the main corrected field outputs.
 
-### Visualisation and AI behavior
+### Visualisation, export, and AI behavior
 
-- Visualisation line profiles now use preserved raw magnetic values for the magnetic layer instead of collapsing everything to anomaly-scale processed values.
-- Manual horizontal and vertical axis controls were added to line profiles.
-- Aurora AI now resolves base-station count from actual processed points where available and its prompt/context was cleaned to avoid leaking internal field names like `is_base_station`.
-- Uploaded CSVs now remain one traverse per file through preview/processing logic.
+- Visualisation now labels the main layer as `Corrected Magnetic Field` and separates `Regional Magnetic Field` and `Residual Magnetic Field` into their own result groups.
+- Layer descriptions, method-aware metadata, captions, and empty-state behaviour now explain what each product means scientifically.
+- Export now previews which products are available for a run and treats corrected/regional/residual maps as separate interpretive products when present.
+- Aurora/export reporting now receives distinct corrected/regional/residual context instead of one blended regional-residual story.
 
 ## Most Important Files To Check First
 
@@ -69,8 +71,8 @@ Read these first:
 ## Remaining Gaps
 
 1. Claude-backed export drafting still needs another quality pass so PDF/DOCX/PPTX narratives stop falling back and become more project-specific.
-2. Manual browser QA is still needed on the latest live build, especially for spreadsheet-style diurnal/regional/residual comparison.
-3. A fresh live `Book1`/`Site C` processing rerun should be used to confirm the visual outputs now match the intended field workflow closely enough.
+2. Manual browser QA is still needed on revision `gaia-magnetics-00078-hr7`, especially for the new regional-method controls and export-content preview.
+3. A fresh live rerun should be used to confirm interval-based diurnal reporting and corrected/regional/residual visual grouping on real datasets.
 4. Keep watching latency on longer processing and export jobs.
 
 ## Deploy Command

@@ -27,6 +27,11 @@ class AnalysisConfig(GaiaModel):
     survey_date: datetime | None = None
     upward_continuation_height: float | None = None
     downward_continuation_height: float | None = None
+    regional_residual_enabled: bool | None = None
+    regional_method: str | None = None
+    regional_polynomial_degree: int | None = None
+    regional_filter_scale: float | None = None
+    output_regional_residual_visuals: bool | None = None
 
 
 class MetricSummary(GaiaModel):

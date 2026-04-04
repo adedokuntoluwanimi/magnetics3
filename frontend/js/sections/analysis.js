@@ -26,6 +26,13 @@ const MODEL_MAP = {
   "Hybrid": "hybrid",
 };
 
+const REGIONAL_METHOD_HELP = {
+  polynomial: "Fits a broad mathematical surface to represent long-wavelength magnetic behavior.",
+  trend: "Represents the broad background field using a smooth large-scale trend.",
+  lowpass: "Extracts the regional component by preserving long-wavelength signals and suppressing local anomalies.",
+  igrf_context: "Uses geomagnetic reference context where available. Best interpreted as background field context rather than local trend fitting.",
+};
+
 // Reverse maps for restoring saved state to the UI
 const REV_MODEL = Object.fromEntries(Object.entries(MODEL_MAP).map(([k, v]) => [v, k]));
 
@@ -54,7 +61,24 @@ export function collectAnalysisConfig() {
       : null;
 
   const runPrediction = document.getElementById("predModelToggle")?.checked !== false;
-  return {corrections, filter_type: filterType, model, add_ons: addOns, run_prediction: runPrediction};
+  const regionalResidualEnabled = document.getElementById("regionalResidualToggle")?.checked
+    || addOns.includes("emag2")
+    || false;
+  const regionalMethod = document.getElementById("regionalMethodSelect")?.value || "lowpass";
+  const regionalDegree = Number(document.getElementById("regionalDegreeInput")?.value || 1);
+  const regionalScale = Number(document.getElementById("regionalScaleInput")?.value || 2.5);
+  return {
+    corrections,
+    filter_type: filterType,
+    model,
+    add_ons: addOns,
+    run_prediction: runPrediction,
+    regional_residual_enabled: Boolean(regionalResidualEnabled),
+    regional_method: regionalMethod,
+    regional_polynomial_degree: Number.isFinite(regionalDegree) ? regionalDegree : 1,
+    regional_filter_scale: Number.isFinite(regionalScale) ? regionalScale : 2.5,
+    output_regional_residual_visuals: Boolean(regionalResidualEnabled),
+  };
 }
 
 export async function persistAnalysis() {
@@ -88,9 +112,63 @@ function applyDataStateRestrictions(task) {
   });
 }
 
+function renderDiurnalInfo(task) {
+  const badges = document.getElementById("diurnalInfoBadges");
+  const note = document.getElementById("diurnalInfoNote");
+  if (!badges || !note) return;
+  const validation = task?.results?.data?.validation_summary || task?.results?.validation_summary || {};
+  const baseCount = Number(validation.base_station_count || 0);
+  const items = [];
+  if (baseCount > 0) {
+    items.push({text: "Base station data detected", color: "var(--g500)", bg: "var(--g100)"});
+  } else {
+    items.push({text: "Fallback diurnal mode likely", color: "var(--amber)", bg: "var(--amber-bg)"});
+  }
+  items.push({text: "Interval-based diurnal correction", color: "var(--blue)", bg: "var(--bg2)"});
+  badges.innerHTML = items.map((item) => `<span class="badge" style="background:${item.bg};color:${item.color}">${item.text}</span>`).join("");
+  if (baseCount === 1) {
+    note.style.display = "block";
+    note.textContent = "Only one base station reading detected. Constant-base correction may be used.";
+  } else {
+    note.style.display = "none";
+    note.textContent = "";
+  }
+}
+
+function syncRegionalResidualUI() {
+  const card = document.getElementById("regionalSettingsCard");
+  const toggle = document.getElementById("regionalResidualToggle");
+  const select = document.getElementById("regionalMethodSelect");
+  const degreeRow = document.getElementById("regionalDegreeRow");
+  const scaleRow = document.getElementById("regionalScaleRow");
+  const help = document.getElementById("regionalMethodHelp");
+  const note = document.getElementById("regionalMethodNote");
+  const regionalCard = Array.from(document.querySelectorAll("#screen-analysis .chk .chk-t"))
+    .find((node) => node.textContent.trim() === "Regional residual")
+    ?.closest(".chk");
+  const enabled = Boolean(toggle?.checked || regionalCard?.classList.contains("on"));
+  if (toggle) toggle.checked = enabled;
+  if (card) card.style.display = enabled ? "block" : "none";
+  const method = select?.value || "lowpass";
+  if (degreeRow) degreeRow.style.display = method === "polynomial" || method === "trend" ? "block" : "none";
+  if (scaleRow) scaleRow.style.display = method === "lowpass" ? "block" : "none";
+  if (help) help.textContent = REGIONAL_METHOD_HELP[method] || "";
+  if (note) {
+    if (method === "igrf_context") {
+      note.style.display = "block";
+      note.textContent = "IGRF context is a background reference mode, not the same as polynomial detrending.";
+    } else {
+      note.style.display = "none";
+      note.textContent = "";
+    }
+  }
+}
+
 export function loadAnalysis(task) {
   if (!task?.analysis_config) {
     applyDataStateRestrictions(task);
+    renderDiurnalInfo(task);
+    syncRegionalResidualUI();
     return;
   }
   const config = task.analysis_config;
@@ -106,6 +184,15 @@ export function loadAnalysis(task) {
       box.textContent = "";
     }
   });
+
+  const regionalToggle = document.getElementById("regionalResidualToggle");
+  if (regionalToggle) regionalToggle.checked = Boolean(config.regional_residual_enabled || savedAddOns.has("emag2"));
+  const regionalMethod = document.getElementById("regionalMethodSelect");
+  if (regionalMethod) regionalMethod.value = config.regional_method || "lowpass";
+  const regionalDegree = document.getElementById("regionalDegreeInput");
+  if (regionalDegree) regionalDegree.value = String(config.regional_polynomial_degree || 1);
+  const regionalScale = document.getElementById("regionalScaleInput");
+  if (regionalScale) regionalScale.value = String(config.regional_filter_scale || 2.5);
 
   // Hide filter sub-options
   const filterOpts = document.getElementById("filter-opts");
@@ -173,6 +260,8 @@ export function loadAnalysis(task) {
   }
 
   applyDataStateRestrictions(task);
+  renderDiurnalInfo(task);
+  syncRegionalResidualUI();
 }
 
 export function initAnalysis() {
@@ -187,6 +276,30 @@ export function initAnalysis() {
   }
 
   // Expose save-then-navigate function for the "Preview →" button
+  document.getElementById("regionalResidualToggle")?.addEventListener("change", () => {
+    const enabled = document.getElementById("regionalResidualToggle")?.checked;
+    const regionalCard = Array.from(document.querySelectorAll("#screen-analysis .chk .chk-t"))
+      .find((node) => node.textContent.trim() === "Regional residual")
+      ?.closest(".chk");
+    if (regionalCard) {
+      regionalCard.classList.toggle("on", Boolean(enabled));
+      const box = regionalCard.querySelector(".chk-box");
+      if (box) {
+        box.classList.toggle("on", Boolean(enabled));
+        box.textContent = enabled ? "✓" : "";
+      }
+    }
+    syncRegionalResidualUI();
+  });
+  document.getElementById("regionalMethodSelect")?.addEventListener("change", syncRegionalResidualUI);
+  document.getElementById("regionalDegreeInput")?.addEventListener("input", syncRegionalResidualUI);
+  document.getElementById("regionalScaleInput")?.addEventListener("input", syncRegionalResidualUI);
+  document.querySelectorAll("#screen-analysis .chk").forEach((el) => {
+    el.addEventListener("click", () => window.setTimeout(syncRegionalResidualUI, 0));
+  });
+  renderDiurnalInfo(appState.task);
+  syncRegionalResidualUI();
+
   window.saveAndPreview = async () => {
     if (!appState.project || !appState.task) {
       showGlobalNotice("Complete project setup first before configuring analysis.");

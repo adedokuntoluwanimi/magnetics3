@@ -5,6 +5,7 @@ Scientific auditability, numerical stability, Oasis Montaj-comparable outputs.
 from __future__ import annotations
 
 import importlib
+import base64
 import io
 import json
 import math
@@ -77,6 +78,10 @@ def _metric_summary(arr: np.ndarray, affected_count: int = 0) -> dict:
         point_count=int(finite.size),
         affected_count=int(affected_count),
     ).model_dump(mode="json")
+
+
+def _grid_summary(arr: np.ndarray) -> dict:
+    return _metric_summary(np.asarray(arr, dtype=np.float64), 0)
 
 
 def _decimal_year_from_datetime(dt: datetime) -> float:
@@ -816,6 +821,7 @@ class ProcessingService:
 
                 self._update_run(run_id, 5, "running", "Running the interpolation and modelling path...")
                 results = self._generate_surfaces(task, prep)
+                results["correction_report"] = correction_report
                 model_detail = f"Model complete - used {results['model_used']} approach"
                 self._update_run(run_id, 5, "completed", model_detail)
                 self._push_stage_report(
@@ -886,6 +892,7 @@ class ProcessingService:
                         "warnings": ["Prediction disabled; output is a nearest-neighbour observed-data surface."],
                     },
                     "uncertainty_metadata": {"algorithm": "distance_only", "detail": "Distance-based uncertainty prepared"},
+                    "correction_report": correction_report,
                 }
                 add_on_payload = self._apply_add_ons(task, results)
                 self._update_run(run_id, 6, "completed", add_on_payload["detail"])
@@ -1427,6 +1434,9 @@ class ProcessingService:
             "diurnal": out.attrs.get("diurnal_report", {}),
             "lag": out.attrs.get("lag_report", {}),
             "heading": out.attrs.get("heading_report", {}),
+            "diurnal_interval_based_applied": bool((out.attrs.get("diurnal_report", {}) or {}).get("diurnal_interval_based_applied")),
+            "diurnal_interval_coverage_pct": float((out.attrs.get("diurnal_report", {}) or {}).get("diurnal_interval_coverage_pct", 0.0) or 0.0),
+            "corrected_stats": _metric_summary(mag_after),
         }
         return out, detail
 
@@ -1532,6 +1542,13 @@ class ProcessingService:
             "warnings": [],
             "fallbacks": [],
             "affected_points": 0,
+            "diurnal_method": "none",
+            "n_base_readings": 0,
+            "n_base_intervals": 0,
+            "diurnal_reference_value": None,
+            "diurnal_max_correction_nT": 0.0,
+            "diurnal_interval_coverage_pct": 0.0,
+            "diurnal_interval_based_applied": False,
         }
 
         if has_bs and has_time:
@@ -1543,73 +1560,149 @@ class ProcessingService:
                 bs_sorted = bs_sorted.groupby("time_s", as_index=False)["magnetic"].median()
                 t_bs = bs_sorted["time_s"].to_numpy(dtype=np.float64)
                 m_bs = bs_sorted["magnetic"].to_numpy(dtype=np.float64)
-                survey_t = survey["time_s"].fillna(t_bs[0]).to_numpy(dtype=np.float64)
-                gaps = np.diff(t_bs)
-                max_gap = float(np.max(gaps)) if gaps.size else 0.0
-                overlap_mask = (survey_t >= float(np.min(t_bs))) & (survey_t <= float(np.max(t_bs)))
-                overlap_ratio = float(np.mean(overlap_mask)) if survey_t.size else 0.0
-                extrapolated = int(np.count_nonzero(~overlap_mask))
-                segment_count = max(len(t_bs) - 1, 0)
-                report.update(
-                    {
-                        "status": "completed",
-                        "algorithm": "piecewise_base_station_interpolation",
-                        "overlap_ratio": overlap_ratio,
-                        "max_gap_seconds": max_gap,
-                        "extrapolated_points": extrapolated,
-                        "affected_points": int(len(survey)),
-                        "segment_count": segment_count,
-                        "base_station_readings": int(len(t_bs)),
-                    }
-                )
-                before = survey["magnetic"].to_numpy(dtype=np.float64)
-                survey = survey.copy()
-                corrected_values = before.copy()
-                in_window_mask = np.zeros_like(survey_t, dtype=bool)
-                interval_offsets = np.full_like(survey_t, np.nan, dtype=np.float64)
-                segment_rows = []
-                for index in range(len(t_bs) - 1):
-                    start_t = float(t_bs[index])
-                    end_t = float(t_bs[index + 1])
-                    start_mag = float(m_bs[index])
-                    end_mag = float(m_bs[index + 1])
-                    if not np.isfinite(start_t) or not np.isfinite(end_t) or end_t <= start_t:
-                        continue
-                    segment_mask = (survey_t >= start_t) & (survey_t <= end_t)
-                    if not np.any(segment_mask):
-                        continue
-                    ratio = (survey_t[segment_mask] - start_t) / max(end_t - start_t, 1e-9)
-                    interpolated_base = start_mag + ratio * (end_mag - start_mag)
-                    offset = interpolated_base - start_mag
-                    interval_offsets[segment_mask] = offset
-                    corrected_values[segment_mask] = before[segment_mask] - offset
-                    in_window_mask |= segment_mask
-                    segment_rows.append(
-                        {
-                            "start_time_s": start_t,
-                            "end_time_s": end_t,
-                            "start_magnetic": start_mag,
-                            "end_magnetic": end_mag,
-                            "drift_delta": end_mag - start_mag,
-                            "corrected_points": int(np.count_nonzero(segment_mask)),
-                        }
+                if t_bs.size:
+                    reference_value = float(m_bs[0])
+                    survey_t = survey["time_s"].fillna(t_bs[0]).to_numpy(dtype=np.float64)
+                    gaps = np.diff(t_bs)
+                    max_gap = float(np.max(gaps)) if gaps.size else 0.0
+                    overlap_mask = (survey_t >= float(np.min(t_bs))) & (survey_t <= float(np.max(t_bs)))
+                    overlap_ratio = float(np.mean(overlap_mask)) if survey_t.size else 0.0
+                    before = survey["magnetic"].to_numpy(dtype=np.float64)
+                    corrected_values = before.copy()
+                    interval_offsets = np.zeros_like(survey_t, dtype=np.float64)
+                    interpolated_values = np.full_like(survey_t, np.nan, dtype=np.float64)
+                    interval_mask = np.zeros_like(survey_t, dtype=bool)
+                    segment_rows = []
+                    leading_hold_count = 0
+                    trailing_hold_count = 0
+
+                    if len(t_bs) == 1:
+                        interpolated_values[:] = reference_value
+                        interval_offsets[:] = interpolated_values - reference_value
+                        corrected_values[:] = before - interval_offsets
+                        report["warnings"].append("Only one valid base reading was available; constant-base correction was used.")
+                        report.update(
+                            {
+                                "status": "completed",
+                                "algorithm": "single_base_constant",
+                                "diurnal_method": "single_base_constant",
+                                "affected_points": int(len(survey)),
+                                "n_base_readings": 1,
+                                "n_base_intervals": 0,
+                                "diurnal_reference_value": reference_value,
+                                "diurnal_interval_coverage_pct": 100.0 if survey_t.size else 0.0,
+                                "diurnal_interval_based_applied": False,
+                            }
+                        )
+                    else:
+                        for index in range(len(t_bs) - 1):
+                            start_t = float(t_bs[index])
+                            end_t = float(t_bs[index + 1])
+                            start_mag = float(m_bs[index])
+                            end_mag = float(m_bs[index + 1])
+                            if not np.isfinite(start_t) or not np.isfinite(end_t):
+                                continue
+                            if end_t <= start_t:
+                                report["warnings"].append(
+                                    f"Base interval {index + 1} had non-increasing timestamps and was skipped."
+                                )
+                                continue
+                            segment_mask = (survey_t >= start_t) & (survey_t <= end_t)
+                            if not np.any(segment_mask):
+                                continue
+                            ratio = (survey_t[segment_mask] - start_t) / (end_t - start_t)
+                            interpolated_base = start_mag + (ratio * (end_mag - start_mag))
+                            offset = interpolated_base - reference_value
+                            interpolated_values[segment_mask] = interpolated_base
+                            interval_offsets[segment_mask] = offset
+                            corrected_values[segment_mask] = before[segment_mask] - offset
+                            interval_mask |= segment_mask
+                            segment_rows.append(
+                                {
+                                    "start_time_s": start_t,
+                                    "end_time_s": end_t,
+                                    "start_magnetic": start_mag,
+                                    "end_magnetic": end_mag,
+                                    "drift_delta": end_mag - start_mag,
+                                    "corrected_points": int(np.count_nonzero(segment_mask)),
+                                    "mode": "linear_interval",
+                                }
+                            )
+
+                        leading_mask = survey_t < float(t_bs[0])
+                        if np.any(leading_mask):
+                            leading_hold_count = int(np.count_nonzero(leading_mask))
+                            interpolated_values[leading_mask] = float(m_bs[0])
+                            interval_offsets[leading_mask] = float(m_bs[0]) - reference_value
+                            corrected_values[leading_mask] = before[leading_mask] - interval_offsets[leading_mask]
+                            report["warnings"].append("Leading survey samples before the first base reading used a constant-base hold.")
+
+                        trailing_mask = survey_t > float(t_bs[-1])
+                        if np.any(trailing_mask):
+                            trailing_hold_count = int(np.count_nonzero(trailing_mask))
+                            interpolated_values[trailing_mask] = float(m_bs[-1])
+                            interval_offsets[trailing_mask] = float(m_bs[-1]) - reference_value
+                            corrected_values[trailing_mask] = before[trailing_mask] - interval_offsets[trailing_mask]
+                            report["warnings"].append("Trailing survey samples after the last base reading used a constant-base hold.")
+
+                        if np.any(~np.isfinite(interpolated_values)):
+                            report["warnings"].append("Some survey samples could not be assigned a valid base value and were left unchanged.")
+
+                        report.update(
+                            {
+                                "status": "completed",
+                                "algorithm": "interval_base_linear",
+                                "diurnal_method": "interval_base_linear",
+                                "overlap_ratio": overlap_ratio,
+                                "max_gap_seconds": max_gap,
+                                "extrapolated_points": int(leading_hold_count + trailing_hold_count),
+                                "affected_points": int(len(survey)),
+                                "segment_count": int(len(segment_rows)),
+                                "base_station_readings": int(len(t_bs)),
+                                "n_base_readings": int(len(t_bs)),
+                                "n_base_intervals": int(max(len(t_bs) - 1, 0)),
+                                "diurnal_reference_value": reference_value,
+                                "diurnal_interval_coverage_pct": float(np.mean(interval_mask) * 100.0) if survey_t.size else 0.0,
+                                "diurnal_interval_based_applied": bool(segment_rows),
+                                "leading_constant_hold_points": leading_hold_count,
+                                "trailing_constant_hold_points": trailing_hold_count,
+                            }
+                        )
+
+                    survey["magnetic"] = corrected_values
+                    survey["diurnal_offset"] = interval_offsets
+                    survey["interpolated_base_magnetic"] = interpolated_values
+                    out = pd.concat([bs, survey]).sort_values("time_s").reset_index(drop=True)
+                    corrected_finite = corrected_values[np.isfinite(corrected_values)]
+                    before_finite = before[np.isfinite(before)]
+                    interp_finite = interpolated_values[np.isfinite(interpolated_values)]
+                    residual_before = float(np.nanstd(before_finite)) if before_finite.size else 0.0
+                    residual_after = float(np.nanstd(corrected_finite)) if corrected_finite.size else residual_before
+                    report["residual_drift_before"] = residual_before
+                    report["residual_drift_after"] = residual_after
+                    report["quality"] = float(max(0.0, min(1.0, (report["diurnal_interval_coverage_pct"] / 100.0 * 0.7) + (0.3 if residual_after <= residual_before else 0.1))))
+                    report["segments"] = segment_rows
+                    report["interpolated_base_summary"] = _metric_summary(interp_finite) if interp_finite.size else _metric_summary(np.array([], dtype=np.float64))
+                    report["corrected_by_interval_points"] = int(np.count_nonzero(interval_mask))
+                    report["diurnal_max_correction_nT"] = float(np.nanmax(np.abs(interval_offsets))) if interval_offsets.size else 0.0
+                    if max_gap > 3600.0 * 2:
+                        report["warnings"].append("Base-station data contain gaps larger than two hours.")
+                    if not np.all(np.isfinite(corrected_values)):
+                        report["warnings"].append("Non-finite values appeared during diurnal correction.")
+                    logger.info(
+                        "Diurnal correction: method=%s, base_readings=%d, intervals=%d, corrected_by_interval=%d, coverage=%.1f%%, max_abs_correction=%.3f nT",
+                        report["diurnal_method"],
+                        report["n_base_readings"],
+                        report["n_base_intervals"],
+                        report.get("corrected_by_interval_points", 0),
+                        report["diurnal_interval_coverage_pct"],
+                        report["diurnal_max_correction_nT"],
                     )
-                survey["magnetic"] = corrected_values
-                survey["diurnal_offset"] = interval_offsets
-                out = pd.concat([bs, survey]).sort_values("time_s").reset_index(drop=True)
-                residual_before = float(np.nanstd(before[in_window_mask])) if np.any(in_window_mask) else float(np.nanstd(before))
-                residual_after = float(np.nanstd(survey.loc[in_window_mask, "magnetic"].to_numpy(dtype=np.float64))) if np.any(in_window_mask) else residual_before
-                report["residual_drift_before"] = residual_before
-                report["residual_drift_after"] = residual_after
-                report["quality"] = float(max(0.0, min(1.0, (overlap_ratio * 0.7) + (0.3 if residual_after <= residual_before else 0.1))))
-                report["segments"] = segment_rows
-                if max_gap > 3600.0 * 2:
-                    report["warnings"].append("Base-station data contain gaps larger than two hours.")
-                if extrapolated:
-                    report["warnings"].append(f"{extrapolated} survey points fell outside the valid base-station windows and were left uncorrected.")
-                _proc_log("3.2.diurnal", out["magnetic"].to_numpy(dtype=np.float64))
-                out.attrs["diurnal_report"] = report
-                return out, "diurnal correction via piecewise base-station interpolation"
+                    _proc_log("3.2.diurnal", out["magnetic"].to_numpy(dtype=np.float64))
+                    out.attrs["diurnal_report"] = report
+                    if report["diurnal_method"] == "single_base_constant":
+                        return out, "diurnal correction via single-base constant reference"
+                    return out, "diurnal correction via interval-based consecutive base interpolation"
 
         # FFT physical fallback
         if has_time:
@@ -1622,8 +1715,15 @@ class ProcessingService:
                 {
                     "status": "completed",
                     "algorithm": "fft_trend_removal",
+                    "diurnal_method": "low_pass_fft_fallback",
                     "quality": 0.35,
                     "affected_points": int(len(out)),
+                    "n_base_readings": 0,
+                    "n_base_intervals": 0,
+                    "diurnal_reference_value": trend_mean,
+                    "diurnal_max_correction_nT": float(np.nanmax(np.abs(trend - trend_mean))) if trend.size else 0.0,
+                    "diurnal_interval_coverage_pct": 0.0,
+                    "diurnal_interval_based_applied": False,
                     "fallbacks": [
                         {
                             "stage": "diurnal",
@@ -1635,6 +1735,12 @@ class ProcessingService:
                     ],
                 }
             )
+            logger.info(
+                "Diurnal correction fallback: method=%s, corrected_points=%d, max_abs_correction=%.3f nT",
+                report["diurnal_method"],
+                report["affected_points"],
+                report["diurnal_max_correction_nT"],
+            )
             _proc_log("3.2.diurnal_fft", out["magnetic"].to_numpy(dtype=np.float64))
             out.attrs["diurnal_report"] = report
             return out, "diurnal trend removal via FFT low-pass fallback"
@@ -1645,8 +1751,15 @@ class ProcessingService:
             {
                 "status": "completed",
                 "algorithm": "median_normalisation",
+                "diurnal_method": "median_normalisation_fallback",
                 "quality": 0.1,
                 "affected_points": int(len(out)),
+                "n_base_readings": 0,
+                "n_base_intervals": 0,
+                "diurnal_reference_value": 0.0,
+                "diurnal_max_correction_nT": float(np.nanmax(np.abs(out["magnetic"].to_numpy(dtype=np.float64)))) if len(out) else 0.0,
+                "diurnal_interval_coverage_pct": 0.0,
+                "diurnal_interval_based_applied": False,
                 "fallbacks": [
                     {
                         "stage": "diurnal",
@@ -2502,8 +2615,164 @@ class ProcessingService:
 
     # ── Stage 6: Derived layers (upgraded) ──────────────────────────────────
 
+    def _regional_residual_config(self, task: dict) -> dict:
+        config = task.get("analysis_config") or {}
+        legacy_enabled = "emag2" in set(config.get("add_ons") or [])
+        enabled = bool(config.get("regional_residual_enabled")) or legacy_enabled
+        requested_method = str(config.get("regional_method") or "").strip().lower()
+        if requested_method not in {"polynomial", "lowpass", "trend", "igrf_context"}:
+            requested_method = "polynomial" if str(task.get("processing_mode") or "").lower() == "single" else "lowpass"
+        polynomial_degree = int(config.get("regional_polynomial_degree") or (1 if str(task.get("processing_mode") or "").lower() == "single" else 2))
+        filter_scale = float(config.get("regional_filter_scale") or 2.5)
+        output_visuals = config.get("output_regional_residual_visuals")
+        if output_visuals is None:
+            output_visuals = enabled
+        return {
+            "enabled": enabled,
+            "method": requested_method,
+            "polynomial_degree": max(1, min(polynomial_degree, 3)),
+            "filter_scale": max(float(filter_scale), 0.1),
+            "output_visuals": bool(output_visuals),
+            "legacy_add_on": legacy_enabled,
+        }
+
+    def _polynomial_regional_surface(self, x, y, z, grid_x, grid_y, degree: int) -> np.ndarray:
+        degree = max(1, min(int(degree), 3))
+        design_cols = []
+        for i in range(degree + 1):
+            for j in range(degree + 1 - i):
+                design_cols.append((x ** i) * (y ** j))
+        design = np.column_stack(design_cols)
+        coeffs, *_ = np.linalg.lstsq(design, z, rcond=None)
+        grid_cols = []
+        for i in range(degree + 1):
+            for j in range(degree + 1 - i):
+                grid_cols.append((grid_x.ravel() ** i) * (grid_y.ravel() ** j))
+        grid_design = np.column_stack(grid_cols)
+        return np.asarray((grid_design @ coeffs).reshape(grid_x.shape), dtype=np.float64)
+
+    def _compute_regional_and_residual_surfaces(self, task: dict, results: dict) -> tuple[np.ndarray, np.ndarray, dict]:
+        surface = np.asarray(results["surface"], dtype=np.float64)
+        grid_x = np.asarray(results["grid_x"], dtype=np.float64)
+        grid_y = np.asarray(results["grid_y"], dtype=np.float64)
+        config = self._regional_residual_config(task)
+        metadata: dict = {
+            "warnings": [],
+            "fallbacks": [],
+            "residual_definition": "corrected_field - regional_field",
+            "regional_residual_enabled": bool(config["enabled"]),
+            "output_regional_residual_visuals": bool(config["output_visuals"]),
+        }
+        if not config["enabled"]:
+            zero_surface = np.zeros_like(surface, dtype=np.float64)
+            metadata.update(
+                {
+                    "regional_method_used": "disabled",
+                    "regional_generation_success": False,
+                    "residual_generation_success": False,
+                    "corrected_stats": _grid_summary(surface),
+                    "regional_stats": _grid_summary(surface),
+                    "residual_stats": _grid_summary(zero_surface),
+                    "regional_vs_residual_summary": "Regional and residual outputs were not requested for this run.",
+                    "residual_mismatch_norm": 0.0,
+                }
+            )
+            return surface.copy(), zero_surface, metadata
+
+        points = results.get("points") or []
+        non_base_points = [point for point in points if not point.get("is_base_station")]
+        x_pts = np.asarray([point.get("longitude") for point in non_base_points], dtype=np.float64) if non_base_points else np.array([], dtype=np.float64)
+        y_pts = np.asarray([point.get("latitude") for point in non_base_points], dtype=np.float64) if non_base_points else np.array([], dtype=np.float64)
+        z_pts = np.asarray([point.get("magnetic") for point in non_base_points], dtype=np.float64) if non_base_points else np.array([], dtype=np.float64)
+        method_used = config["method"]
+
+        if method_used in {"polynomial", "trend"} and x_pts.size >= 3:
+            degree = 1 if method_used == "trend" else config["polynomial_degree"]
+            regional_field = self._polynomial_regional_surface(x_pts, y_pts, z_pts, grid_x, grid_y, degree=degree)
+            metadata["regional_scale_or_degree"] = {"degree": int(degree)}
+        elif method_used == "igrf_context":
+            correction_report = results.get("correction_report") or {}
+            if correction_report.get("igrf_applied"):
+                regional_field = np.full_like(surface, float(np.nanmean(surface)), dtype=np.float64)
+                metadata["regional_scale_or_degree"] = {"context": "igrf_informed_baseline"}
+                metadata["warnings"].append("IGRF-context regional mode used the mean corrected field as the retained contextual baseline after IGRF removal.")
+            else:
+                method_used = "lowpass"
+                regional_field = gaussian_filter(surface, sigma=config["filter_scale"])
+                metadata["regional_scale_or_degree"] = {"sigma": float(config["filter_scale"])}
+                metadata["fallbacks"].append(
+                    {
+                        "stage": "regional_residual",
+                        "requested": "igrf_context",
+                        "actual": "lowpass",
+                        "reason": "IGRF-context regional mode was requested but true IGRF removal was unavailable.",
+                        "severity": "warning",
+                    }
+                )
+        else:
+            if method_used in {"polynomial", "trend"} and x_pts.size < 3:
+                metadata["fallbacks"].append(
+                    {
+                        "stage": "regional_residual",
+                        "requested": method_used,
+                        "actual": "lowpass",
+                        "reason": "Insufficient supported points were available to fit a stable trend surface.",
+                        "severity": "warning",
+                    }
+                )
+            method_used = "lowpass"
+            regional_field = gaussian_filter(surface, sigma=config["filter_scale"])
+            metadata["regional_scale_or_degree"] = {"sigma": float(config["filter_scale"])}
+
+        regional_field = np.asarray(regional_field, dtype=np.float64)
+        residual_field = np.asarray(surface - regional_field, dtype=np.float64)
+        mismatch_norm = float(np.linalg.norm((residual_field - (surface - regional_field)).ravel()))
+        metadata.update(
+            {
+                "regional_method_used": method_used,
+                "regional_generation_success": bool(np.all(np.isfinite(regional_field))),
+                "residual_generation_success": bool(np.all(np.isfinite(residual_field))),
+                "regional_method_legacy_label": "emag2" if config["legacy_add_on"] else None,
+                "regional_vs_residual_summary": "Regional field captures the broad background trend, while residual field isolates the shorter-wavelength local anomaly response.",
+                "corrected_stats": _grid_summary(surface),
+                "regional_stats": _grid_summary(regional_field),
+                "residual_stats": _grid_summary(residual_field),
+                "residual_mismatch_norm": mismatch_norm,
+            }
+        )
+        if mismatch_norm > 1e-6:
+            metadata["warnings"].append(f"Residual consistency mismatch norm exceeded tolerance: {mismatch_norm:.6g}")
+
+        if grid_y.ndim == 2 and grid_x.ndim == 2 and grid_y.shape[0] and grid_x.shape[1]:
+            y_axis = grid_y[:, 0]
+            x_axis = grid_x[0, :]
+            for point in non_base_points:
+                lon = _safe_float(point.get("longitude"))
+                lat = _safe_float(point.get("latitude"))
+                mag = _safe_float(point.get("magnetic"))
+                if lon is None or lat is None or mag is None:
+                    continue
+                row = int(np.argmin(np.abs(y_axis - lat)))
+                col = int(np.argmin(np.abs(x_axis - lon)))
+                regional_value = float(regional_field[row, col])
+                residual_value = float(mag - regional_value)
+                point["regional_field"] = regional_value
+                point["regional_residual"] = residual_value
+                point["residual_field"] = residual_value
+                point["emag2_residual"] = residual_value
+
+        logger.info(
+            "Regional/residual generation: enabled=%s, method=%s, corrected_stats=%s, regional_stats=%s, residual_stats=%s",
+            metadata["regional_residual_enabled"],
+            metadata["regional_method_used"],
+            metadata["corrected_stats"],
+            metadata["regional_stats"],
+            metadata["residual_stats"],
+        )
+        return regional_field, residual_field, metadata
+
     def _apply_add_ons(self, task: dict, results: dict) -> dict:
-        surface = results["surface"]
+        surface = np.asarray(results["surface"], dtype=np.float64)
         rf_variance = results.get("rf_variance")
         add_ons = (task.get("analysis_config") or {}).get("add_ons") or []
         selected = set(add_ons)
@@ -2563,41 +2832,20 @@ class ProcessingService:
             total_grad = analytic
 
         # ── EMAG2 regional residual (Gaussian separation) ────────────────────
-        from scipy.ndimage import gaussian_filter
-        points = results.get("points") or []
-        non_base_points = [point for point in points if not point.get("is_base_station")]
-        point_regional: list[float] = []
-        point_residual: list[float] = []
-        along_values = np.asarray([point.get("along_line_m") for point in non_base_points], dtype=np.float64) if non_base_points else np.array([])
-        magnetic_values = np.asarray([point.get("magnetic") for point in non_base_points], dtype=np.float64) if non_base_points else np.array([])
-        line_ids = {point.get("line_id") for point in non_base_points if point.get("line_id") is not None}
-        use_line_fit = len(line_ids) <= 1 and along_values.size >= 2 and np.all(np.isfinite(along_values)) and np.nanmax(along_values) > np.nanmin(along_values)
-        if use_line_fit:
-            slope, intercept = np.polyfit(along_values, magnetic_values, 1)
-            metadata["regional_method"] = "single_traverse_linear_fit"
-            metadata["regional_intercept"] = float(intercept)
-            metadata["regional_slope_nT_per_m"] = float(slope)
-            for point in non_base_points:
-                along = float(point.get("along_line_m") or 0.0)
-                regional_value = float((slope * along) + intercept)
-                residual_value = float(point.get("magnetic") or 0.0) - regional_value
-                point_regional.append(regional_value)
-                point_residual.append(residual_value)
-                point["regional_field"] = regional_value
-                point["regional_residual"] = residual_value
-                point["emag2_residual"] = residual_value
-            x_pts = np.asarray([float(point["longitude"]) for point in non_base_points], dtype=np.float64)
-            y_pts = np.asarray([float(point["latitude"]) for point in non_base_points], dtype=np.float64)
-            regional_field = self._nearest_surface(x_pts, y_pts, np.asarray(point_regional, dtype=np.float64), results["grid_x"], results["grid_y"])
-            regional_residual = self._nearest_surface(x_pts, y_pts, np.asarray(point_residual, dtype=np.float64), results["grid_x"], results["grid_y"])
-        else:
-            sigma = min(5.0, max(surface.shape) / 4.0) if surface.size > 1 else 0.0
-            regional_field = gaussian_filter(surface, sigma=sigma) if sigma > 0 else surface.copy()
-            regional_residual = surface - regional_field if sigma > 0 else np.zeros_like(surface)
-            metadata["regional_method"] = "gaussian_surface_separation"
+        regional_field, regional_residual, regional_metadata = self._compute_regional_and_residual_surfaces(task, results)
+        metadata.update({k: v for k, v in regional_metadata.items() if k not in {"warnings", "fallbacks", "layer_labels"}})
+        metadata["warnings"].extend(regional_metadata.get("warnings") or [])
+        metadata["fallbacks"].extend(regional_metadata.get("fallbacks") or [])
         metadata["layer_labels"]["emag2_residual"] = "Regional residual"
         metadata["layer_labels"]["regional_residual"] = "Regional residual"
+        metadata["layer_labels"]["residual_surface"] = "Residual magnetic field"
         metadata["layer_labels"]["regional_field"] = "Regional field"
+        metadata["layer_labels"]["regional_surface"] = "Regional magnetic field"
+        metadata["layer_identity"] = {
+            "corrected_field": "Broadly corrected magnetic field used as the parent surface for interpretation.",
+            "regional_field": "Broad background trend and long-wavelength magnetic character.",
+            "residual_field": "Local anomaly expression and short-wavelength target-scale magnetic response.",
+        }
 
         # ── Filtered surface ─────────────────────────────────────────────────
         filter_type = config.get("filter_type", "")
@@ -2621,8 +2869,9 @@ class ProcessingService:
         # Build detail
         if "analytic_signal" in selected:
             detail_items.append("analytic signal (3D)")
-        if "emag2" in selected:
-            detail_items.append("regional residual")
+        if regional_metadata.get("regional_residual_enabled"):
+            detail_items.append(f"regional field ({regional_metadata.get('regional_method_used')})")
+            detail_items.append("residual field")
         if "rtp" in selected:
             detail_items.append(f"RTP (inc={rtp_inc}, dec={rtp_dec})")
         if "tilt_derivative" in selected:
@@ -2637,9 +2886,12 @@ class ProcessingService:
             "first_vertical_derivative": fvd.tolist(),
             "horizontal_derivative": horizontal_derivative.tolist(),
             "filtered_surface": filtered_surface.tolist(),
+            "corrected_field": surface.tolist(),
             "regional_field": regional_field.tolist(),
+            "regional_surface": regional_field.tolist(),
             "emag2_residual": regional_residual.tolist(),
             "regional_residual": regional_residual.tolist(),
+            "residual_surface": regional_residual.tolist(),
             "rtp_surface": rtp_surface.tolist(),
             "tilt_derivative": tilt.tolist(),
             "total_gradient": total_grad.tolist(),
@@ -2696,6 +2948,10 @@ class ProcessingService:
                 "observed_points": int(len(prep["train_frame"])),
                 "predicted_points": int(len(prep["predict_frame"])),
                 "support_fraction": model_meta.get("support_fraction"),
+                "regional_residual_enabled": bool((add_ons.get("metadata") or {}).get("regional_residual_enabled")),
+                "regional_method_used": (add_ons.get("metadata") or {}).get("regional_method_used"),
+                "regional_generation_success": bool((add_ons.get("metadata") or {}).get("regional_generation_success")),
+                "residual_generation_success": bool((add_ons.get("metadata") or {}).get("residual_generation_success")),
             },
         ).model_dump(mode="json")
 
@@ -2708,19 +2964,45 @@ class ProcessingService:
         qa_report: dict | None = None,
         validation_summary: dict | None = None,
     ) -> dict:
+        regional_visuals_enabled = bool((add_ons.get("metadata") or {}).get("regional_residual_enabled")) and bool((add_ons.get("metadata") or {}).get("output_regional_residual_visuals"))
+        regional_surface = np.asarray(add_ons.get("regional_surface") or add_ons.get("regional_field") or [], dtype=np.float64)
+        residual_surface = np.asarray(add_ons.get("residual_surface") or add_ons.get("regional_residual") or [], dtype=np.float64)
+        corrected_heatmap = self._render_heatmap_png(results["surface"])
+        corrected_contour = self._render_contour_png(results["surface"])
+        corrected_surface_png = self._render_surface_png(results["surface"])
+        regional_heatmap = self._render_heatmap_png(regional_surface, title="Regional Magnetic Field", x_label="Grid X", y_label="Grid Y") if regional_visuals_enabled and regional_surface.size else b""
+        regional_contour = self._render_contour_png(regional_surface, title="Regional Magnetic Contours") if regional_visuals_enabled and regional_surface.size else b""
+        regional_surface_png = self._render_surface_png(regional_surface, title="Regional Magnetic Surface") if regional_visuals_enabled and regional_surface.size else b""
+        residual_heatmap = self._render_heatmap_png(residual_surface, title="Residual Magnetic Field", x_label="Grid X", y_label="Grid Y") if regional_visuals_enabled and residual_surface.size else b""
+        residual_contour = self._render_contour_png(residual_surface, title="Residual Magnetic Contours") if regional_visuals_enabled and residual_surface.size else b""
+        residual_surface_png = self._render_surface_png(residual_surface, title="Residual Magnetic Surface") if regional_visuals_enabled and residual_surface.size else b""
         payload = {
             "grid_x": results["grid_x"].tolist(),
             "grid_y": results["grid_y"].tolist(),
             "surface": results["surface"].tolist(),
+            "corrected_field": results["surface"].tolist(),
             "uncertainty": results["uncertainty"].tolist(),
             "points": results["points"],
             "stats": results["stats"],
+            "corrected_stats": results["stats"],
             "model_used": results["model_used"],
             "model_metadata": results.get("model_metadata") or {},
             "uncertainty_metadata": results.get("uncertainty_metadata") or {},
             "support_mask": results.get("support_mask"),
             "validation_summary": validation_summary or {},
             "qa_report": qa_report or {},
+            "regional_stats": (add_ons.get("metadata") or {}).get("regional_stats") or {},
+            "residual_stats": (add_ons.get("metadata") or {}).get("residual_stats") or {},
+            "regional_method_used": (add_ons.get("metadata") or {}).get("regional_method_used"),
+            "regional_scale_or_degree": (add_ons.get("metadata") or {}).get("regional_scale_or_degree"),
+            "residual_definition": (add_ons.get("metadata") or {}).get("residual_definition"),
+            "regional_vs_residual_summary": (add_ons.get("metadata") or {}).get("regional_vs_residual_summary"),
+            "corrected_heatmap_b64": base64.b64encode(corrected_heatmap).decode("ascii"),
+            "corrected_contour_b64": base64.b64encode(corrected_contour).decode("ascii"),
+            "regional_heatmap_b64": base64.b64encode(regional_heatmap).decode("ascii") if regional_heatmap else None,
+            "regional_contour_b64": base64.b64encode(regional_contour).decode("ascii") if regional_contour else None,
+            "residual_heatmap_b64": base64.b64encode(residual_heatmap).decode("ascii") if residual_heatmap else None,
+            "residual_contour_b64": base64.b64encode(residual_contour).decode("ascii") if residual_contour else None,
             **add_ons,
         }
         if "predicted_points" in results:
@@ -2777,9 +3059,9 @@ class ProcessingService:
         )
 
         for file_name, renderer in (
-            ("heatmap.png", self._render_heatmap_png),
-            ("contour.png", self._render_contour_png),
-            ("surface.png", self._render_surface_png),
+            ("heatmap.png", lambda _surface: corrected_heatmap),
+            ("contour.png", lambda _surface: corrected_contour),
+            ("surface.png", lambda _surface: corrected_surface_png),
         ):
             artifacts.append(
                 self._storage.upload_result(
@@ -2791,10 +3073,31 @@ class ProcessingService:
                 ).model_dump(mode="json")
             )
 
+        for file_name, image_bytes in (
+            ("regional_heatmap.png", regional_heatmap),
+            ("regional_contour.png", regional_contour),
+            ("regional_surface.png", regional_surface_png),
+            ("residual_heatmap.png", residual_heatmap),
+            ("residual_contour.png", residual_contour),
+            ("residual_surface.png", residual_surface_png),
+        ):
+            if not image_bytes:
+                continue
+            artifacts.append(
+                self._storage.upload_result(
+                    project_id=task["project_id"],
+                    task_id=task["id"],
+                    file_name=file_name,
+                    content_type="image/png",
+                    data=image_bytes,
+                ).model_dump(mode="json")
+            )
+
         _2d_keys = {
             "grid_x",
             "grid_y",
             "surface",
+            "corrected_field",
             "uncertainty",
             "support_mask",
             "analytic_signal",
@@ -2802,11 +3105,19 @@ class ProcessingService:
             "horizontal_derivative",
             "filtered_surface",
             "regional_field",
+            "regional_surface",
             "emag2_residual",
             "regional_residual",
+            "residual_surface",
             "rtp_surface",
             "tilt_derivative",
             "total_gradient",
+            "corrected_heatmap_b64",
+            "corrected_contour_b64",
+            "regional_heatmap_b64",
+            "regional_contour_b64",
+            "residual_heatmap_b64",
+            "residual_contour_b64",
         }
         firestore_data = {k: v for k, v in payload.items() if k not in _2d_keys}
         if "points" in firestore_data:
@@ -2817,7 +3128,7 @@ class ProcessingService:
 
     @staticmethod
     def _persisted_result_keys(results: dict) -> list[str]:
-        keys = ["surface"]
+        keys = ["surface", "corrected_field"]
         for key in [
             "filtered_surface",
             "rtp_surface",
@@ -2825,8 +3136,10 @@ class ProcessingService:
             "first_vertical_derivative",
             "horizontal_derivative",
             "regional_field",
+            "regional_surface",
             "regional_residual",
             "emag2_residual",
+            "residual_surface",
             "uncertainty",
             "tilt_derivative",
             "total_gradient",
@@ -2852,22 +3165,22 @@ class ProcessingService:
             return self._sanitize_payload(value.item())
         return value
 
-    def _render_heatmap_png(self, surface) -> bytes:
+    def _render_heatmap_png(self, surface, title: str = "Magnetic Surface", x_label: str = "Grid X", y_label: str = "Grid Y") -> bytes:
         from matplotlib import pyplot as plt
 
         figure, axis = plt.subplots(figsize=(6, 4))
         heatmap = axis.imshow(surface, cmap="viridis", origin="lower")
         figure.colorbar(heatmap, ax=axis, fraction=0.046, pad=0.04)
-        axis.set_title("Magnetic Surface")
-        axis.set_xlabel("Grid X")
-        axis.set_ylabel("Grid Y")
+        axis.set_title(title)
+        axis.set_xlabel(x_label)
+        axis.set_ylabel(y_label)
         output = io.BytesIO()
         figure.tight_layout()
         figure.savefig(output, format="png", dpi=180)
         plt.close(figure)
         return output.getvalue()
 
-    def _render_contour_png(self, surface) -> bytes:
+    def _render_contour_png(self, surface, title: str = "Magnetic Contours") -> bytes:
         from matplotlib import pyplot as plt
 
         figure, axis = plt.subplots(figsize=(6, 4))
@@ -2877,14 +3190,14 @@ class ProcessingService:
         else:
             axis.plot(surface.ravel(), color="teal")
             axis.set_ylabel("nT")
-        axis.set_title("Magnetic Contours")
+        axis.set_title(title)
         output = io.BytesIO()
         figure.tight_layout()
         figure.savefig(output, format="png", dpi=180)
         plt.close(figure)
         return output.getvalue()
 
-    def _render_surface_png(self, surface) -> bytes:
+    def _render_surface_png(self, surface, title: str = "Magnetic Surface") -> bytes:
         from matplotlib import pyplot as plt
 
         figure = plt.figure(figsize=(6, 4))
@@ -2898,7 +3211,7 @@ class ProcessingService:
             axis = figure.add_subplot(111)
             axis.plot(surface.ravel(), color="teal")
             axis.set_ylabel("nT")
-        axis.set_title("3D Magnetic Surface")
+        axis.set_title(title)
         output = io.BytesIO()
         figure.tight_layout()
         figure.savefig(output, format="png", dpi=180)

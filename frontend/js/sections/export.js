@@ -1,6 +1,6 @@
-﻿import {createExport, fetchTask} from "../api.js";
+﻿import {createExport, fetchTask, fetchTaskResults} from "../api.js";
 import {renderWorkflowProgress} from "./progress.js";
-import {appState, setTask} from "../state.js";
+import {appState, setTask, setTaskResults} from "../state.js";
 import {formatBytes} from "../shared/format.js";
 const CARD_TO_FORMAT = {
   "ec-pdf": "pdf",
@@ -72,6 +72,48 @@ function renderDownloads(job) {
   ` : "";
 }
 
+function setExportToggle(id, enabled, checked = enabled) {
+  const card = document.getElementById(id);
+  if (!card) return;
+  card.style.display = enabled ? "" : "none";
+  card.classList.toggle("on", Boolean(enabled && checked));
+  const box = card.querySelector(".chk-box");
+  if (box) {
+    box.classList.toggle("on", Boolean(enabled && checked));
+    box.textContent = enabled && checked ? "✓" : "";
+  }
+}
+
+function renderExportAvailability(results) {
+  const list = document.getElementById("exportAvailabilityList");
+  const note = document.getElementById("exportAvailabilityNote");
+  if (!list || !note) return;
+  const available = [
+    {label: "Corrected field visuals", on: Boolean(results?.surface || results?.corrected_field)},
+    {label: "Regional field visuals", on: Boolean(results?.regional_field || results?.regional_surface)},
+    {label: "Residual field visuals", on: Boolean(results?.regional_residual || results?.residual_surface || results?.emag2_residual)},
+    {label: "RTP", on: Boolean(results?.rtp_surface)},
+    {label: "Analytic signal", on: Boolean(results?.analytic_signal)},
+    {label: "Tilt derivative", on: Boolean(results?.tilt_derivative)},
+    {label: "Modelling diagnostics", on: Boolean(results?.model_metadata)},
+    {label: "Correction report", on: Boolean(results?.qa_report || results?.validation_summary)},
+  ].filter((item) => item.on);
+  list.innerHTML = available.map((item) => `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 9px;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
+      <span style="font-size:11px;color:var(--text)">${item.label}</span>
+      <span class="badge bg">Available</span>
+    </div>
+  `).join("");
+  const hasRegional = Boolean(results?.regional_field || results?.regional_surface);
+  note.style.display = hasRegional ? "block" : "none";
+  note.textContent = hasRegional
+    ? "Regional and residual field maps will be treated as separate interpretive products in exported reports."
+    : "";
+  setExportToggle("export-corrected-field", Boolean(results?.surface || results?.corrected_field), true);
+  setExportToggle("export-regional-field", hasRegional, hasRegional);
+  setExportToggle("export-residual-field", Boolean(results?.regional_residual || results?.residual_surface || results?.emag2_residual), Boolean(results?.regional_residual || results?.residual_surface || results?.emag2_residual));
+}
+
 export async function loadExportView() {
   renderSelectionCount();
   document.querySelectorAll("#screen-export .ec .badge.bgr").forEach((badge) => {
@@ -91,6 +133,16 @@ export async function loadExportView() {
   const task = await fetchTask(appState.project.id, appState.task.id);
   setTask(task);
   renderWorkflowProgress();
+  let results = appState.taskResults;
+  if (!results && task.results?.artifacts?.length) {
+    try {
+      results = await fetchTaskResults(appState.project.id, appState.task.id);
+      setTaskResults(results);
+    } catch (_error) {
+      results = null;
+    }
+  }
+  renderExportAvailability(results);
   const latestJob = (task.export_jobs || []).slice(-1)[0];
   if (latestJob) {
     renderProgress(latestJob.formats || [], latestJob.details?.artifacts || []);

@@ -58,6 +58,10 @@ const EXECUTION_ETA = {
   "save results": 6,
 };
 
+function processingBadge(text, color = "text4") {
+  return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;background:var(--${color}-bg,var(--bg2));color:var(--${color},var(--text2));margin:2px 6px 2px 0">${text}</span>`;
+}
+
 function getRoots() {
   const screen = document.getElementById("screen-processing");
   const sideRows = screen.querySelectorAll(".srow .sv");
@@ -245,6 +249,12 @@ function renderConfigSummary(task) {
     ? titleCase(String(config.filter_type).replace(/-/g, " "))
     : null;
   const scenario = task?.scenario ? titleCase(task.scenario) : "Automatic";
+  const validation = task?.results?.data?.validation_summary || task?.results?.validation_summary || {};
+  const baseCount = Number(validation.base_station_count || 0);
+  const regionalEnabled = Boolean(config.regional_residual_enabled || (config.add_ons || []).includes("emag2"));
+  const regionalMethod = config.regional_method
+    ? titleCase(String(config.regional_method).replace(/_/g, " "))
+    : "Automatic";
 
   const badge = (text, color) =>
     `<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10.5px;font-weight:700;background:var(--${color}-bg,var(--bg2));color:var(--${color},var(--text2));margin:2px 3px 2px 0">${text}</span>`;
@@ -256,6 +266,8 @@ function renderConfigSummary(task) {
     filterMode ? ["Filter mode", badge(filterMode, "blue")] : null,
     ["Corrections", corrections.length ? corrections.map((c) => badge(c, "g5")).join("") : badge("None selected", "text4")],
     ["Add-ons", addOns.length ? addOns.map((a) => badge(a, "blue")).join("") : badge("None selected", "text4")],
+    ["Diurnal path", `Base station interval correction preferred${baseCount ? ` · ${baseCount} base reading${baseCount === 1 ? "" : "s"} recognised` : " · fallback likely"}`],
+    ["Regional method", regionalEnabled ? badge(regionalMethod, "blue") : badge("Not enabled", "text4")],
   ].filter(Boolean);
 
   card.innerHTML = `
@@ -266,6 +278,51 @@ function renderConfigSummary(task) {
           <div style="font-size:11px;color:var(--text3);font-weight:500;min-width:100px;padding-top:3px">${k}</div>
           <div style="flex:1;line-height:1.6">${v}</div>
         </div>`).join("")}
+      <div style="padding:8px 0 2px 0">
+        <div style="font-size:10px;font-weight:700;letter-spacing:0.8px;color:var(--text4);text-transform:uppercase;margin-bottom:6px">Technical notes</div>
+        <div style="font-size:10.5px;color:var(--text2);line-height:1.7">Interval-based diurnal correction uses linear interpolation between consecutive base station readings when valid base station rows are present. If valid base station rows are unavailable, a fallback low-frequency trend correction is used.</div>
+        <div style="font-size:10.5px;color:var(--text2);line-height:1.7;margin-top:6px">${regionalEnabled ? `Regional and residual fields will be generated separately using the ${regionalMethod.toLowerCase()} method.` : "Regional and residual field generation is not enabled for this run."}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderRunSummary(run, task) {
+  const roots = getRoots();
+  const screen = roots.screen;
+  let card = document.getElementById("procRunSummaryCard");
+  if (!card) {
+    card = document.createElement("div");
+    card.id = "procRunSummaryCard";
+    card.style.marginBottom = "16px";
+    const pipeWrap = document.getElementById("pipeWrap");
+    pipeWrap?.parentNode?.insertBefore(card, pipeWrap);
+  }
+  const qa = run?.qa_report || {};
+  const validation = run?.validation_summary || task?.results?.data?.validation_summary || {};
+  const correction = run?.stage_reports?.[2]?.metadata || {};
+  const diurnal = correction.diurnal || {};
+  const derived = qa.derived_layers || {};
+  const badges = [];
+  if (diurnal.diurnal_interval_based_applied) badges.push(processingBadge("Interval-based diurnal applied", "g5"));
+  if (diurnal.diurnal_method && !diurnal.diurnal_interval_based_applied) badges.push(processingBadge("Fallback diurnal used", "amber"));
+  if (derived.regional_generation_success && derived.residual_generation_success) badges.push(processingBadge("Regional/Residual generated", "blue"));
+  if (correction.igrf_applied === false) badges.push(processingBadge("IGRF skipped", "amber"));
+  if (qa.status === "degraded") badges.push(processingBadge("Partially degraded", "red"));
+  if ((qa.blocking_issues || []).length) badges.push(processingBadge("Incomplete physical model", "amber"));
+  const quality = qa.quality_score != null ? Number(qa.quality_score).toFixed(2) : "—";
+  card.innerHTML = `
+    <div class="sep">Run summary</div>
+    <div class="card card-sm" style="padding:12px 14px">
+      <div style="display:flex;flex-wrap:wrap;gap:4px 0;margin-bottom:10px">${badges.join("") || processingBadge("Waiting for run metadata", "text4")}</div>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px;font-size:11px;color:var(--text2);line-height:1.7">
+        <div><strong style="color:var(--text)">Diurnal correction method:</strong> ${diurnal.diurnal_method || "Pending"}</div>
+        <div><strong style="color:var(--text)">Base station readings:</strong> ${validation.base_station_count ?? diurnal.n_base_readings ?? "—"}</div>
+        <div><strong style="color:var(--text)">Regional/residual enabled:</strong> ${derived.regional_residual_enabled ? "Yes" : "No"}</div>
+        <div><strong style="color:var(--text)">Regional method:</strong> ${derived.regional_method_used || "—"}</div>
+        <div><strong style="color:var(--text)">Processing quality score:</strong> ${quality}</div>
+        <div><strong style="color:var(--text)">Run status:</strong> ${qa.status || run?.status || "queued"}</div>
+      </div>
     </div>
   `;
 }
@@ -304,6 +361,7 @@ async function pollRun(runId) {
   renderWorkflowProgress();
   renderPipeline(run);
   renderLogs(run);
+  renderRunSummary(run, appState.task);
   getRoots().procEta.textContent = run.status === "completed"
     ? "Processing complete."
     : run.status === "failed"
@@ -344,6 +402,7 @@ export async function loadProcessingView() {
   if (appState.processingRun?.id) {
     renderPipeline(appState.processingRun);
     renderLogs(appState.processingRun);
+    renderRunSummary(appState.processingRun, appState.task);
     roots.procEta.textContent = titleCase(appState.processingRun.status);
     return;
   }
@@ -353,6 +412,7 @@ export async function loadProcessingView() {
   }
   renderIdlePipeline();
   renderLogs({logs: []});
+  renderRunSummary(null, appState.task);
   roots.completeCTA.style.display = "none";
   roots.procEta.textContent = "Ready to start processing.";
 }
