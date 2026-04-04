@@ -8,7 +8,11 @@ import re
 import zipfile
 from typing import Any
 
+import pandas as pd
+
 from backend.models import AuroraResponse
+from backend.services.preview_service import _auto_utm_zone, _utm_to_wgs84
+from backend.services.processing_service import _infer_base_station_mask
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +59,7 @@ class AIService:
         question: str | None = None,
         history: list[dict] | None = None,
         extra_results: dict | None = None,
+        ui_context: dict | None = None,
     ) -> AuroraResponse:
         project = self._store.get_project(project_id)
         task = self._store.get_task(task_id)
@@ -62,9 +67,20 @@ class AIService:
             raise ValueError("Project or task not found.")
 
         outputs = extra_results or self._load_full_results(task) or task.get("results", {}).get("data", {})
+        if location == "preview":
+            preview_outputs = self._build_preview_outputs(task)
+            if preview_outputs:
+                merged_outputs = dict(outputs or {})
+                merged_outputs["points"] = preview_outputs.get("points") or merged_outputs.get("points") or []
+                merged_validation = dict(merged_outputs.get("validation_summary") or {})
+                merged_validation.update(preview_outputs.get("validation_summary") or {})
+                merged_outputs["validation_summary"] = merged_validation
+                if preview_outputs.get("stats"):
+                    merged_outputs["stats"] = preview_outputs["stats"]
+                outputs = merged_outputs
         stats = outputs.get("stats") or {}
         config = task.get("analysis_config") or {}
-        system_prompt = self._build_chat_system_prompt(project, task, config, outputs, stats, location)
+        system_prompt = self._build_chat_system_prompt(project, task, config, outputs, stats, location, ui_context or {})
 
         messages: list[dict[str, str]] = []
         for msg in (history or [])[-20:]:
@@ -79,7 +95,7 @@ class AIService:
         except Exception as exc:
             logger.exception("Aurora chat generation failed", extra={"location": location, "task_id": task_id, "project_id": project_id, "error": str(exc)})
             try:
-                compact_prompt = self._build_compact_chat_system_prompt(project, task, config, outputs, stats, location)
+                compact_prompt = self._build_compact_chat_system_prompt(project, task, config, outputs, stats, location, ui_context or {})
                 text = self._chat_client.generate(system_prompt=compact_prompt, messages=messages[-6:], max_tokens=800)
             except Exception:
                 text = self._fallback_text(project, task, outputs, location, question)
@@ -192,6 +208,7 @@ class AIService:
         outputs: dict,
         stats: dict,
         location: str,
+        ui_context: dict,
     ) -> str:
         corrections = ", ".join(config.get("corrections") or []) or "none"
         add_ons = ", ".join(config.get("add_ons") or []) or "none"
@@ -228,12 +245,27 @@ class AIService:
                 f"quality={qa_report.get('quality_score', 'n/a')}; "
                 f"fallback events={len(qa_report.get('fallback_events') or [])}\n"
             )
+        correction_report = outputs.get("correction_report") or {}
+        if correction_report:
+            prompt += (
+                f"Correction report: IGRF applied={bool(correction_report.get('igrf_applied'))}; "
+                f"diurnal method={((correction_report.get('diurnal') or {}).get('diurnal_method') or 'not reported')}; "
+                f"base readings={int(((correction_report.get('diurnal') or {}).get('n_base_readings', 0) or 0))}; "
+                f"diurnal max correction={self._format_optional_float(((correction_report.get('diurnal') or {}).get('diurnal_max_correction_nT')))} nT\n"
+            )
         correction_path = qa_report.get("correction_path") or []
         if correction_path:
             prompt += "Applied correction path: " + " | ".join(correction_path[:8]) + "\n"
         layers = self._list_available_layers(outputs)
         if layers:
             prompt += "Available layers: " + ", ".join(layers) + "\n"
+        regional_method = outputs.get("regional_method_used")
+        if regional_method:
+            prompt += (
+                f"Regional/residual metadata: regional method={regional_method}; "
+                f"setting={json.dumps(outputs.get('regional_scale_or_degree')) if outputs.get('regional_scale_or_degree') is not None else 'not reported'}; "
+                f"residual definition={outputs.get('residual_definition') or 'not reported'}\n"
+            )
         sample_points = (outputs.get("points") or [])[:20]
         if sample_points:
             prompt += "Sample stations (lat, lon, magnetic nT):\n"
@@ -250,6 +282,9 @@ class AIService:
         results_context = self._build_results_context(outputs)
         if results_context:
             prompt += "\n--- PROCESSED OUTPUTS ---\n" + results_context[: self._MAX_CHAT_CONTEXT_CHARS] + "\n"
+        ui_summary = self._build_ui_context_summary(ui_context)
+        if ui_summary:
+            prompt += "\n--- UI CONTEXT ---\n" + ui_summary + "\n"
         prompt += f"\n--- CURRENT SCREEN: {location.upper()} ---\n"
         return prompt
 
@@ -261,7 +296,9 @@ class AIService:
         outputs: dict,
         stats: dict,
         location: str,
+        ui_context: dict,
     ) -> str:
+        ui_summary = self._build_ui_context_summary(ui_context, compact=True)
         return (
             "You are Aurora AI, a practical magnetic-survey assistant. "
             "Answer directly in plain language using only the project/task/results summary below. Never expose raw field names, internal keys, or code-style identifiers.\n"
@@ -274,6 +311,7 @@ class AIService:
             f"Stats: mean={stats.get('mean', 0):.2f} nT, range={float(stats.get('max', 0) or 0) - float(stats.get('min', 0) or 0):.2f} nT, points={stats.get('point_count', 0)}\n"
             f"Base-station readings recognised: {self._resolved_base_station_count(outputs)}\n"
             f"Available layers: {', '.join(self._list_available_layers(outputs)) or 'TMF only'}\n"
+            f"{ui_summary}"
         )
 
     def _build_export_data_prompt(
@@ -397,6 +435,123 @@ class AIService:
         except Exception:
             return {}
 
+    def _build_preview_outputs(self, task: dict) -> dict:
+        if not self._storage:
+            return {}
+
+        survey_files = task.get("survey_files") or []
+        if not survey_files:
+            return {}
+
+        mapping = task.get("column_mapping") or {}
+        lat_col = mapping.get("latitude")
+        lon_col = mapping.get("longitude")
+        mag_col = mapping.get("magnetic_field")
+        if not lat_col or not lon_col:
+            return {}
+
+        coord_sys = (mapping.get("coordinate_system") or "wgs84").lower()
+        utm_zone = mapping.get("utm_zone")
+        utm_hemi = mapping.get("utm_hemisphere") or "N"
+
+        try:
+            frames: list[pd.DataFrame] = []
+            for file_index, artifact in enumerate(survey_files):
+                csv_text = self._storage.download_text(artifact["bucket"], artifact["object_name"])
+                frame = pd.read_csv(io.StringIO(csv_text))
+                needed = [column for column in [lat_col, lon_col] if column and column in frame.columns]
+                frame = frame.dropna(subset=needed).copy()
+                frame["_raw_lat"] = pd.to_numeric(frame[lat_col], errors="coerce")
+                frame["_raw_lon"] = pd.to_numeric(frame[lon_col], errors="coerce")
+                frame = frame.dropna(subset=["_raw_lat", "_raw_lon"])
+
+                if mag_col and mag_col in frame.columns:
+                    frame["magnetic"] = pd.to_numeric(frame[mag_col], errors="coerce")
+                else:
+                    frame["magnetic"] = float("nan")
+
+                if {"hour", "minute"}.issubset(mapping):
+                    hour_col = mapping.get("hour")
+                    minute_col = mapping.get("minute")
+                    second_col = mapping.get("second")
+                    if hour_col in frame.columns and minute_col in frame.columns:
+                        sec_series = pd.to_numeric(frame.get(second_col, 0), errors="coerce").fillna(0) if second_col else 0
+                        frame["time_s"] = (
+                            pd.to_numeric(frame[hour_col], errors="coerce").fillna(0) * 3600.0
+                            + pd.to_numeric(frame[minute_col], errors="coerce").fillna(0) * 60.0
+                            + sec_series
+                        )
+
+                if coord_sys == "utm":
+                    if utm_zone:
+                        zone = int(utm_zone)
+                        hemi = str(utm_hemi)
+                    else:
+                        first_e = float(frame["_raw_lon"].iloc[0])
+                        first_n = float(frame["_raw_lat"].iloc[0])
+                        zone, hemi = _auto_utm_zone(first_e, first_n)
+
+                    lats: list[float | None] = []
+                    lons: list[float | None] = []
+                    for _, row in frame.iterrows():
+                        try:
+                            lat, lon = _utm_to_wgs84(float(row["_raw_lon"]), float(row["_raw_lat"]), zone, hemi)
+                            lats.append(lat)
+                            lons.append(lon)
+                        except Exception:
+                            lats.append(None)
+                            lons.append(None)
+                    frame["latitude"] = lats
+                    frame["longitude"] = lons
+                else:
+                    frame["latitude"] = frame["_raw_lat"]
+                    frame["longitude"] = frame["_raw_lon"]
+
+                frame = frame.dropna(subset=["latitude", "longitude"])
+                frame["is_base_station"] = _infer_base_station_mask(frame, lon_col, lat_col)
+                frame["line_id"] = file_index
+                frame["source_file_name"] = artifact.get("file_name") or artifact.get("object_name") or f"survey_{file_index + 1}.csv"
+                frames.append(frame)
+
+            if not frames:
+                return {}
+
+            frame = pd.concat(frames, ignore_index=True)
+            points_frame = frame.head(500).copy()
+            keep_cols = ["latitude", "longitude", "magnetic", "is_base_station", "line_id", "source_file_name"]
+            if "time_s" in points_frame.columns:
+                keep_cols.append("time_s")
+            points = points_frame[keep_cols].to_dict(orient="records")
+
+            magnetic = pd.to_numeric(frame["magnetic"], errors="coerce").dropna().tolist()
+            point_count = len(magnetic)
+            stats = {}
+            if magnetic:
+                mean_value = sum(magnetic) / point_count
+                variance = sum((value - mean_value) ** 2 for value in magnetic) / point_count
+                stats = {
+                    "mean": mean_value,
+                    "std": variance ** 0.5,
+                    "min": min(magnetic),
+                    "max": max(magnetic),
+                    "point_count": point_count,
+                    "anomaly_count": sum(1 for value in magnetic if value > mean_value + (variance ** 0.5)),
+                }
+
+            return {
+                "points": points,
+                "stats": stats,
+                "validation_summary": {
+                    "status": "preview_ready",
+                    "row_count": int(len(frame)),
+                    "valid_row_count": int(len(frame)),
+                    "base_station_count": int(pd.to_numeric(frame["is_base_station"], errors="coerce").fillna(0).astype(int).sum()),
+                    "warnings": [],
+                },
+            }
+        except Exception:
+            return {}
+
     def _collect_uploaded_file_context(self, task: dict) -> str | None:
         if not self._storage:
             return None
@@ -515,6 +670,7 @@ class AIService:
         qa_report = outputs.get("qa_report") or {}
         model_metadata = outputs.get("model_metadata") or {}
         uncertainty_metadata = outputs.get("uncertainty_metadata") or {}
+        correction_report = outputs.get("correction_report") or {}
         base_station_count = self._resolved_base_station_count(outputs)
         if validation:
             lines.append(
@@ -530,6 +686,16 @@ class AIService:
                 f"status={qa_report.get('status', 'unknown')}, "
                 f"quality={qa_report.get('quality_score', 'n/a')}, "
                 f"fallbacks={len(qa_report.get('fallback_events') or [])}"
+            )
+        if correction_report:
+            diurnal = correction_report.get("diurnal") or {}
+            lines.append(
+                "Correction metadata: "
+                f"igrf_applied={bool(correction_report.get('igrf_applied'))}, "
+                f"diurnal_method={diurnal.get('diurnal_method', 'not reported')}, "
+                f"base_readings={int(diurnal.get('n_base_readings', 0) or 0)}, "
+                f"diurnal_reference={self._format_optional_float(diurnal.get('diurnal_reference_value'))}, "
+                f"diurnal_max_correction_nT={self._format_optional_float(diurnal.get('diurnal_max_correction_nT'))}"
             )
         if model_metadata:
             lines.append(
@@ -555,6 +721,62 @@ class AIService:
             lines.append("Layer summaries:")
             lines.extend(layer_summaries[:10])
         return "\n".join(lines)
+
+    def _build_ui_context_summary(self, ui_context: dict, compact: bool = False) -> str:
+        if not isinstance(ui_context, dict) or not ui_context:
+            return ""
+        lines = []
+        screen_label = ui_context.get("screen_label")
+        if screen_label:
+            lines.append(f"UI screen: {screen_label}")
+        active_view = ui_context.get("active_view")
+        if active_view:
+            lines.append(f"Visualisation mode: {active_view}")
+        active_layer = ui_context.get("active_layer_label")
+        if active_layer:
+            lines.append(f"Active layer: {active_layer}")
+        selected_traverse = ui_context.get("selected_traverse_label")
+        if selected_traverse:
+            lines.append(f"Selected traverse: {selected_traverse}")
+        if ui_context.get("is_profile_plot") is True:
+            lines.append("Current view is a profile plot.")
+        if ui_context.get("is_map_view") is True:
+            lines.append("Current view is a map-based visual.")
+        profile_line = ui_context.get("profile_line")
+        if isinstance(profile_line, dict):
+            start = profile_line.get("start")
+            end = profile_line.get("end")
+            if isinstance(start, dict) and isinstance(end, dict):
+                start_lat = self._format_optional_float(start.get("latitude"), digits=5)
+                start_lon = self._format_optional_float(start.get("longitude"), digits=5)
+                end_lat = self._format_optional_float(end.get("latitude"), digits=5)
+                end_lon = self._format_optional_float(end.get("longitude"), digits=5)
+                lines.append(
+                    f"Approximate line endpoints: start=({start_lat}, {start_lon}), end=({end_lat}, {end_lon})"
+                )
+            if profile_line.get("length_m") is not None:
+                lines.append(f"Approximate displayed line length: {self._format_optional_float(profile_line.get('length_m'))} m")
+        displayed_stats = ui_context.get("displayed_stats")
+        if isinstance(displayed_stats, dict):
+            lines.append(
+                "Displayed values: "
+                f"min={self._format_optional_float(displayed_stats.get('min'))}, "
+                f"max={self._format_optional_float(displayed_stats.get('max'))}, "
+                f"mean={self._format_optional_float(displayed_stats.get('mean'))}, "
+                f"range={self._format_optional_float(displayed_stats.get('range'))}"
+            )
+        value_source = ui_context.get("value_source")
+        if value_source:
+            lines.append(f"Displayed-value source: {value_source}")
+        if compact:
+            return ("UI: " + " | ".join(lines) + "\n") if lines else ""
+        return "\n".join(lines)
+
+    def _format_optional_float(self, value: Any, digits: int = 2) -> str:
+        number = self._to_float(value)
+        if number is None:
+            return "n/a"
+        return f"{number:.{digits}f}"
 
     def _resolved_base_station_count(self, outputs: dict) -> int:
         points = outputs.get("points") or []

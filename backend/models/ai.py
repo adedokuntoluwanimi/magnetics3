@@ -18,6 +18,7 @@ class AuroraRequest(GaiaModel):
     question: str | None = None
     # Conversation history: list of {role: "user"|"assistant", content: "..."}
     history: list[dict] = Field(default_factory=list)
+    ui_context: dict = Field(default_factory=dict)
 
 
 class AuroraResponse(GaiaModel):

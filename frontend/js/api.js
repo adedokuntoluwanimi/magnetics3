@@ -96,11 +96,11 @@ export function createExport(taskId, payload) {
   });
 }
 
-export function askAurora({project_id, task_id, location, question, history = []}) {
+export function askAurora({project_id, task_id, location, question, history = [], ui_context = {}}) {
   return request("/api/ai/respond", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({project_id, task_id, location, question, history}),
+    body: JSON.stringify({project_id, task_id, location, question, history, ui_context}),
   });
 }
 

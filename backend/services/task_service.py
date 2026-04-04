@@ -34,13 +34,19 @@ def _xlsx_to_csv_bytes(raw_bytes: bytes) -> bytes:
     writer = csv.writer(out)
     writer.writerow(headers)
 
+    _BS_LABELS = {"bs", "base", "base station", "base_station"}
     for row in rows[1:]:
         values = [c.value for c in row]
-        # A row is "base station" when at least one non-empty cell is bold
-        # and NO non-empty cell is non-bold (all populated cells are bold)
+        # Bold detection: all non-empty cells are bold
         bold_cells = [c for c in row if c.value not in (None, "") and c.font and c.font.bold]
         data_cells = [c for c in row if c.value not in (None, "")]
-        is_base = 1 if data_cells and len(bold_cells) == len(data_cells) else 0
+        is_base_bold = data_cells and len(bold_cells) == len(data_cells)
+        # Text detection: any cell contains a recognised base-station label
+        is_base_text = any(
+            str(c.value).strip().lower() in _BS_LABELS
+            for c in row if c.value not in (None, "")
+        )
+        is_base = 1 if (is_base_bold or is_base_text) else 0
         values.append(is_base)
         writer.writerow(values)
 

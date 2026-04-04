@@ -8,6 +8,7 @@ import {renderStationMap, recolorSurveyMarkers, recolorPredictedMarkers, recolor
 import {initAIChat} from "../shared/ai_chat.js";
 
 let _previewChat = null;
+let _latestPreviewContext = null;
 
 // Human-readable labels for normalized backend IDs
 const CORRECTION_LABELS = {
@@ -126,6 +127,7 @@ export async function loadPreview() {
     }
     setPreviewLoading(true, "Fetching survey data...");
     const preview = await fetchPreview(appState.project.id, appState.task.id);
+    _latestPreviewContext = preview;
     const points = renderPreview(preview);
     const predictedPoints = preview.predicted_points || [];
 
@@ -220,9 +222,33 @@ function _loadPreviewAI() {
   const sendEl = document.getElementById("previewAISend");
   if (!bodyEl || !inputEl || !sendEl) return;
   if (!_previewChat) {
-    _previewChat = initAIChat(bodyEl, inputEl, sendEl, {location: "preview"});
+    _previewChat = initAIChat(bodyEl, inputEl, sendEl, {location: "preview", buildContext: buildPreviewAIContext});
   }
   _previewChat.refresh();
+}
+
+function buildPreviewAIContext() {
+  const points = _latestPreviewContext?.preview_points || appState.task?.results?.data?.points || [];
+  const mapAttribution = document.querySelector("#screen-preview .map-attribution")?.textContent?.trim() || "";
+  const latitudes = points.map((point) => Number(point.latitude)).filter((value) => Number.isFinite(value));
+  const longitudes = points.map((point) => Number(point.longitude)).filter((value) => Number.isFinite(value));
+  return {
+    screen_label: "Preview",
+    active_view: "Map preview",
+    is_map_view: true,
+    is_profile_plot: false,
+    preview_point_count: points.length,
+    base_station_count: points.filter((point) => point.is_base_station).length,
+    traverse_count: _latestPreviewContext?.traverse_count || new Set(points.map((point) => point.line_id).filter((value) => value != null)).size,
+    map_bounds: latitudes.length && longitudes.length ? {
+      min_latitude: Math.min(...latitudes),
+      max_latitude: Math.max(...latitudes),
+      min_longitude: Math.min(...longitudes),
+      max_longitude: Math.max(...longitudes),
+    } : null,
+    map_attribution: mapAttribution,
+    value_source: "Preview uses uploaded station coordinates and measured values before full processing.",
+  };
 }
 
 window.drawPreviewMap = async () => {

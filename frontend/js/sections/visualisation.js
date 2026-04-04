@@ -303,6 +303,38 @@ function computeLayerStats(layer) {
   };
 }
 
+function computeDisplayStats(displayData) {
+  const values = [
+    ...(displayData?.measured || []).map((point) => Number(point.display_value)),
+    ...(displayData?.predicted || []).map((point) => Number(point.display_value)),
+  ].filter((value) => Number.isFinite(value));
+  if (!values.length) {
+    return {min: null, max: null, mean: null, std: null, anomalyCount: 0, pointCount: 0, range: null};
+  }
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const variance = values.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / values.length;
+  const std = Math.sqrt(variance);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  return {
+    min,
+    max,
+    mean,
+    std,
+    anomalyCount: values.filter((value) => value > mean + std).length,
+    pointCount: values.length,
+    range: max - min,
+  };
+}
+
+function layerValueSourceNote(layerId, mode) {
+  if (mode === "Line Profiles" || mode === "Map") {
+    if (layerId === "magnetic") return "Corrected station readings shown directly at station locations.";
+    return "Derived-layer values sampled from the processed grid at station locations.";
+  }
+  return "Processed grid-surface values shown for the selected layer.";
+}
+
 function paletteToCss(palette) {
   return `linear-gradient(90deg, ${palette.join(",")})`;
 }
@@ -350,7 +382,7 @@ function _showPalettePickerFor(layerId, currentPalette) {
   if (!picker) {
     picker = document.createElement("div");
     picker.id = "_visPalPicker";
-    picker.style.cssText = "position:fixed;z-index:9999;background:#fff;border:1px solid #d0d5d1;border-radius:10px;padding:14px 16px;box-shadow:0 4px 20px rgba(0,0,0,0.14);font-family:'Manrope',sans-serif;font-size:12px;min-width:190px";
+    picker.style.cssText = `position:fixed;z-index:9999;background:${themeValue("--bg","#fff")};border:1px solid ${themeValue("--border2","#d0d5d1")};border-radius:10px;padding:14px 16px;box-shadow:0 4px 20px rgba(0,0,0,0.18);font-family:'Manrope',sans-serif;font-size:12px;min-width:190px`;
     document.body.appendChild(picker);
     document.addEventListener("mousedown", (e) => {
       if (!picker.contains(e.target) && !e.target.closest("#visScaleBar")) picker.style.display = "none";
@@ -358,23 +390,30 @@ function _showPalettePickerFor(layerId, currentPalette) {
   }
   const cold = currentPalette[0] || "#1a2980";
   const hot = currentPalette[currentPalette.length - 1] || "#c0392b";
+  const _t = themeValue("--text","#071a0b");
+  const _t2 = themeValue("--text3","#5a8264");
+  const _b2 = themeValue("--border2","#d0d5d1");
+  const _bg3 = themeValue("--bg3","#f5f5f5");
   picker.innerHTML = `
-    <div style="font-weight:700;color:#071a0b;margin-bottom:10px;font-size:12px">Colour scale</div>
+    <div style="font-weight:700;color:${_t};margin-bottom:10px;font-size:12px">Colour scale</div>
     <div style="display:flex;flex-direction:column;gap:9px">
       <label style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-        <span style="color:#5a8264">Cold (low)</span>
-        <input type="color" value="${cold}" oninput="window._setVisLayerPalCold('${layerId}',this.value)" style="width:34px;height:26px;border:1px solid #d0d5d1;border-radius:5px;cursor:pointer;padding:2px">
+        <span style="color:${_t2}">Cold (low)</span>
+        <input type="color" value="${cold}" oninput="window._setVisLayerPalCold('${layerId}',this.value)" style="width:34px;height:26px;border:1px solid ${_b2};border-radius:5px;cursor:pointer;padding:2px;background:${_bg3}">
       </label>
       <label style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-        <span style="color:#5a8264">Hot (high)</span>
-        <input type="color" value="${hot}" oninput="window._setVisLayerPalHot('${layerId}',this.value)" style="width:34px;height:26px;border:1px solid #d0d5d1;border-radius:5px;cursor:pointer;padding:2px">
+        <span style="color:${_t2}">Hot (high)</span>
+        <input type="color" value="${hot}" oninput="window._setVisLayerPalHot('${layerId}',this.value)" style="width:34px;height:26px;border:1px solid ${_b2};border-radius:5px;cursor:pointer;padding:2px;background:${_bg3}">
       </label>
       <div style="display:flex;gap:6px;margin-top:2px">
-        <button onclick="window._resetVisLayerPal('${layerId}')" style="flex:1;padding:5px;border:1px solid #ccc;border-radius:6px;background:#f5f5f5;cursor:pointer;font-size:11px">Reset</button>
-        <button onclick="document.getElementById('_visPalPicker').style.display='none'" style="flex:1;padding:5px;border:1px solid #ccc;border-radius:6px;background:#f5f5f5;cursor:pointer;font-size:11px">Close</button>
+        <button onclick="window._resetVisLayerPal('${layerId}')" style="flex:1;padding:5px;border:1px solid ${_b2};border-radius:6px;background:${_bg3};color:${_t};cursor:pointer;font-size:11px;font-family:'Manrope',sans-serif">Reset</button>
+        <button onclick="document.getElementById('_visPalPicker').style.display='none'" style="flex:1;padding:5px;border:1px solid ${_b2};border-radius:6px;background:${_bg3};color:${_t};cursor:pointer;font-size:11px;font-family:'Manrope',sans-serif">Close</button>
       </div>
     </div>
   `;
+  // Re-apply theme colours each time the picker is shown (handles theme toggle)
+  picker.style.background = themeValue("--bg", "#fff");
+  picker.style.borderColor = themeValue("--border2", "#d0d5d1");
   const scaleBar = document.getElementById("visScaleBar");
   if (scaleBar) {
     const rect = scaleBar.getBoundingClientRect();
@@ -539,8 +578,8 @@ function buildDisplayDatasets(results, layer) {
   const measuredDisplay = measured.map((point) => {
     const sampled = sampler(Number(point.latitude), Number(point.longitude));
     const directLayerValue = Number(point[layer.key]);
-    const displayValue = layer.id === "magnetic" && Number.isFinite(Number(point.raw_magnetic ?? point.magnetic))
-      ? Number(point.raw_magnetic ?? point.magnetic)
+    const displayValue = layer.id === "magnetic" && Number.isFinite(Number(point.magnetic))
+      ? Number(point.magnetic)
       : Number.isFinite(directLayerValue)
         ? directLayerValue
       : sampled;
@@ -558,8 +597,8 @@ function buildDisplayDatasets(results, layer) {
 
   const predictedDisplay = predicted.map((point) => {
     const directLayerValue = Number(point[layer.key]);
-    const displayValue = layer.id === "magnetic" && Number.isFinite(Number(point.raw_magnetic ?? point.predicted_magnetic ?? point.magnetic))
-      ? Number(point.raw_magnetic ?? point.predicted_magnetic ?? point.magnetic)
+    const displayValue = layer.id === "magnetic" && Number.isFinite(Number(point.predicted_magnetic ?? point.magnetic))
+      ? Number(point.predicted_magnetic ?? point.magnetic)
       : Number.isFinite(directLayerValue)
         ? directLayerValue
       : sampler(Number(point.latitude), Number(point.longitude));
@@ -589,16 +628,41 @@ function buildDisplayDatasets(results, layer) {
   const orderedTraverses = [...traverseMap.entries()]
     .sort(([, a], [, b]) => Number(a[0]?.[grouping.transverseKey] || 0) - Number(b[0]?.[grouping.transverseKey] || 0))
     .map(([key, points], index) => {
-      const sorted = [...points].sort((a, b) => Number(a[grouping.axisKey]) - Number(b[grouping.axisKey]));
-      const origin = sorted[0]
-        ? {lat: Number(sorted[0].latitude), lon: Number(sorted[0].longitude)}
+      // Preserve acquisition order first. Backend along_line_m can be distorted
+      // when a base-station revisit is interleaved within a single traverse.
+      const sorted = [...points].sort((a, b) => {
+        const aT = Number(a.time_s), bT = Number(b.time_s);
+        if (Number.isFinite(aT) && Number.isFinite(bT) && aT !== bT) return aT - bT;
+        const aA = Number(a.along_line_m), bA = Number(b.along_line_m);
+        if (Number.isFinite(aA) && Number.isFinite(bA) && aA !== bA) return aA - bA;
+        return Number(a[grouping.axisKey]) - Number(b[grouping.axisKey]);
+      });
+      // Use first survey point (not base station) as the x=0 origin.
+      const firstSurvey = sorted.find((p) => !p.is_base_station) || sorted[0];
+      const origin = firstSurvey
+        ? {lat: Number(firstSurvey.latitude), lon: Number(firstSurvey.longitude)}
         : {lat: 0, lon: 0};
       const traverseLabel = sorted.find((point) => point.traverse_label)?.traverse_label || `Traverse ${index + 1}`;
+      let runningDistance = 0;
+      let previousSurveyPoint = null;
       sorted.forEach((point, stationIndex) => {
         point.station_number = stationIndex + 1;
-        const dLat = (Number(point.latitude) - origin.lat) * 111320;
-        const dLon = (Number(point.longitude) - origin.lon) * 111320 * Math.cos(origin.lat * Math.PI / 180);
-        point.distance_along = Math.sqrt((dLat ** 2) + (dLon ** 2));
+        if (!point.is_base_station) {
+          if (previousSurveyPoint) {
+            const meanLat = (Number(previousSurveyPoint.latitude) + Number(point.latitude)) / 2;
+            const dLat = (Number(point.latitude) - Number(previousSurveyPoint.latitude)) * 111320;
+            const dLon = (Number(point.longitude) - Number(previousSurveyPoint.longitude)) * 111320 * Math.cos(meanLat * Math.PI / 180);
+            runningDistance += Math.sqrt((dLat ** 2) + (dLon ** 2));
+          }
+          point.distance_along = runningDistance;
+          previousSurveyPoint = point;
+        } else if (previousSurveyPoint) {
+          point.distance_along = runningDistance;
+        } else {
+          const dLat = (Number(point.latitude) - origin.lat) * 111320;
+          const dLon = (Number(point.longitude) - origin.lon) * 111320 * Math.cos(origin.lat * Math.PI / 180);
+          point.distance_along = Math.sqrt((dLat ** 2) + (dLon ** 2));
+        }
         point.traverse_label = traverseLabel;
         point.traverse_key = key;
       });
@@ -731,9 +795,11 @@ function renderInterpretation(layer, stats, displayData) {
   const roots = getRoots();
   if (!roots.interpretation) return;
   const results = appState.taskResults || {};
+  const mode = appState.activeVisualisation || "Contour";
   const regionalMethod = results?.regional_method_used
     ? titleCase(String(results.regional_method_used).replace(/_/g, " "))
     : "Not reported";
+  const profileValueNote = layerValueSourceNote(layer.id, mode);
 
   // Ensure persistent sub-containers exist. Only the layer/base cards are replaced on each call.
   let layerCard = document.getElementById("visLayerCard");
@@ -756,6 +822,7 @@ function renderInterpretation(layer, stats, displayData) {
       <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">${layer.label}</div>
       <div style="font-size:11px;color:var(--text2);line-height:1.75;margin-bottom:10px">${layer.description}</div>
       <div style="font-size:10.5px;color:var(--text3);line-height:1.7;margin-bottom:10px">${layerCaption(layer)}</div>
+      <div style="font-size:10.5px;color:var(--text3);line-height:1.7;margin-bottom:10px;padding:8px 9px;border-radius:8px;background:var(--bg3);border:1px solid var(--border)">${profileValueNote}</div>
       <div style="font-size:11px;color:var(--text3);line-height:1.8">
         <div style="display:flex;justify-content:space-between"><span>Measured points</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">${displayData.measured.length}</span></div>
         <div style="display:flex;justify-content:space-between"><span>Predicted points</span><span style="font-family:'JetBrains Mono',monospace;font-weight:700">${displayData.predicted.length}</span></div>
@@ -782,6 +849,65 @@ function renderInterpretation(layer, stats, displayData) {
   }
 }
 
+function buildVisualisationAIContext(results, layer, stats, displayData) {
+  const mode = appState.activeVisualisation || "Contour";
+  const traverses = displayData?.traverses || [];
+  const selectedTraverse = appState.activeTraverseFilter && appState.activeTraverseFilter !== "all"
+    ? traverses.find((traverse) => traverse.label === appState.activeTraverseFilter)
+    : traverses[0];
+  const surveyPoints = (selectedTraverse?.points || []).filter((point) => !point.is_base_station && Number.isFinite(Number(point.latitude)) && Number.isFinite(Number(point.longitude)));
+  const startPoint = surveyPoints[0] || null;
+  const endPoint = surveyPoints[surveyPoints.length - 1] || null;
+  const correctionReport = results?.correction_report || {};
+  const diurnal = correctionReport.diurnal || {};
+  return {
+    screen_label: "Visualisation",
+    active_view: VISUALISATION_TAB_LABELS[mode] || mode,
+    active_layer_id: layer?.id || null,
+    active_layer_label: layer?.label || null,
+    selected_traverse_label: selectedTraverse?.label || (appState.activeTraverseFilter || "All traverses"),
+    is_profile_plot: mode === "Line Profiles",
+    is_map_view: mode === "Map",
+    value_source: layerValueSourceNote(layer?.id, mode),
+    displayed_stats: stats ? {
+      min: stats.min,
+      max: stats.max,
+      mean: stats.mean,
+      std: stats.std,
+      range: stats.range,
+      point_count: stats.pointCount,
+    } : null,
+    profile_line: startPoint && endPoint ? {
+      start: {latitude: Number(startPoint.latitude), longitude: Number(startPoint.longitude)},
+      end: {latitude: Number(endPoint.latitude), longitude: Number(endPoint.longitude)},
+      length_m: Number(endPoint.distance_along) - Number(startPoint.distance_along || 0),
+    } : null,
+    traverse_count: traverses.length,
+    measured_point_count: displayData?.measured?.length || 0,
+    predicted_point_count: displayData?.predicted?.length || 0,
+    processing_summary: {
+      model_used: results?.model_used || null,
+      regional_method_used: results?.regional_method_used || null,
+      residual_definition: results?.residual_definition || null,
+      diurnal_method: diurnal.diurnal_method || null,
+      n_base_readings: diurnal.n_base_readings || null,
+      diurnal_interval_coverage_pct: diurnal.diurnal_interval_coverage_pct || null,
+    },
+  };
+}
+
+function getVisualisationAIContextFallback() {
+  const results = appState.taskResults || {};
+  const layers = buildAvailableLayers(results, appState.task || {});
+  const layer = getActiveLayer(layers);
+  const displayData = filterDisplayData(buildDisplayDatasets(results, layer));
+  const mode = appState.activeVisualisation || "Contour";
+  const stats = mode === "Map" || mode === "Line Profiles"
+    ? computeDisplayStats(displayData)
+    : computeLayerStats(layer);
+  return buildVisualisationAIContext(results, layer, stats, displayData);
+}
+
 async function renderLineProfiles(results, layer, stats) {
   const Plotly = await ensurePlotly();
   const host = resetVisualisationHost();
@@ -797,21 +923,53 @@ async function renderLineProfiles(results, layer, stats) {
     ? Math.max((stats.range || 0) * 0.25, stats.std || 0, 1)
     : 0;
   const traces = [];
+  let hasProfileGap = false;
   traverses.slice(0, 24).forEach((traverse, index) => {
-    const measured = traverse.points.filter((point) => point.value_type === "measured" && Number.isFinite(point.display_value));
+    const measured = traverse.points.filter((point) => point.value_type === "measured" && !point.is_base_station && Number.isFinite(point.display_value));
     const predicted = traverse.points.filter((point) => point.value_type === "predicted" && Number.isFinite(point.display_value));
     const offset = appState.stackProfiles ? index * offsetStep : 0;
 
     const makeCustom = (points) => points.map((point) => [point.station_number, point.display_value, point.value_type]);
+    const profileSpacing = measured
+      .slice(1)
+      .map((point, pointIndex) => Number(point.distance_along) - Number(measured[pointIndex].distance_along))
+      .filter((delta) => Number.isFinite(delta) && delta > 0)
+      .sort((a, b) => a - b);
+    const medianSpacing = profileSpacing.length
+      ? profileSpacing[Math.floor(profileSpacing.length / 2)]
+      : 0;
+    const gapThreshold = Math.max(25, medianSpacing * 6);
+    const segmentMeasured = (points) => {
+      if (!points.length) return {x: [], y: [], customdata: []};
+      const x = [];
+      const y = [];
+      const customdata = [];
+      points.forEach((point, pointIndex) => {
+        if (pointIndex > 0) {
+          const delta = Number(point.distance_along) - Number(points[pointIndex - 1].distance_along);
+          if (Number.isFinite(delta) && delta > gapThreshold) {
+            hasProfileGap = true;
+            x.push(null);
+            y.push(null);
+            customdata.push(null);
+          }
+        }
+        x.push(point.distance_along);
+        y.push(Number(point.display_value) + offset);
+        customdata.push([point.station_number, point.display_value, point.value_type]);
+      });
+      return {x, y, customdata};
+    };
     const hoverTemplate = appState.stackProfiles
       ? "Station #%{customdata[0]}<extra>%{fullData.name}</extra>"
       : `Station #%{customdata[0]}<br>${layer.shortLabel}: %{customdata[1]:.2f} ${layer.unit}<extra>%{fullData.name}</extra>`;
 
     if (measured.length) {
+      const segmented = segmentMeasured(measured);
       traces.push({
-        x: measured.map((point) => point.distance_along),
-        y: measured.map((point) => Number(point.display_value) + offset),
-        customdata: makeCustom(measured),
+        x: segmented.x,
+        y: segmented.y,
+        customdata: segmented.customdata,
         type: "scatter",
         mode: "lines+markers",
         name: `${traverse.label} - measured`,
@@ -850,6 +1008,18 @@ async function renderLineProfiles(results, layer, stats) {
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
     font: {color: plotTheme.text, size: 11},
+    annotations: hasProfileGap ? [{
+      x: 0,
+      y: 1.08,
+      xref: "paper",
+      yref: "paper",
+      text: "Profile lines break across large traverse gaps so unsupported intervals are not shown as continuous data.",
+      showarrow: false,
+      align: "left",
+      xanchor: "left",
+      yanchor: "bottom",
+      font: {size: 10, color: plotTheme.textMuted || plotTheme.text},
+    }] : [],
     xaxis: {
       title: "Distance along traverse (m)",
       gridcolor: plotTheme.grid,
@@ -956,7 +1126,7 @@ async function renderMapOverlay(results, layer) {
   const host = resetVisualisationHost();
   syncVisualisationMapControls(true);
   const displayData = filterDisplayData(buildDisplayDatasets(results, layer));
-  const measured = displayData.measured.map((point) => ({
+  const measured = displayData.measured.filter((point) => !point.is_base_station).map((point) => ({
     ...point,
     hide_value: false,
   }));
@@ -1013,7 +1183,7 @@ export async function loadVisualisation() {
     return;
   }
   const activeLayer = getActiveLayer(layers);
-  const stats = computeLayerStats(activeLayer);
+  let stats = computeLayerStats(activeLayer);
   const mode = appState.activeVisualisation || "Contour";
 
   // Detect single-traverse to show a hint (never force-redirect — let user choose their tab)
@@ -1022,8 +1192,6 @@ export async function loadVisualisation() {
 
   syncVisualisationTabs(mode);
 
-  renderStats(activeLayer, stats);
-  renderHeader(results, activeLayer, stats);
   renderLayerBar(layers, activeLayer);
   renderLayerControls(layers, activeLayer, mode);
 
@@ -1050,7 +1218,15 @@ export async function loadVisualisation() {
     await renderPlot(mode, results, activeLayer);
     displayData = filterDisplayData(buildDisplayDatasets(results, activeLayer));
   }
+  if (mode === "Map" || mode === "Line Profiles") {
+    stats = computeDisplayStats(displayData);
+  }
+  renderStats(activeLayer, stats);
+  renderHeader(results, activeLayer, stats);
   renderInterpretation(activeLayer, stats, displayData);
+  if (_visChat) {
+    _visChat.context = buildVisualisationAIContext(results, activeLayer, stats, displayData);
+  }
   if (_visChat?.refresh) {
     _visChat.refresh();
   }
@@ -1064,7 +1240,11 @@ export function initVisualisation() {
     const sendEl = document.getElementById("visAISend");
     const bodyEl = document.getElementById("visAIBody");
     if (inputEl && sendEl && bodyEl && !_visChat) {
-      _visChat = initAIChat(bodyEl, inputEl, sendEl, {location: "visualisation"});
+      _visChat = initAIChat(bodyEl, inputEl, sendEl, {
+        location: "visualisation",
+        buildContext: () => _visChat?.context || getVisualisationAIContextFallback(),
+      });
+      _visChat.context = {};
     }
   };
   // Wire immediately if DOM is ready, otherwise retry after first render

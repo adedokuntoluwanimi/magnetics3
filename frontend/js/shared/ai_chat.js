@@ -25,7 +25,7 @@ function writeHistory(location, history) {
   }
 }
 
-export function initAIChat(bodyEl, inputEl, sendEl, {location}) {
+export function initAIChat(bodyEl, inputEl, sendEl, {location, buildContext = null}) {
   let busy = false;
   let history = readHistory(location);
 
@@ -63,6 +63,7 @@ export function initAIChat(bodyEl, inputEl, sendEl, {location}) {
         location,
         question: question || null,
         history,
+        ui_context: typeof buildContext === "function" ? (buildContext() || {}) : {},
       });
 
       const fullText = (res.message && res.message.trim()) ? res.message : res.summary;

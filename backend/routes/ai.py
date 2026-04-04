@@ -25,6 +25,7 @@ def respond_ai(payload: AuroraRequest, service=Depends(get_ai_service)) -> dict:
             location=payload.location,
             question=payload.question,
             history=payload.history or [],
+            ui_context=payload.ui_context or {},
         ).model_dump(mode="json")
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

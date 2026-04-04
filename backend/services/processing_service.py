@@ -116,7 +116,11 @@ def _infer_base_station_mask(frame: pd.DataFrame, lon_col: str, lat_col: str) ->
     lat = pd.to_numeric(frame.get(lat_col), errors="coerce")
     valid = lon.notna() & lat.notna()
     if valid.any():
-        tolerance = 1.0
+        # Bin to ~10 m resolution (0.0001°) so only truly co-located readings
+        # (e.g. a stationary base station recording at the same spot over time)
+        # are flagged.  A 1° tolerance (~111 km) would incorrectly mark all
+        # points in a local survey as base station.
+        tolerance = 0.0001
         coord_key = (lon[valid] / tolerance).round().astype("Int64").astype(str) + "," + (lat[valid] / tolerance).round().astype("Int64").astype(str)
         repeated = set(coord_key.value_counts()[lambda counts: counts > 1].index)
         repeated_mask = pd.Series(False, index=frame.index, dtype=bool)
@@ -1258,14 +1262,41 @@ class ProcessingService:
         along_m = np.zeros(len(cleaned), dtype=np.float64)
         for line_id, idx in cleaned.groupby("_line_id").groups.items():
             line = cleaned.loc[idx]
-            lon = line["longitude"].to_numpy(dtype=np.float64)
-            lat = line["latitude"].to_numpy(dtype=np.float64)
             if len(line) <= 1:
                 continue
-            dlat = np.diff(lat) * 111_320.0
-            dlon = np.diff(lon) * 111_320.0 * np.cos(np.radians(np.nanmean(lat)))
-            cumulative = np.concatenate([[0.0], np.cumsum(np.sqrt(dlat ** 2 + dlon ** 2))])
-            along_m[np.asarray(idx)] = cumulative
+
+            base_mask = (
+                pd.to_numeric(line.get("__is_base_station__", 0), errors="coerce")
+                .fillna(0)
+                .astype(int)
+                .to_numpy(dtype=np.int64)
+                > 0
+            )
+            survey_positions = np.flatnonzero(~base_mask)
+            if survey_positions.size == 0:
+                continue
+
+            line_along = np.zeros(len(line), dtype=np.float64)
+            running_distance = 0.0
+            previous_survey = None
+
+            for local_pos, row in enumerate(line.itertuples(index=False)):
+                if not base_mask[local_pos]:
+                    if previous_survey is not None:
+                        mean_lat = (float(previous_survey.latitude) + float(row.latitude)) / 2.0
+                        dlat = (float(row.latitude) - float(previous_survey.latitude)) * 111_320.0
+                        dlon = (
+                            (float(row.longitude) - float(previous_survey.longitude))
+                            * 111_320.0
+                            * math.cos(math.radians(mean_lat))
+                        )
+                        running_distance += math.sqrt((dlat ** 2) + (dlon ** 2))
+                    line_along[local_pos] = running_distance
+                    previous_survey = row
+                else:
+                    line_along[local_pos] = running_distance
+
+            along_m[np.asarray(idx)] = line_along
         cleaned["along_line_m"] = along_m
 
         non_monotonic_lines = 0
@@ -1561,7 +1592,8 @@ class ProcessingService:
                 t_bs = bs_sorted["time_s"].to_numpy(dtype=np.float64)
                 m_bs = bs_sorted["magnetic"].to_numpy(dtype=np.float64)
                 if t_bs.size:
-                    reference_value = float(m_bs[0])
+                    # Median of all base readings is more robust than the first reading alone.
+                    reference_value = float(np.nanmedian(m_bs))
                     survey_t = survey["time_s"].fillna(t_bs[0]).to_numpy(dtype=np.float64)
                     gaps = np.diff(t_bs)
                     max_gap = float(np.max(gaps)) if gaps.size else 0.0
@@ -1575,25 +1607,23 @@ class ProcessingService:
                     segment_rows = []
                     leading_hold_count = 0
                     trailing_hold_count = 0
+                    # Flag: fall through to FFT when there is only one base reading
+                    # because a single time-point cannot define a temporal trend.
+                    _use_fft_fallback = False
 
                     if len(t_bs) == 1:
-                        interpolated_values[:] = reference_value
-                        interval_offsets[:] = interpolated_values - reference_value
-                        corrected_values[:] = before - interval_offsets
-                        report["warnings"].append("Only one valid base reading was available; constant-base correction was used.")
+                        report["warnings"].append(
+                            "Only one valid base reading was available; a temporal trend cannot be "
+                            "derived from a single point. FFT-based diurnal estimation is used instead."
+                        )
                         report.update(
                             {
-                                "status": "completed",
-                                "algorithm": "single_base_constant",
-                                "diurnal_method": "single_base_constant",
-                                "affected_points": int(len(survey)),
                                 "n_base_readings": 1,
                                 "n_base_intervals": 0,
-                                "diurnal_reference_value": reference_value,
-                                "diurnal_interval_coverage_pct": 100.0 if survey_t.size else 0.0,
                                 "diurnal_interval_based_applied": False,
                             }
                         )
+                        _use_fft_fallback = True
                     else:
                         for index in range(len(t_bs) - 1):
                             start_t = float(t_bs[index])
@@ -1669,40 +1699,41 @@ class ProcessingService:
                             }
                         )
 
-                    survey["magnetic"] = corrected_values
-                    survey["diurnal_offset"] = interval_offsets
-                    survey["interpolated_base_magnetic"] = interpolated_values
-                    out = pd.concat([bs, survey]).sort_values("time_s").reset_index(drop=True)
-                    corrected_finite = corrected_values[np.isfinite(corrected_values)]
-                    before_finite = before[np.isfinite(before)]
-                    interp_finite = interpolated_values[np.isfinite(interpolated_values)]
-                    residual_before = float(np.nanstd(before_finite)) if before_finite.size else 0.0
-                    residual_after = float(np.nanstd(corrected_finite)) if corrected_finite.size else residual_before
-                    report["residual_drift_before"] = residual_before
-                    report["residual_drift_after"] = residual_after
-                    report["quality"] = float(max(0.0, min(1.0, (report["diurnal_interval_coverage_pct"] / 100.0 * 0.7) + (0.3 if residual_after <= residual_before else 0.1))))
-                    report["segments"] = segment_rows
-                    report["interpolated_base_summary"] = _metric_summary(interp_finite) if interp_finite.size else _metric_summary(np.array([], dtype=np.float64))
-                    report["corrected_by_interval_points"] = int(np.count_nonzero(interval_mask))
-                    report["diurnal_max_correction_nT"] = float(np.nanmax(np.abs(interval_offsets))) if interval_offsets.size else 0.0
-                    if max_gap > 3600.0 * 2:
-                        report["warnings"].append("Base-station data contain gaps larger than two hours.")
-                    if not np.all(np.isfinite(corrected_values)):
-                        report["warnings"].append("Non-finite values appeared during diurnal correction.")
-                    logger.info(
-                        "Diurnal correction: method=%s, base_readings=%d, intervals=%d, corrected_by_interval=%d, coverage=%.1f%%, max_abs_correction=%.3f nT",
-                        report["diurnal_method"],
-                        report["n_base_readings"],
-                        report["n_base_intervals"],
-                        report.get("corrected_by_interval_points", 0),
-                        report["diurnal_interval_coverage_pct"],
-                        report["diurnal_max_correction_nT"],
-                    )
-                    _proc_log("3.2.diurnal", out["magnetic"].to_numpy(dtype=np.float64))
-                    out.attrs["diurnal_report"] = report
-                    if report["diurnal_method"] == "single_base_constant":
-                        return out, "diurnal correction via single-base constant reference"
-                    return out, "diurnal correction via interval-based consecutive base interpolation"
+                    if not _use_fft_fallback:
+                        survey["magnetic"] = corrected_values
+                        survey["diurnal_offset"] = interval_offsets
+                        survey["interpolated_base_magnetic"] = interpolated_values
+                        out = pd.concat([bs, survey]).sort_values("time_s").reset_index(drop=True)
+                        corrected_finite = corrected_values[np.isfinite(corrected_values)]
+                        before_finite = before[np.isfinite(before)]
+                        interp_finite = interpolated_values[np.isfinite(interpolated_values)]
+                        residual_before = float(np.nanstd(before_finite)) if before_finite.size else 0.0
+                        residual_after = float(np.nanstd(corrected_finite)) if corrected_finite.size else residual_before
+                        report["residual_drift_before"] = residual_before
+                        report["residual_drift_after"] = residual_after
+                        report["quality"] = float(max(0.0, min(1.0, (report["diurnal_interval_coverage_pct"] / 100.0 * 0.7) + (0.3 if residual_after <= residual_before else 0.1))))
+                        report["segments"] = segment_rows
+                        report["interpolated_base_summary"] = _metric_summary(interp_finite) if interp_finite.size else _metric_summary(np.array([], dtype=np.float64))
+                        report["corrected_by_interval_points"] = int(np.count_nonzero(interval_mask))
+                        report["diurnal_max_correction_nT"] = float(np.nanmax(np.abs(interval_offsets))) if interval_offsets.size else 0.0
+                        if max_gap > 3600.0 * 2:
+                            report["warnings"].append("Base-station data contain gaps larger than two hours.")
+                        if not np.all(np.isfinite(corrected_values)):
+                            report["warnings"].append("Non-finite values appeared during diurnal correction.")
+                        logger.info(
+                            "Diurnal correction: method=%s, base_readings=%d, intervals=%d, corrected_by_interval=%d, coverage=%.1f%%, max_abs_correction=%.3f nT",
+                            report["diurnal_method"],
+                            report["n_base_readings"],
+                            report["n_base_intervals"],
+                            report.get("corrected_by_interval_points", 0),
+                            report["diurnal_interval_coverage_pct"],
+                            report["diurnal_max_correction_nT"],
+                        )
+                        _proc_log("3.2.diurnal", out["magnetic"].to_numpy(dtype=np.float64))
+                        out.attrs["diurnal_report"] = report
+                        if report["diurnal_method"] == "single_base_constant":
+                            return out, "diurnal correction via single-base constant reference"
+                        return out, "diurnal correction via interval-based consecutive base interpolation"
 
         # FFT physical fallback
         if has_time:

@@ -314,6 +314,12 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
 .btn-white{background:#fff;color:var(--g600);border:none}
 .btn-white:hover{background:var(--g50);transform:translateY(-1px)}
 
+/* Themed inputs and selects */
+input[type="number"],input[type="text"],input[type="search"],select{background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-family:'Manrope',sans-serif;font-size:12px;padding:5px 8px;outline:none;transition:border-color 0.15s,background 0.15s}
+input[type="number"]:focus,input[type="text"]:focus,select:focus{border-color:var(--g400);box-shadow:0 0 0 2px rgba(45,170,82,0.12)}
+input[type="number"]::placeholder,input[type="text"]::placeholder{color:var(--text4)}
+select option{background:var(--bg);color:var(--text)}
+
 /* MAP PREVIEW (Preview screen) */
 .map-preview-wrap{border-radius:var(--rl);overflow:hidden;border:1px solid var(--border);background:var(--bg3);position:relative}
 .map-attribution{position:absolute;bottom:6px;right:8px;font-size:9px;color:rgba(0,0,0,0.45);font-family:'Manrope',sans-serif;font-weight:600;background:rgba(255,255,255,0.8);padding:2px 5px;border-radius:3px}
@@ -516,7 +522,6 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
             <div class="hero-sub">Magnetic Data Processing Platform</div>
             <div class="hero-btns">
               <button class="btn btn-g" style="padding:12px 28px;font-size:13px" onclick="openProjectsHub()">Projects</button>
-              <button class="btn btn-out" style="padding:12px 22px;font-size:13px" onclick="openProjectsHub()">Open project</button>
             </div>
           </div>
           <div class="hsec" style="text-align:center">
@@ -544,7 +549,7 @@ html,body{height:100%;font-family:'Manrope',sans-serif;font-size:15px;background
           <div class="hsec" style="text-align:center">
             <div class="hstitle" style="margin-bottom:8px">Ready to process your survey?</div>
             <div style="font-size:13px;color:var(--text3);margin-bottom:22px;font-weight:500">Open your projects hub, create a project, upload your CSV, and run the full pipeline.</div>
-            <button class="btn btn-g" style="padding:12px 30px;font-size:13px" onclick="openProjectsHub()">Open projects</button>
+            <button class="btn btn-g" style="padding:12px 30px;font-size:13px" onclick="openProjectsHub()">Projects</button>
           </div>
         </div>
       </div>
