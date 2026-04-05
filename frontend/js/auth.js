@@ -2,7 +2,8 @@ import {initializeApp} from "https://www.gstatic.com/firebasejs/11.6.0/firebase-
 import {
   getAuth,
   onAuthStateChanged,
-  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   GoogleAuthProvider,
@@ -49,7 +50,13 @@ export async function authFetch(url, options = {}) {
 }
 
 export async function signInWithGoogle() {
-  await signInWithPopup(auth, googleProvider);
+  // Use redirect — popup is unreliable on custom domains not hosted on Firebase Hosting.
+  // The page will navigate away; getGoogleRedirectResult() must be called on return.
+  await signInWithRedirect(auth, googleProvider);
+}
+
+export async function getGoogleRedirectResult() {
+  return getRedirectResult(auth);
 }
 
 export async function signInWithEmail(email, password) {

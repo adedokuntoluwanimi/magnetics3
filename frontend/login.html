@@ -501,11 +501,20 @@ html,body{height:100%;overflow:hidden;font-family:'Inter',sans-serif;-webkit-fon
 </div>
 
 <script type="module">
-import {signInWithGoogle, signInWithEmail, signUpWithEmail, waitForAuth} from "/frontend/js/auth.js";
+import {signInWithGoogle, getGoogleRedirectResult, signInWithEmail, signUpWithEmail, waitForAuth} from "/frontend/js/auth.js";
 
-waitForAuth().then((user) => {
+// On load: check if returning from a Google redirect
+(async () => {
+  try {
+    const result = await getGoogleRedirectResult();
+    if (result?.user) { window.location.replace("/"); return; }
+  } catch (err) {
+    showError(friendlyError(err.code));
+  }
+  // Not a redirect return — check if already signed in
+  const user = await waitForAuth();
   if (user) window.location.replace("/");
-});
+})();
 
 window.switchTab = (tab) => {
   const signin = tab === "signin";
@@ -574,10 +583,11 @@ window.doSignup = async () => {
   catch (err) { showError(friendlyError(err.code)); setLoading("btnSignup", false); }
 };
 
+// Redirect-based Google sign-in — page navigates away, no popup
 window.doGoogle = async () => {
   hideError();
-  try { await signInWithGoogle(); window.location.replace("/"); }
-  catch (err) { if (err.code !== "auth/popup-closed-by-user") showError(friendlyError(err.code)); }
+  try { await signInWithGoogle(); }
+  catch (err) { showError(friendlyError(err.code)); }
 };
 
 document.addEventListener("keydown", (e) => {
