@@ -8,8 +8,25 @@ import {initSidebar, refreshSidebar} from "./sections/sidebar.js";
 import {initSetup} from "./sections/setup.js";
 import {loadVisualisation, initVisualisation} from "./sections/visualisation.js";
 import {appState} from "./state.js";
+import {waitForAuth, signOutUser, getCurrentUser} from "./auth.js";
 
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
+  const user = await waitForAuth();
+  if (!user) {
+    window.location.replace("/login");
+    return;
+  }
+
+  // Wire sign-out
+  window.signOut = async () => {
+    await signOutUser();
+    window.location.replace("/login");
+  };
+
+  // Show user display name if element exists
+  const userDisplay = document.getElementById("userDisplay");
+  if (userDisplay) userDisplay.textContent = user.displayName || user.email || "";
+
   initNavigation();
   initSidebar();
   initSetup();
@@ -20,16 +37,12 @@ window.addEventListener("DOMContentLoaded", () => {
   initWorkflowProgress();
   refreshSidebar()
     .then(async () => {
-      if (document.querySelector("[data-s=preview]")?.classList.contains("active")) {
-        await loadPreview();
-      }
-      if (appState.task) {
-        await loadProcessingView();
-        renderWorkflowProgress();
-      }
-      if (appState.task?.results?.data) {
-        await loadVisualisation();
-        await loadExportView();
+      const hash = location.hash.replace("#", "");
+      const saved = localStorage.getItem("gaiaCurrentScreen");
+      const validScreens = ["setup", "analysis", "preview", "processing", "visualisation", "export", "project", "projects"];
+      const target = (hash && validScreens.includes(hash)) ? hash : (saved && validScreens.includes(saved)) ? saved : null;
+      if (target) {
+        await window.go(target);
       }
     })
     .catch((error) => console.error(error));

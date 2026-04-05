@@ -5,11 +5,12 @@ Last updated: `2026-04-05`
 ## Live Snapshot
 
 - App URL:
-  `https://gaia-magnetics-348555315681.us-central1.run.app`
+  `https://magnetics.terracode-analytics.live`
+  (also `https://gaia-magnetics-348555315681.us-central1.run.app`)
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00106-jmm`
+  `gaia-magnetics-00114-rdc` (login redesign + auth, deployed 2026-04-05)
 - Region:
   `us-central1`
 - Infra project:
@@ -19,122 +20,99 @@ Last updated: `2026-04-05`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
-> Revision `gaia-magnetics-00106-jmm` is serving 100% traffic.
-
 ## Revision History (Recent)
 
 | Revision | What changed |
 |---|---|
-| `00096-sfz` | Export routing locked so live DOCX/PDF/PPTX generation uses direct Anthropic whenever the key exists |
-| `00097-thc` | Export pipeline hardened for truthful AI output, stronger provider failure handling, tighter scientific labels, cleaner DOCX/PDF/PPTX structure, and lower-token prompt payloads |
-| `00098-bt7` | Structured export-path observability added for provider failures and fallback outcomes |
-| `00099-r6r` | Anthropic export model corrected to `claude-sonnet-4-6` with startup preflight logging |
-| `00100-z9k` | Export JSON parser hardened for fenced JSON and safe object extraction |
-| `00101-lz8` | Wrapper-aware parsing improvements deployed, but live parse failures remained |
-| `00102-nx9` | Parse-forensics logging deployed for exact JSON decode diagnostics |
-| `00103-zvw` | Export page reworked so users choose from actual processed outputs before report generation |
-| `00104-8bb` | Truncation-aware retry and smaller split report/pptx package generation deployed |
-| `00105-qbj` | First block-based export generation rollout deployed |
-| `00106-jmm` | Smaller block prompts, wrapper unwrapping, and tighter block validation updates deployed |
+| `00106-jmm` | Smaller block prompts, wrapper unwrapping, tighter block validation |
+| `00107+` | Export block token budgets raised, `pptx_group_2` split into `2a`/`2b`, PPTX validation relaxed, Aurora chat `max_tokens` 1200→2400 |
+| `00110+` | Export UI reworked: removed static availability card and selection summary; dynamic processed outputs; camelCase→kebab-case data attribute fix for downloads |
+| `00111+` | Page transitions (fadeUp animation), screen persistence on refresh (localStorage + URL hash), re-entrancy guard on navigation |
+| `00112+` | Custom domain `magnetics.terracode-analytics.live` live; browser tab title V2 removed |
+| `00113+` | Firebase Authentication added (Google OAuth + email/password); `backend/auth.py`, `frontend/js/auth.js`, all API routes protected |
+| `00114-rdc` | Login page redesigned: blurred app UI ghost background, floating login card, proper Google logo, live password requirements indicator |
 
 ## Current Product State
 
 - FastAPI backend is live with modular `routes`, `services`, `models`, `gcp`, and `jobs`.
-- Frontend remains anchored on `frontend/index.html` with ES-module sections under `frontend/js/sections`.
-- Core workflow is live:
-  `Home -> Projects -> Setup -> Analysis -> Preview -> Processing -> Visualisation -> Export`
+- Frontend is a full SPA: `frontend/index.html` with ES-module sections under `frontend/js/sections`.
+- Core workflow is live: `Home → Projects → Setup → Analysis → Preview → Processing → Visualisation → Export`
+- Firebase Authentication is live: Google OAuth + email/password sign-in, all API routes protected by `verify_token`.
+- Custom domain `magnetics.terracode-analytics.live` is live and SSL-provisioned.
+- Screen state persists across refresh (localStorage + URL hash).
+- Page transitions use a subtle fadeUp animation.
 - Firestore stores project/task metadata and lightweight result references.
-- Full processing outputs are persisted to GCS `results.json`.
+- Full processing outputs persisted to GCS `results.json`.
 - Google Maps-backed preview and visualisation views are live.
-- User-visible AI branding remains `Aurora AI`.
+- Aurora AI branding retained throughout.
 
 ## Most Recent Completed Work
 
-### Scientific and UX fixes still live
+### Firebase Authentication (2026-04-05)
+- `frontend/js/auth.js` — Firebase JS SDK v11.6.0 from CDN; exports `waitForAuth`, `getIdToken`, `signInWithGoogle`, `signInWithEmail`, `signUpWithEmail`, `signOutUser`.
+- `backend/auth.py` — `verify_token` FastAPI dependency using `firebase-admin` with ADC (no service account key; org policy blocks key creation).
+- `backend/main.py` — All routes except `/health` and `/login` now require a valid Firebase ID token.
+- `backend/requirements.txt` — `firebase-admin==6.6.0` added.
+- `frontend/js/api.js` — Every request attaches `Authorization: Bearer <token>`; 401 triggers sign-out + redirect.
+- `frontend/js/app.js` — Auth gate on load; user display name in top nav; sign-out button.
 
-- Line profiles show `point.magnetic` instead of `raw_magnetic`.
-- Base station points are excluded from line profiles and map overlay.
-- Survey-only traverse distance is preserved in both backend processing and frontend line-profile display, so off-line base-station revisits no longer create fake gaps.
-- Point-based views (`Map`, `Line Profiles`) use displayed point values for sidebar stats and scale.
-- Grid-based views (`Contour`, `Heatmap`, `3D`) use grid-surface stats.
-- Home page shows a single `Projects` button.
+### Login Page Redesign (2026-04-05)
+- `frontend/login.html` — Full rewrite.
+  - Background: CSS-rendered ghost of the GAIA app (dark sidebar with nav, top bar, magnetic anomaly map with coloured contour rings, data cards) — blurred with `filter:blur(7px)`.
+  - Foreground: white floating card with brand strip, segmented tab control, email/password fields, live password requirements panel (uppercase, lowercase, number, special char, 8+ chars), proper 4-colour Google SVG logo on the Google button.
+  - No icons next to brand name. No "Jane Smith" placeholder.
+  - Full validation before submit; friendly error messages; Enter key support; loading states.
 
-### Aurora improvements still live
+### Export fixes (this session)
+- Removed static "Processed outputs available for export" card and "Selection summary" from export UI.
+- Removed "Drilling recommendations" from export narrative.
+- Dynamic processed output chips: only outputs matching the user's applied corrections appear.
+- Fixed camelCase→kebab-case data attribute bug (`data-exportOutput` → `data-export-output`) that was blocking downloads.
+- Export block token budgets raised significantly; `pptx_group_2` split into `2a`/`2b`.
+- PPTX slide density validation relaxed (bullets >4→>5, body >280→>400 chars).
+- Aurora chat `max_tokens` raised 1200→2400 to fix incomplete responses.
 
-- Preview Aurora rebuilds preview-side context from uploaded survey data.
-- Aurora receives explicit UI context from the frontend.
-- Visualisation Aurora can answer from the active layer, view mode, traverse selection, approximate line endpoints, displayed stats, displayed-value provenance, and key processing metadata.
-
-### Export improvements now live
-
-- Export generation for `DOCX`, `PDF`, and `PPTX` uses direct Anthropic whenever `ANTHROPIC_API_KEY` is present.
-- Cloud Run reads `ANTHROPIC_API_KEY` from Secret Manager secret `gaia-anthropic-api-key`.
-- The configured live export model is now `claude-sonnet-4-6`.
-- Startup/preflight export logging now reports whether the configured Anthropic model is available.
-- Export prompt/build logic reads `export_agent.md`.
-- Export-path observability now logs structured provider failures, parse failures, retry modes, validation rejection causes, and final outcomes.
-- The export page now surfaces actual generated output layers and lets users choose which processed outputs may appear in report exports before `DOCX`, `PDF`, or `PPTX` generation runs.
-- Export generation has been refactored away from one large package attempt into small report and PPTX block calls that are merged server-side.
-- Per-block fallback is now possible, so a failed block does not automatically collapse the entire package generation path.
-- CSV, GeoJSON, KMZ/KML, GDB-style, and map-image bundles include `metadata.json` and only generated, selected outputs.
+### Navigation / UX (this session)
+- Page transitions: `fadeUp 0.25s cubic-bezier(0.22,1,0.36,1)` animation on `.screen`.
+- Screen persistence on refresh: `localStorage` + URL hash. After sidebar hydration, `window.go(target)` restores the last screen.
+- Re-entrancy guard in `window.go` to prevent infinite navigation recursion.
+- Custom domain `magnetics.terracode-analytics.live` CNAME → Cloud Run, SSL auto-provisioned.
+- Browser tab title: "V2" removed.
 
 ## Active Investigation (Current)
 
-- Upload-time XLSX base-station detection is still weaker than processing-time detection because `_xlsx_to_csv_bytes` relies on bold formatting and can miss partially bold BS rows.
-- The live export failure is now clearly diagnosed as an export architecture/validation problem, not a provider-routing problem.
-- The latest checked live export on `00106-jmm` still ended with:
-  `export.path.outcome = anthropic_response_invalid_fallback_used`
-- Block-level live failures on 2026-04-05 showed:
-  - `project_setup` still truncating with `failure_class = truncated_json`
-  - `pptx_group_1` still truncating with `failure_class = truncated_json`
-  - `pptx_group_2` failing block validation with `missing_expected_section`
-  - final package validation failing with `pptx:Data and Survey Summary:slide_density`
-- Some blocks now succeed live:
-  - `executive_summary`
-  - `pptx_group_3`
-  - `pptx_group_4`
-- Files still generate, but they are still fallback-backed and should not be treated as trustworthy high-quality exports until the live outcome becomes:
-  `anthropic_success`
+- Export `anthropic_success` has not yet been confirmed in Cloud Logging — the camelCase download fix and token budget increases were deployed but a fresh export run hasn't been verified against logs yet.
+- Firebase authorized domain: `magnetics.terracode-analytics.live` must be added to Firebase Console → Authentication → Settings → Authorized domains for Google OAuth to work on the custom domain.
 
 ## Verification Status
 
-- Python syntax checks passed for the export-model, parser, block-generation, and export-selection updates.
-- Focused export/AI unit tests passed after the block-generation rollout.
-- Revisions `00098-bt7` through `00106-jmm` all deployed successfully to Cloud Run.
-- `/api/health` returned healthy after the recent deploys.
-- Cloud Run service now references secret-backed env:
-  `ANTHROPIC_API_KEY -> gaia-anthropic-api-key:latest`
-- Live Cloud Run logs now expose the exact current export blockers instead of generic fallback messages.
+- Auth gate confirmed working in browser.
+- Login page redesign confirmed live at `https://magnetics.terracode-analytics.live/login`.
+- All modified frontend files pass browser load (no console errors on main screens).
+- Export download fix (kebab-case chip attributes) deployed but not yet end-to-end verified.
 
 ## Important Open Items
 
-1. **Fix `_xlsx_to_csv_bytes`** - bold-only detection misses partially-bold BS rows. It should also check for `BS`/`base` text in row content.
-2. **Finish the block export architecture** - split the still-failing `project_setup` and `pptx_group_1` blocks into even smaller generation units.
-3. **Resolve PPTX validation friction** - current live package validation still rejects `Data and Survey Summary` with `slide_density`, and `pptx_group_2` can fail `missing_expected_section`.
-4. **Reach a real live Anthropic success** - do not treat file generation as success. The export path is only considered fixed when Cloud Logging shows:
-   `export.path.outcome = anthropic_success`
-5. **Fresh live artifact QA after success** - once `anthropic_success` is reached, inspect a real `DOCX/PDF/PPTX` set from the frontend.
-6. **Browser-QA Aurora** - verify Preview and Visualisation chat answers against the exact screen state.
-7. **Re-process the test dataset** - rerun on the current live revision after the export work stabilizes so saved outputs and exports reflect the latest code.
-8. Native FileGDB output is still not implemented; the current `gdb_bundle` is a geospatial delivery bundle with feature-class-style GeoJSON members.
+1. **Add custom domain to Firebase authorized domains** — `magnetics.terracode-analytics.live` must be added in Firebase Console → Authentication → Settings → Authorized domains. Google OAuth will fail on the custom domain without this.
+2. **Verify export download end-to-end** — test that a real export job produces a downloadable file without "Choose at least one processed output" error.
+3. **Confirm `anthropic_success` in Cloud Logging** — run a fresh export and check logs for `export.path.outcome = anthropic_success`.
+4. **Fix `_xlsx_to_csv_bytes` bold detection** — add text-based fallback for partially-bold BS rows.
+5. **Browser QA on Aurora** — verify Preview and Visualisation chat answers against active screen state.
+6. **Re-process known dataset** — rerun after export stabilises.
+7. Native FileGDB output not yet implemented; `gdb_bundle` uses feature-class-style GeoJSON.
 
 ## Main Files Most Relevant Right Now
 
 ### Backend
-
-- `backend/config.py`
-- `backend/gcp/vertex_ai.py`
-- `backend/services/container.py`
-- `backend/services/ai_service.py`
-- `backend/services/export_service.py`
-- `backend/services/processing_service.py`
-- `backend/services/task_service.py`
-- `backend/models/ai.py`
+- `backend/auth.py` — Firebase token verification (new)
+- `backend/main.py` — Route registration + auth dependencies
+- `backend/services/ai_service.py` — Block-based export generation, Aurora chat
+- `backend/services/export_service.py` — DOCX/PDF/PPTX builders
 
 ### Frontend
-
-- `frontend/index.html`
-- `frontend/js/shared/ai_chat.js`
-- `frontend/js/sections/preview.js`
-- `frontend/js/sections/visualisation.js`
-- `frontend/js/sections/export.js`
+- `frontend/login.html` — Login page (new)
+- `frontend/js/auth.js` — Firebase auth helpers (new)
+- `frontend/js/api.js` — Auth-aware request wrapper
+- `frontend/js/app.js` — App boot + auth gate
+- `frontend/js/sections/export.js` — Export selection and download
+- `frontend/js/sections/navigation.js` — Screen routing + persistence

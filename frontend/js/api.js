@@ -1,4 +1,11 @@
+import {getIdToken, signOutUser} from "./auth.js";
+
 async function parseResponse(response) {
+  if (response.status === 401) {
+    await signOutUser();
+    window.location.replace("/login");
+    throw new Error("Session expired.");
+  }
   if (response.ok) {
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("application/json")) {
@@ -22,7 +29,10 @@ async function parseResponse(response) {
 }
 
 async function request(path, options = {}) {
-  const response = await fetch(path, options);
+  const token = await getIdToken();
+  const headers = {...(options.headers || {})};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const response = await fetch(path, {...options, headers});
   return parseResponse(response);
 }
 

@@ -50,9 +50,12 @@ class ExportService:
         persisted = self._store.create_export_job(job.model_dump(mode="json"))
         artifacts_out = []
         for export_format in request.formats:
-            artifact = self._build_artifact(project, task, full_results, export_format, aurora, request)
-            if artifact:
-                artifacts_out.append(artifact.model_dump(mode="json"))
+            try:
+                artifact = self._build_artifact(project, task, full_results, export_format, aurora, request)
+                if artifact:
+                    artifacts_out.append(artifact.model_dump(mode="json"))
+            except Exception as exc:
+                log_event("ERROR", "Export artifact build failed", action="export.artifact.error", task_id=task_id, export_format=export_format, error=str(exc))
         completed = self._store.update_export_job(
             persisted["id"],
             {

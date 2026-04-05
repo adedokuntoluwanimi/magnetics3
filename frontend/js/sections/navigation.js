@@ -65,6 +65,11 @@ export function initNavigation() {
   const legacyToggleFS = window.toggleFS.bind(window);
   getProjectsCached().catch(() => null);
 
+  window.addEventListener("popstate", (e) => {
+    const screen = e.state?.screen;
+    if (screen) window.go(screen);
+  });
+
   window.goHome = () => window.go(document.querySelector("[data-s=home]"));
   window.openProjectSetup = () => {
     document.getElementById("sidebar")?.classList.remove("off");
@@ -139,10 +144,15 @@ export function initNavigation() {
     }
   };
 
+  let _goInProgress = false;
   window.go = async (element) => {
     let target = typeof element === "string" ? element : element?.dataset?.s;
     if (!target) {
       return null;
+    }
+    // Prevent re-entrant calls (e.g. setup callbacks calling window.go("setup"))
+    if (_goInProgress && target === window.cur) {
+      return target;
     }
     if (target === "projects") {
       const {openProjectsList} = await import("./sidebar.js");
@@ -167,9 +177,16 @@ export function initNavigation() {
       contextBadge.style.display = target !== "home" && appState.project ? "flex" : "none";
     }
     window.cur = target;
+    try {
+      if (history.state?.screen !== target) {
+        history.pushState({screen: target}, "", "#" + target);
+      }
+      localStorage.setItem("gaiaCurrentScreen", target);
+    } catch {}
     if (typeof window.setStatus === "function" && Array.isArray(window.sorder)) {
       window.setStatus(window.smap?.[target] || "Ready", window.sorder.indexOf(target) - 1);
     }
+    _goInProgress = true;
     try {
       hideGlobalNotice();
       if (target === "analysis") {
@@ -188,6 +205,8 @@ export function initNavigation() {
     } catch (error) {
       console.error(error);
       showGlobalNotice(error.message || "That screen could not load.");
+    } finally {
+      _goInProgress = false;
     }
     return target;
   };

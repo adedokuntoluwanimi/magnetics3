@@ -117,7 +117,7 @@ class AIService:
         messages.append({"role": "user", "content": question or "Provide the most helpful guidance for this screen."})
 
         try:
-            text = self._chat_client.generate(system_prompt=system_prompt, messages=messages, max_tokens=1200)
+            text = self._chat_client.generate(system_prompt=system_prompt, messages=messages, max_tokens=2400)
         except Exception as exc:
             logger.exception("Aurora chat generation failed", extra={"location": location, "task_id": task_id, "project_id": project_id, "error": str(exc)})
             try:
@@ -277,24 +277,25 @@ class AIService:
         if {"pdf", "docx"} & set(requested_keys):
             blocks.extend(
                 [
-                    {"name": "executive_summary", "doc_key": "report", "target_titles": [], "max_tokens": 360, "retry_max_tokens": 240},
-                    {"name": "project_setup", "doc_key": "report", "target_titles": ["Project Overview"], "max_tokens": 420, "retry_max_tokens": 280},
-                    {"name": "task_summary", "doc_key": "report", "target_titles": ["Data and Survey Summary"], "max_tokens": 420, "retry_max_tokens": 280},
-                    {"name": "processing_qa", "doc_key": "report", "target_titles": ["Processing Workflow Summary"], "max_tokens": 460, "retry_max_tokens": 320},
-                    {"name": "key_findings", "doc_key": "report", "target_titles": ["Key Findings"], "max_tokens": 420, "retry_max_tokens": 300},
-                    {"name": "result_layers", "doc_key": "report", "target_titles": layer_titles[:5], "max_tokens": 720, "retry_max_tokens": 460},
-                    {"name": "limitations", "doc_key": "report", "target_titles": ["Data Quality and Reliability"], "max_tokens": 420, "retry_max_tokens": 300},
-                    {"name": "recommendations", "doc_key": "report", "target_titles": ["Conclusions"], "max_tokens": 360, "retry_max_tokens": 260},
+                    {"name": "executive_summary", "doc_key": "report", "target_titles": [], "max_tokens": 480, "retry_max_tokens": 320},
+                    {"name": "project_setup", "doc_key": "report", "target_titles": ["Project Overview"], "max_tokens": 800, "retry_max_tokens": 520},
+                    {"name": "task_summary", "doc_key": "report", "target_titles": ["Data and Survey Summary"], "max_tokens": 640, "retry_max_tokens": 420},
+                    {"name": "processing_qa", "doc_key": "report", "target_titles": ["Processing Workflow Summary"], "max_tokens": 640, "retry_max_tokens": 420},
+                    {"name": "key_findings", "doc_key": "report", "target_titles": ["Key Findings"], "max_tokens": 560, "retry_max_tokens": 380},
+                    {"name": "result_layers", "doc_key": "report", "target_titles": layer_titles[:5], "max_tokens": 900, "retry_max_tokens": 580},
+                    {"name": "limitations", "doc_key": "report", "target_titles": ["Data Quality and Reliability"], "max_tokens": 560, "retry_max_tokens": 380},
+                    {"name": "recommendations", "doc_key": "report", "target_titles": ["Conclusions"], "max_tokens": 480, "retry_max_tokens": 320},
                 ]
             )
         if "pptx" in requested_keys:
             pptx_layers = layer_titles[:3]
             blocks.extend(
                 [
-                    {"name": "pptx_group_1", "doc_key": "pptx", "target_titles": ["Executive Summary"], "max_tokens": 340, "retry_max_tokens": 220},
-                    {"name": "pptx_group_2", "doc_key": "pptx", "target_titles": ["Project Overview", "Data and Survey Summary", "Processing Workflow Summary"], "max_tokens": 420, "retry_max_tokens": 280},
-                    {"name": "pptx_group_3", "doc_key": "pptx", "target_titles": ["Key Findings"] + pptx_layers, "max_tokens": 620, "retry_max_tokens": 380},
-                    {"name": "pptx_group_4", "doc_key": "pptx", "target_titles": ["Data Quality and Reliability", "Conclusions"], "max_tokens": 360, "retry_max_tokens": 240},
+                    {"name": "pptx_group_1", "doc_key": "pptx", "target_titles": ["Executive Summary"], "max_tokens": 640, "retry_max_tokens": 400},
+                    {"name": "pptx_group_2a", "doc_key": "pptx", "target_titles": ["Project Overview"], "max_tokens": 480, "retry_max_tokens": 320},
+                    {"name": "pptx_group_2b", "doc_key": "pptx", "target_titles": ["Data and Survey Summary", "Processing Workflow Summary"], "max_tokens": 640, "retry_max_tokens": 420},
+                    {"name": "pptx_group_3", "doc_key": "pptx", "target_titles": ["Key Findings"] + pptx_layers, "max_tokens": 760, "retry_max_tokens": 480},
+                    {"name": "pptx_group_4", "doc_key": "pptx", "target_titles": ["Data Quality and Reliability", "Conclusions"], "max_tokens": 480, "retry_max_tokens": 320},
                 ]
             )
         filtered: list[dict[str, Any]] = []
@@ -2451,7 +2452,7 @@ class AIService:
                         issues.append(f"{key}:{title}:diurnal_mislabel")
                 if key == "pptx":
                     bullets = section.get("bullets") or []
-                    if len(bullets) > 4 or len(str(section.get("body") or "")) > 280:
+                    if len(bullets) > 5 or len(str(section.get("body") or "")) > 400:
                         issues.append(f"{key}:{title}:slide_density")
             recommendations = " ".join(str(item) for item in (payload.get("recommendations") or []))
             if recommendations:

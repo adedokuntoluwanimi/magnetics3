@@ -3,6 +3,22 @@ import {renderWorkflowProgress} from "./progress.js";
 import {appState, setTask, setTaskResults} from "../state.js";
 import {formatBytes} from "../shared/format.js";
 
+// Map correction keys from analysis_config to output slugs that become available
+const CORRECTION_TO_SLUGS = {
+  diurnal: ["corrected_field"],
+  igrf: ["corrected_field"],
+  spike: ["corrected_field"],
+  lag: ["corrected_field"],
+  heading: ["corrected_field"],
+  level: ["corrected_field"],
+  micro_leveling: ["corrected_field"],
+  fft: ["filtered_surface"],
+  upward_continuation: ["upward_continuation"],
+  downward_continuation: ["downward_continuation"],
+  regional: ["regional_field", "residual_field"],
+  rtp: ["rtp"],
+};
+
 const CARD_TO_FORMAT = {
   "ec-pdf": "pdf",
   "ec-pptx": "pptx",
@@ -127,7 +143,7 @@ const NARRATIVE_DEFINITIONS = [
     key: "anomaly_catalogue",
     label: "Anomaly catalogue",
     optionKey: "include_anomaly_catalogue",
-    description: "Tabulate anomaly zones only when anomaly-supporting outputs exist.",
+    description: "Tabulate anomaly zones when anomaly-supporting outputs exist.",
     available: (results, outputs) => Boolean(results?.anomaly_catalogue_b64 || results?.anomalies || outputs.some((item) => item.slug === "residual_field")),
     defaultSelected: false,
   },
@@ -138,14 +154,6 @@ const NARRATIVE_DEFINITIONS = [
     description: "Include structural screening when residual or derivative layers exist.",
     available: (_results, outputs) => outputs.some((item) => ["residual_field", "analytic_signal", "fvd", "hd", "tilt_derivative"].includes(item.slug)),
     defaultSelected: true,
-  },
-  {
-    key: "drilling_recommendations",
-    label: "Drilling recommendations",
-    optionKey: "include_drilling_recommendations",
-    description: "Only include cautious follow-up recommendations when anomaly support exists.",
-    available: (results, outputs) => Boolean(results?.recommendations || outputs.some((item) => ["residual_field", "analytic_signal"].includes(item.slug))),
-    defaultSelected: false,
   },
   {
     key: "coverage_gap_analysis",
@@ -187,23 +195,19 @@ function getRoots() {
     count: document.getElementById("exCnt"),
     progress: document.getElementById("exportProg"),
     done: document.getElementById("exportDone"),
-    availabilityCard: document.getElementById("exportAvailabilityCard"),
-    availabilityList: document.getElementById("exportAvailabilityList"),
-    availabilityNote: document.getElementById("exportAvailabilityNote"),
   };
 }
 
 function ensureSelectionCards() {
-  const roots = getRoots();
-  const availabilityCard = roots.availabilityCard;
-  if (!availabilityCard) return {};
+  const anchor = document.getElementById("exportReportOptionsAnchor");
+  if (!anchor) return {};
   let outputsCard = document.getElementById("exportOutputsCard");
   if (!outputsCard) {
     outputsCard = document.createElement("div");
     outputsCard.id = "exportOutputsCard";
     outputsCard.className = "card card-g";
     outputsCard.style.marginBottom = "14px";
-    availabilityCard.insertAdjacentElement("afterend", outputsCard);
+    anchor.insertAdjacentElement("afterend", outputsCard);
   }
   let narrativeCard = document.getElementById("exportNarrativeCard");
   if (!narrativeCard) {
@@ -213,17 +217,9 @@ function ensureSelectionCards() {
     narrativeCard.style.marginBottom = "14px";
     outputsCard.insertAdjacentElement("afterend", narrativeCard);
   }
-  let summaryCard = document.getElementById("exportSummaryCard");
-  if (!summaryCard) {
-    summaryCard = document.createElement("div");
-    summaryCard.id = "exportSummaryCard";
-    summaryCard.className = "card card-sm";
-    summaryCard.style.marginBottom = "14px";
-    narrativeCard.insertAdjacentElement("afterend", summaryCard);
-  }
   outputsCard.innerHTML = `
-    <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px">Choose processed outputs for reports and presentations</div>
-    <div style="font-size:10.5px;color:var(--text3);line-height:1.7;margin-bottom:11px">Only the checked outputs will be handed to the report generator for PDF, DOCX, and PPTX creation.</div>
+    <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px">Processed outputs for reports and presentations</div>
+    <div style="font-size:10.5px;color:var(--text3);line-height:1.7;margin-bottom:11px">These are the outputs generated from your selected processing options. Uncheck any you don't want in the report.</div>
     <div id="exportOutputSelectionList" class="g2" style="gap:8px"></div>
   `;
   narrativeCard.innerHTML = `
@@ -232,15 +228,10 @@ function ensureSelectionCards() {
     <div id="exportNarrativeSelectionList" class="g2" style="gap:8px"></div>
     <div id="exportNarrativeNote" style="display:none;font-size:10.5px;color:var(--g600);line-height:1.7;margin-top:10px"></div>
   `;
-  summaryCard.innerHTML = `
-    <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px">Selection summary</div>
-    <div id="exportSelectionSummary" style="font-size:10.5px;color:var(--text3);line-height:1.7">Open a processed task to review which outputs are available for export.</div>
-  `;
   return {
     outputsList: document.getElementById("exportOutputSelectionList"),
     narrativeList: document.getElementById("exportNarrativeSelectionList"),
     narrativeNote: document.getElementById("exportNarrativeNote"),
-    summary: document.getElementById("exportSelectionSummary"),
   };
 }
 
@@ -295,9 +286,23 @@ function renderDownloads(job) {
 }
 
 function getAvailableOutputs(results) {
+  // Only show outputs that were actually generated by the processing run
+  // AND match what the user selected via corrections in analysis_config
+  const appliedCorrections = (appState.task?.analysis_config?.corrections || []).map((c) => c.toLowerCase());
+  const enabledSlugs = new Set();
+  // Always include corrected_field as base output
+  enabledSlugs.add("corrected_field");
+  // Add slugs based on which corrections were applied
+  for (const correction of appliedCorrections) {
+    for (const [key, slugs] of Object.entries(CORRECTION_TO_SLUGS)) {
+      if (correction.includes(key)) slugs.forEach((s) => enabledSlugs.add(s));
+    }
+  }
+  // Always include analytic_signal, tilt_derivative, total_gradient, fvd, hd if they exist in results
+  const derivativesSlugs = ["analytic_signal", "tilt_derivative", "total_gradient", "fvd", "hd", "uncertainty", "line_profiles"];
   return OUTPUT_DEFINITIONS
     .map((definition) => ({...definition, availableNow: definition.available(results)}))
-    .filter((definition) => definition.availableNow);
+    .filter((definition) => definition.availableNow && (enabledSlugs.has(definition.slug) || derivativesSlugs.includes(definition.slug)));
 }
 
 function getAvailableNarratives(results, outputs) {
@@ -357,10 +362,13 @@ function buildExportOptions(results) {
 
 function selectionChipHtml({label, description, selected, dataset}) {
   const attrs = Object.entries(dataset)
-    .map(([key, value]) => `data-${key}="${String(value).replace(/"/g, "&quot;")}"`)
+    .map(([key, value]) => {
+      const attrName = key.replace(/([A-Z])/g, "-$1").toLowerCase();
+      return `data-${attrName}="${String(value).replace(/"/g, "&quot;")}"`;
+    })
     .join(" ");
   return `
-    <div class="chk ${selected ? "on" : ""}" ${attrs} style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this); window.refreshExportSelectionSummary?.()">
+    <div class="chk ${selected ? "on" : ""}" ${attrs} style="margin-bottom:0;padding:9px 11px" onclick="toggleChk(this)">
       <div class="chk-box ${selected ? "on" : ""}">${selected ? "✓" : ""}</div>
       <div style="display:flex;flex-direction:column;gap:3px">
         <span class="chk-t" style="font-size:12px">${label}</span>
@@ -371,36 +379,18 @@ function selectionChipHtml({label, description, selected, dataset}) {
 }
 
 function renderExportAvailability(results) {
-  const roots = getRoots();
   const extraRoots = ensureSelectionCards();
-  if (!roots.availabilityList || !roots.availabilityNote || !extraRoots.outputsList || !extraRoots.narrativeList || !extraRoots.summary) {
+  if (!extraRoots.outputsList || !extraRoots.narrativeList) {
     return;
   }
   const outputs = getAvailableOutputs(results);
   const narratives = getAvailableNarratives(results, outputs);
 
-  roots.availabilityList.innerHTML = outputs.length
-    ? outputs.map((item) => `
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 9px;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
-        <div>
-          <div style="font-size:11px;color:var(--text);font-weight:700">${item.label}</div>
-          <div style="font-size:10px;color:var(--text3);line-height:1.55;margin-top:2px">${item.description}</div>
-        </div>
-        <span class="badge bg">Available</span>
-      </div>
-    `).join("")
-    : `<div style="font-size:10.5px;color:var(--text3);line-height:1.7">No processed outputs were found yet. Run processing first so export choices can be built from actual results.</div>`;
-
-  roots.availabilityNote.style.display = outputs.some((item) => item.slug === "regional_field") ? "block" : "none";
-  roots.availabilityNote.textContent = outputs.some((item) => item.slug === "regional_field")
-    ? "Regional and residual magnetic products will remain separate report choices. They will only be narrated if you leave them checked below."
-    : "";
-
   extraRoots.outputsList.innerHTML = outputs.length
     ? outputs.map((item) => selectionChipHtml({
       label: item.label,
       description: item.description,
-      selected: item.defaultSelected,
+      selected: true,
       dataset: {
         exportOutput: item.slug,
         exportLabel: item.label,
@@ -422,34 +412,13 @@ function renderExportAvailability(results) {
     : `<div style="font-size:10.5px;color:var(--text3);line-height:1.7">No optional narrative sections are supported by the current processed outputs.</div>`;
 
   const qaAvailable = narratives.some((item) => item.key === "qa_summary");
-  extraRoots.narrativeNote.style.display = qaAvailable ? "block" : "none";
-  extraRoots.narrativeNote.textContent = qaAvailable
-    ? "QA summary and fallback honesty remain important even when you keep the narrative selection minimal."
-    : "";
+  if (extraRoots.narrativeNote) {
+    extraRoots.narrativeNote.style.display = qaAvailable ? "block" : "none";
+    extraRoots.narrativeNote.textContent = qaAvailable
+      ? "QA summary and fallback honesty remain important even when you keep the narrative selection minimal."
+      : "";
+  }
 
-  renderExportSelectionSummary();
-}
-
-function renderExportSelectionSummary() {
-  const summaryNode = document.getElementById("exportSelectionSummary");
-  if (!summaryNode) return;
-  const formats = getSelectedFormats();
-  const outputs = getSelectedOutputs();
-  const narratives = getSelectedNarratives();
-  if (!formats.length) {
-    summaryNode.textContent = "Choose at least one export format to continue.";
-    return;
-  }
-  if (!outputs.length) {
-    summaryNode.textContent = "No processed outputs are currently selected for report-style exports. Pick at least one output layer before generating PDF, DOCX, or PPTX.";
-    return;
-  }
-  const reportFormats = formats.filter((format) => ["pdf", "pptx", "word"].includes(format));
-  const bundleFormats = formats.filter((format) => !["pdf", "pptx", "word"].includes(format));
-  summaryNode.textContent = `${formats.length} format${formats.length === 1 ? "" : "s"} selected. Report exports will use ${outputs.map((item) => item.label).join(", ")}${narratives.length ? `, with optional sections for ${narratives.map((item) => item.label).join(", ")}` : ""}. ${bundleFormats.length ? "Data bundles will still be created from the processed outputs that exist for the run." : ""}`.trim();
-  if (!reportFormats.length) {
-    summaryNode.textContent = `${formats.length} data-delivery format${formats.length === 1 ? "" : "s"} selected. Report narrative selections will be stored, but only bundle outputs will be generated in this run.`;
-  }
 }
 
 export async function loadExportView() {
@@ -527,8 +496,6 @@ export function initExport() {
   window.toggleEx = (card) => {
     card.classList.toggle("on");
     renderSelectionCount();
-    renderExportSelectionSummary();
   };
-  window.refreshExportSelectionSummary = renderExportSelectionSummary;
   window.runExport = runExport;
 }

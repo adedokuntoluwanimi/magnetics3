@@ -18,12 +18,14 @@ This file captures the current working context for `gaia-magnetics`.
 
 ## Live Deployment
 
-- Public URL:
+- Public URL (custom domain):
+  `https://magnetics.terracode-analytics.live`
+- Fallback Cloud Run URL:
   `https://gaia-magnetics-348555315681.us-central1.run.app`
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00106-jmm`
+  `gaia-magnetics-00114-rdc`
 - Region:
   `us-central1`
 - Infra project:
@@ -32,6 +34,8 @@ This file captures the current working context for `gaia-magnetics`.
   `app-01-488817-ai`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
+- Firebase project:
+  `app-01-488817` (same project; Firebase enabled)
 
 ## Deploy Command
 
@@ -39,16 +43,34 @@ This file captures the current working context for `gaia-magnetics`.
 powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd' run deploy gaia-magnetics --source 'c:\Users\Tolu\Documents\Terra Analytics\Magnetics Main\2\magnetics (main)\gaia-magnetics' --region us-central1 --project app-01-488817 --quiet"
 ```
 
-> Note: use `powershell -Command` with the explicit `gcloud.cmd` path because of spaces in the path on Windows.
+> Note: use `powershell -Command` with the explicit `gcloud.cmd` path because of spaces in the path on Windows. The bare `gcloud` alias resolves to a Windows Store stub and fails.
 
 ## Standing Constraints
 
 - Preserve the existing folder structure.
 - Use `frontend/index.html` as the shared UI shell.
-- Keep integrations real: Firestore, Cloud Storage, Cloud Run, Google Maps, Gemini chat, and Anthropic export generation.
+- Keep integrations real: Firestore, Cloud Storage, Cloud Run, Google Maps, Gemini chat, Anthropic export generation, Firebase Auth.
 - Do not reintroduce dummy data or misleading labels.
-- User-visible assistant branding should remain `Aurora AI`.
-- The frontend still mixes static shell markup and modular JS; meaningful changes often need both.
+- User-visible assistant branding must remain `Aurora AI`.
+- The frontend mixes static shell markup and modular JS; meaningful changes often need both.
+- No service account key creation — org policy blocks it. Use ADC everywhere.
+
+## Authentication Architecture
+
+### Frontend
+- Firebase JS SDK v11.6.0 loaded from `https://www.gstatic.com/firebasejs/11.6.0/`.
+- `frontend/js/auth.js` exports: `waitForAuth`, `getIdToken`, `signInWithGoogle`, `signInWithEmail`, `signUpWithEmail`, `signOutUser`.
+- `frontend/js/api.js` — every `request()` call attaches `Authorization: Bearer <token>`. 401 → sign-out + redirect to `/login`.
+- `frontend/js/app.js` — on boot, `waitForAuth()` gate. Unauthenticated users redirect to `/login`.
+- `frontend/login.html` — standalone login page served at `/login`. No shell dependencies.
+
+### Backend
+- `backend/auth.py` — `verify_token` FastAPI dependency. Extracts Bearer token, calls `firebase_auth.verify_id_token()`. Returns decoded claims on success, raises HTTP 401 on failure.
+- `firebase_admin.initialize_app()` with no credentials — uses ADC. Works on Cloud Run because the attached SA has `roles/firebase.sdkAdminServiceAgent`.
+- All routes except `/health/*` and `/login` are protected with `dependencies=[Depends(verify_token)]`.
+
+### Pending
+- `magnetics.terracode-analytics.live` must be added to Firebase Console → Authentication → Settings → Authorized domains for Google OAuth popup to work on the custom domain.
 
 ## Scientific Conventions
 
@@ -62,17 +84,12 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 
 ## Base Station Detection (Multi-layer)
 
-Detection happens in two places:
-
-### 1. At upload time - `task_service.py:_xlsx_to_csv_bytes`
-
+### 1. At upload time — `task_service.py:_xlsx_to_csv_bytes`
 - Converts `.xlsx` to CSV and adds `__is_base_station__`.
 - Detects BS rows by bold formatting.
-- Known gap: partially bold BS rows can still be missed.
-- Text-based BS detection still needs to be added here.
+- Known gap: partially bold BS rows can still be missed. Text-based BS detection (`BS`/`base` text) still needs adding.
 
-### 2. At processing time - `processing_service.py:_infer_base_station_mask`
-
+### 2. At processing time — `processing_service.py:_infer_base_station_mask`
 - Reads the existing `__is_base_station__` column.
 - Scans text/object columns for `bs`, `base`, `base station`, and `base_station`.
 - Uses coordinate repeat detection with a tight tolerance.
@@ -80,89 +97,56 @@ Detection happens in two places:
 ## Current Functional Shape
 
 ### Navigation and project flow
-
-- Core route sequence is:
-  `Home -> Projects -> Setup -> Analysis -> Preview -> Processing -> Visualisation -> Export`
-- Selected project and task IDs persist across refreshes.
-- Home hero uses a single `Projects` button.
+- Core route sequence: `Home → Projects → Setup → Analysis → Preview → Processing → Visualisation → Export`
+- Screen state persists across refresh: `localStorage` + URL hash. After sidebar hydration `window.go(target)` restores the last screen.
+- Page transitions: `fadeUp 0.25s cubic-bezier(0.22,1,0.36,1)` animation on `.screen` elements.
+- Re-entrancy guard (`_goInProgress`) in `window.go` prevents infinite recursion.
 
 ### Setup and analysis
-
 - Survey upload supports CSV/XLSX with coordinate mapping, raw-data mapping, and base-station handling.
 - Analysis surfaces interval-based diurnal behaviour, fallback expectations, and regional/residual method controls.
 
 ### Preview
-
 - Preview renders Google Maps-backed station maps.
 - Summary cards show survey traverses and predicted traverses separately.
-- Aurora chat is enabled on Preview.
-- Preview Aurora rebuilds station/base-station context from uploaded survey data instead of relying only on saved processed outputs.
+- Aurora chat enabled on Preview; rebuilds context from uploaded survey data.
 
 ### Processing
-
-- Diurnal correction: interval-based consecutive base-station interpolation is preferred; FFT fallback is used only when true base-station interval correction is unavailable.
-- Corrected, regional, and residual outputs are persisted separately.
+- Diurnal correction: interval-based consecutive base-station interpolation preferred; FFT fallback only when unavailable.
+- Corrected, regional, and residual outputs persisted separately.
 - Regional methods: `polynomial`, `trend`, `lowpass`, `igrf_context`.
-- QA and correction reporting expose diurnal method, interval coverage, regional method, and quality state.
 
 ### Visualisation
-
 - Line profiles show `point.magnetic`, not `raw_magnetic`.
-- Base station points are excluded from line profiles and map overlay.
-- Traverse x-axis uses first non-base-station point as origin, with survey-only distance accumulation so base-station revisits do not create fake gaps.
-- Point-based views (`Map`, `Line Profiles`) use displayed point values for stats and scale.
-- Grid-based views use grid-surface values for stats and scale.
-- Layers are grouped as `Main processed field`, `Regional field`, `Residual field`, and `Derived products`.
-- Aurora chat on Visualisation receives active layer, visual mode, traverse selection, approximate line endpoints, displayed stats, displayed-value provenance, and key processing metadata.
+- Base station points excluded from line profiles and map overlay.
+- Traverse x-axis uses survey-only distance accumulation.
+- Point-based views use displayed point values for stats/scale; grid-based views use grid-surface values.
+- Aurora chat receives active layer, view mode, traverse selection, approximate line endpoints, displayed stats, provenance, and processing metadata.
 
 ### Export
+- Export page lists actual processed output layers; user chooses which outputs appear in reports before generation.
+- Dynamic chip generation: only outputs matching the user's applied corrections are shown (not all possible outputs).
+- Download fix: chip data attributes written in kebab-case (`data-export-output`) to match CSS query selectors.
+- Removed: static availability card, selection summary, drilling recommendations section.
+- Export generation uses direct Anthropic for `DOCX`, `PDF`, `PPTX` with `ANTHROPIC_API_KEY` from Secret Manager.
+- Configured model: `claude-sonnet-4-6`.
+- Block-based generation with per-block fallback and server-side merge.
+- Token budgets raised significantly from previous session; `pptx_group_2` split into `2a`/`2b`.
+- PPTX validation relaxed (bullets ≤5, body ≤400 chars).
+- Aurora chat `max_tokens` raised to 2400 to fix incomplete responses.
 
-- Export jobs complete and bundle outputs are being generated.
-- The export page now lists actual processed output layers and lets the user choose which outputs may appear in report-style exports before `DOCX`, `PDF`, or `PPTX` generation runs.
-- Corrected, regional, and residual report content can be selected independently.
-- Export AI generation uses direct Anthropic for `DOCX`, `PDF`, and `PPTX` whenever `ANTHROPIC_API_KEY` is present.
-- Cloud Run gets `ANTHROPIC_API_KEY` from Secret Manager secret `gaia-anthropic-api-key`.
-- The configured export model is `claude-sonnet-4-6`.
-- Startup preflight logs whether the configured Anthropic model is available.
-- Export prompts use block-scoped compact contexts instead of one large verbose payload.
-- Export generation is now block-based:
-  - report blocks:
-    `executive_summary`, `project_setup`, `task_summary`, `processing_qa`, `key_findings`, `result_layers`, `limitations`, `recommendations`
-  - PPTX blocks:
-    `pptx_group_1`, `pptx_group_2`, `pptx_group_3`, `pptx_group_4`
-- Blocks are merged server-side into normalized `report_data` for the builders.
-- Export AI output is validated for placeholder text, raw dumps, unsupported sections, repeated passages, and misleading scientific labels before rendering.
-- DOCX/PDF/PPTX builders enforce ordering, PPTX density checks, and QA/fallback callouts.
-- CSV, GeoJSON, KMZ/KML, GDB-style, and map-image bundles include `metadata.json`.
-- Native FileGDB output is still not implemented; the current `gdb_bundle` is a geospatial delivery bundle with feature-class-style GeoJSON members.
-
-## Live Export Failure Context
-
-- The export provider/key routing is correct in Cloud Run.
-- The export model ID issue is fixed; live exports now reach Anthropic with `claude-sonnet-4-6`.
-- Structured export-path logging is live and now exposes provider failures, parse failures, retry modes, per-block outcomes, and validation rejection causes.
-- The dominant current failure is no longer provider routing. It is block-level parse and validation failure before a clean merged package can pass final validation.
-- On revision `00106-jmm`, the latest checked export for task `5f3ed2605e3144a19edc43f5c9af1ffa` still ended with:
-  `export.path.outcome = anthropic_response_invalid_fallback_used`
-- Live block results for that export were:
-  - `executive_summary`: success
-  - `pptx_group_3`: success
-  - `pptx_group_4`: success
-  - `project_setup`: parse failure, `failure_class = truncated_json`
-  - `pptx_group_1`: parse failure, `failure_class = truncated_json`
-  - `pptx_group_2`: validation failure, `missing_expected_section`
-- Final package validation also failed with:
-  - `pptx:Data and Survey Summary:slide_density`
-- The current export files are therefore still fallback-backed and should not be treated as trustworthy final-quality exports until the live outcome becomes:
-  `anthropic_success`
+### Login
+- `frontend/login.html` — served at `/login` by FastAPI, independent of the main shell.
+- Design: full-viewport blurred app UI ghost (CSS-rendered sidebar, top bar, magnetic anomaly map, data cards) as background; white floating login card in foreground.
+- No icons. No decorative logos.
+- Supports: email/password sign-in, email/password account creation, Google OAuth.
+- Password requirements: uppercase, lowercase, number, special character, 8+ chars — validated live with a checklist panel.
 
 ## Known Follow-Up Areas
 
-1. **Fix bold detection in `_xlsx_to_csv_bytes`** - add text-based fallback so `BS` or `base` in any cell also flags the row.
-2. **Split the still-failing export blocks further** - `project_setup` and `pptx_group_1` are still too large or too dense for reliable live success.
-3. **Resolve PPTX block/package validation tension** - `pptx_group_2` can fail `missing_expected_section`, and package validation can still fail `slide_density`.
-4. **Reach a true live Anthropic export success** - do not treat generated files as success unless Cloud Logging shows:
-   `export.path.outcome = anthropic_success`
-5. **Fresh live export verification after success** - once live Anthropic success is reached, inspect the actual `DOCX/PDF/PPTX` artifacts from the frontend.
-6. **Browser-QA Aurora** - confirm Preview and Visualisation answers match the exact active screen context.
-7. **Re-process the known dataset** - rerun on the current revision after the export path stabilizes.
+1. **Firebase authorized domain** — add `magnetics.terracode-analytics.live` to Firebase Console → Authentication → Settings → Authorized domains.
+2. **Verify export download** — end-to-end test: run export, download file, confirm no "Choose at least one processed output" error.
+3. **Confirm `anthropic_success`** — check Cloud Logging after a fresh export run for `export.path.outcome = anthropic_success`.
+4. **Fix `_xlsx_to_csv_bytes` bold detection** — add text-based BS row fallback.
+5. **Browser QA on Aurora** — Preview and Visualisation chat against real processed task.
+6. **Re-process known dataset** — after export stabilises.

@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<link rel="icon" type="image/png" href="/frontend/favicon.png">
+<title>GAIA Magnetics — Sign in</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --green:#1b6e38;--green-hover:#1f8043;--green-light:#25a050;
+  --text:#0d1b12;--text2:#3a5242;--text3:#6e8a76;--text4:#b0c4b8;
+  --surface:#ffffff;--surface2:#f8faf8;
+  --border:#dde8e0;--border2:#cddad2;
+  --red:#c0392b;--red-bg:#fef5f5;
+  --r:8px;
+}
+html,body{height:100%;overflow:hidden;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;}
+
+/* ══════════════════════════════════════════
+   BACKGROUND — blurred app UI ghost
+══════════════════════════════════════════ */
+.app-bg{
+  position:fixed;inset:0;
+  display:grid;
+  grid-template-columns:240px 1fr;
+  grid-template-rows:1fr;
+  filter:blur(7px) brightness(0.72) saturate(1.1);
+  transform:scale(1.04); /* hide blur edge artifacts */
+  pointer-events:none;user-select:none;
+  background:#111b14;
+}
+
+/* Sidebar */
+.bg-sidebar{
+  background:#101a12;
+  display:flex;flex-direction:column;
+  border-right:1px solid rgba(255,255,255,0.06);
+  padding:22px 0;
+  gap:4px;
+}
+.bg-sidebar-logo{
+  padding:0 20px 20px;
+  font-size:13px;font-weight:700;color:rgba(255,255,255,0.7);letter-spacing:-0.2px;
+  border-bottom:1px solid rgba(255,255,255,0.06);margin-bottom:8px;
+}
+.bg-sidebar-logo span{color:rgba(255,255,255,0.28);font-weight:400;}
+.bg-nav-item{
+  margin:0 10px;padding:9px 14px;border-radius:7px;
+  font-size:12px;font-weight:500;color:rgba(255,255,255,0.38);
+  display:flex;align-items:center;gap:10px;
+}
+.bg-nav-item.active{
+  background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.78);
+}
+.bg-nav-dot{
+  width:7px;height:7px;border-radius:50%;
+  background:currentColor;opacity:0.6;flex-shrink:0;
+}
+.bg-nav-item.active .bg-nav-dot{background:#4db870;opacity:1;}
+.bg-project{
+  margin:16px 10px 0;padding:12px 14px;border-radius:7px;
+  background:rgba(255,255,255,0.05);
+}
+.bg-project-label{font-size:9px;font-weight:600;letter-spacing:2px;color:rgba(255,255,255,0.25);text-transform:uppercase;margin-bottom:6px;}
+.bg-project-name{font-size:12px;font-weight:600;color:rgba(255,255,255,0.6);}
+.bg-project-sub{font-size:10.5px;color:rgba(255,255,255,0.28);margin-top:3px;}
+
+/* Main area */
+.bg-main{
+  display:flex;flex-direction:column;overflow:hidden;
+}
+
+/* Top bar */
+.bg-topbar{
+  height:52px;background:#13201a;
+  border-bottom:1px solid rgba(255,255,255,0.06);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 28px;flex-shrink:0;
+}
+.bg-topbar-title{font-size:13px;font-weight:700;color:rgba(255,255,255,0.65);}
+.bg-topbar-right{display:flex;gap:10px;}
+.bg-btn-sm{
+  padding:7px 14px;border-radius:6px;font-size:11.5px;font-weight:600;
+  background:rgba(255,255,255,0.07);color:rgba(255,255,255,0.4);
+}
+.bg-btn-sm.primary{background:#1b6e38;color:rgba(255,255,255,0.75);}
+
+/* Content canvas */
+.bg-canvas{
+  flex:1;position:relative;overflow:hidden;
+  background:#0e1a10;
+}
+
+/* Magnetic anomaly map simulation */
+.bg-map{
+  position:absolute;inset:0;
+  background:
+    radial-gradient(ellipse 55% 38% at 62% 44%, rgba(214,93,14,0.55) 0%, transparent 70%),
+    radial-gradient(ellipse 38% 28% at 38% 60%, rgba(30,144,255,0.45) 0%, transparent 65%),
+    radial-gradient(ellipse 45% 35% at 75% 25%, rgba(255,200,0,0.38) 0%, transparent 60%),
+    radial-gradient(ellipse 30% 22% at 22% 35%, rgba(0,200,100,0.35) 0%, transparent 55%),
+    radial-gradient(ellipse 25% 20% at 52% 72%, rgba(180,0,200,0.3) 0%, transparent 55%),
+    radial-gradient(ellipse 60% 50% at 50% 50%, rgba(20,60,30,0.9) 0%, #0e1a10 100%);
+}
+
+/* SVG contour lines */
+.bg-contours{
+  position:absolute;inset:0;opacity:0.22;
+}
+
+/* Grid overlay */
+.bg-grid{
+  position:absolute;inset:0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size:40px 40px;
+}
+
+/* Data cards strip at bottom */
+.bg-cards{
+  position:absolute;bottom:24px;left:24px;right:24px;
+  display:flex;gap:14px;
+}
+.bg-card{
+  flex:1;background:rgba(20,38,24,0.92);border:1px solid rgba(255,255,255,0.09);
+  border-radius:9px;padding:14px 16px;
+}
+.bg-card-label{font-size:9.5px;font-weight:600;letter-spacing:1.5px;color:rgba(255,255,255,0.28);text-transform:uppercase;margin-bottom:6px;}
+.bg-card-val{font-size:20px;font-weight:800;color:rgba(255,255,255,0.65);letter-spacing:-0.5px;}
+.bg-card-sub{font-size:10px;color:rgba(255,255,255,0.25);margin-top:4px;}
+.bg-card-bar{height:3px;border-radius:2px;background:rgba(255,255,255,0.08);margin-top:10px;overflow:hidden;}
+.bg-card-fill{height:100%;border-radius:2px;}
+
+/* Scale bar */
+.bg-scalebar{
+  position:absolute;bottom:110px;right:28px;
+  display:flex;flex-direction:column;align-items:flex-end;gap:3px;
+}
+.bg-scale-row{display:flex;align-items:center;gap:6px;}
+.bg-scale-label{font-size:9px;color:rgba(255,255,255,0.3);}
+.bg-scale-line{height:2px;border-radius:1px;background:rgba(255,255,255,0.18);}
+
+/* Compass */
+.bg-compass{
+  position:absolute;top:68px;right:24px;
+  width:36px;height:36px;border-radius:50%;
+  background:rgba(20,38,24,0.85);border:1px solid rgba(255,255,255,0.1);
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;color:rgba(255,255,255,0.4);
+}
+
+/* ══════════════════════════════════════════
+   OVERLAY
+══════════════════════════════════════════ */
+.overlay{
+  position:fixed;inset:0;
+  background:rgba(0,0,0,0.38);
+  backdrop-filter:blur(0px);
+  pointer-events:none;
+}
+
+/* ══════════════════════════════════════════
+   LOGIN CARD
+══════════════════════════════════════════ */
+.login-stage{
+  position:fixed;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  padding:24px;
+}
+.login-card{
+  width:100%;max-width:396px;
+  background:rgba(255,255,255,0.97);
+  border-radius:16px;
+  padding:36px 38px 32px;
+  box-shadow:0 24px 80px rgba(0,0,0,0.35),0 2px 12px rgba(0,0,0,0.15),0 0 0 1px rgba(255,255,255,0.6);
+  backdrop-filter:blur(2px);
+  position:relative;z-index:10;
+}
+
+/* Brand strip at top of card */
+.card-brand{
+  display:flex;align-items:baseline;gap:6px;margin-bottom:26px;
+}
+.card-brand-name{
+  font-size:15px;font-weight:800;color:var(--green);letter-spacing:-0.3px;
+}
+.card-brand-sep{width:4px;height:4px;border-radius:50%;background:var(--text4);margin:0 2px 1px;}
+.card-brand-sub{font-size:11px;font-weight:600;color:var(--text3);letter-spacing:0.2px;}
+
+.form-title{
+  font-size:22px;font-weight:800;color:var(--text);
+  letter-spacing:-0.5px;line-height:1.2;margin-bottom:5px;
+}
+.form-caption{
+  font-size:13px;color:var(--text3);line-height:1.55;margin-bottom:26px;
+}
+
+/* Segment control */
+.seg{
+  display:grid;grid-template-columns:1fr 1fr;
+  background:#f0f4f1;border:1.5px solid var(--border);
+  border-radius:8px;padding:3px;margin-bottom:24px;gap:2px;
+}
+.seg-btn{
+  padding:8.5px 0;font-size:12.5px;font-weight:600;
+  color:var(--text3);background:transparent;border:none;
+  border-radius:6px;cursor:pointer;transition:all 0.18s;
+  font-family:inherit;letter-spacing:0.05px;
+}
+.seg-btn.active{
+  background:var(--surface);color:var(--green);
+  box-shadow:0 1px 4px rgba(0,0,0,0.09),0 0 0 1px rgba(27,110,56,0.12);
+}
+
+/* Fields */
+.field{margin-bottom:13px;}
+.field-label{
+  display:block;font-size:10.5px;font-weight:700;
+  color:var(--text2);letter-spacing:0.5px;text-transform:uppercase;
+  margin-bottom:6px;
+}
+.field input{
+  width:100%;padding:10.5px 13px;
+  border:1.5px solid var(--border2);border-radius:var(--r);
+  background:#f9fbf9;color:var(--text);
+  font-size:13.5px;font-family:inherit;outline:none;
+  transition:border-color 0.15s,box-shadow 0.15s,background 0.15s;
+  -webkit-appearance:none;appearance:none;
+}
+.field input:focus{
+  border-color:var(--green-hover);background:#fff;
+  box-shadow:0 0 0 3px rgba(27,110,56,0.09);
+}
+.field input::placeholder{color:var(--text4);}
+
+/* Password requirements */
+.pw-reqs{
+  display:none;margin-top:9px;
+  padding:11px 13px;border-radius:7px;
+  background:#f4f8f5;border:1.5px solid #ddeae0;
+}
+.pw-reqs.visible{display:block;}
+.pw-reqs-label{
+  font-size:10px;font-weight:700;color:var(--text3);
+  letter-spacing:0.5px;text-transform:uppercase;margin-bottom:8px;
+}
+.pw-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px 10px;}
+.pw-req{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--text4);transition:color 0.15s;}
+.pw-req.met{color:var(--green-hover);}
+.pw-dot{
+  width:14px;height:14px;border-radius:50%;border:1.5px solid currentColor;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  transition:background 0.15s,border-color 0.15s;
+}
+.pw-req.met .pw-dot{background:var(--green-hover);border-color:var(--green-hover);}
+.pw-dot svg{width:7px;height:7px;stroke:#fff;stroke-width:2.5;fill:none;stroke-linecap:round;stroke-linejoin:round;opacity:0;transition:opacity 0.15s;}
+.pw-req.met .pw-dot svg{opacity:1;}
+
+/* Primary button */
+.btn-primary{
+  width:100%;padding:12.5px;border:none;border-radius:var(--r);
+  background:var(--green);color:#fff;
+  font-size:13.5px;font-weight:700;font-family:inherit;
+  cursor:pointer;letter-spacing:0.1px;margin-top:4px;
+  transition:background 0.15s,box-shadow 0.15s,transform 0.1s;
+}
+.btn-primary:hover{background:var(--green-hover);box-shadow:0 4px 18px rgba(27,110,56,0.32);}
+.btn-primary:active{transform:translateY(1px);}
+.btn-primary:disabled{opacity:0.45;cursor:not-allowed;transform:none;box-shadow:none;}
+
+/* OR divider */
+.or-row{
+  display:flex;align-items:center;gap:12px;margin:16px 0;
+  color:var(--text4);font-size:11px;font-weight:600;letter-spacing:0.5px;
+}
+.or-row::before,.or-row::after{content:'';flex:1;height:1px;background:var(--border);}
+
+/* Google button */
+.btn-google{
+  width:100%;padding:11px 16px;
+  border:1.5px solid var(--border2);border-radius:var(--r);
+  background:#fff;color:var(--text);
+  font-size:13.5px;font-weight:600;font-family:inherit;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;
+  transition:border-color 0.15s,box-shadow 0.15s,background 0.15s;
+}
+.btn-google:hover{border-color:#ccc;background:#fafafa;box-shadow:0 2px 10px rgba(0,0,0,0.07);}
+
+/* Error */
+.error-box{
+  display:none;margin-top:13px;padding:10px 13px;
+  border-radius:var(--r);background:var(--red-bg);
+  border:1px solid rgba(192,57,43,0.18);
+  font-size:12.5px;color:var(--red);line-height:1.5;
+}
+.error-box.show{display:block;}
+
+.terms-note{
+  margin-top:18px;font-size:11px;color:var(--text4);
+  text-align:center;line-height:1.65;
+}
+
+/* Mobile */
+@media(max-width:600px){
+  .login-card{padding:28px 24px 26px;border-radius:12px;}
+  .app-bg{display:none;}
+}
+</style>
+</head>
+<body>
+
+<!-- ── BLURRED APP UI BACKGROUND ── -->
+<div class="app-bg">
+  <!-- Sidebar -->
+  <div class="bg-sidebar">
+    <div class="bg-sidebar-logo">GAIA <span>Magnetics</span></div>
+    <div class="bg-nav-item active"><div class="bg-nav-dot"></div>Visualisation</div>
+    <div class="bg-nav-item"><div class="bg-nav-dot"></div>Setup</div>
+    <div class="bg-nav-item"><div class="bg-nav-dot"></div>Analysis</div>
+    <div class="bg-nav-item"><div class="bg-nav-dot"></div>Processing</div>
+    <div class="bg-nav-item"><div class="bg-nav-dot"></div>Export</div>
+    <div class="bg-project">
+      <div class="bg-project-label">Active project</div>
+      <div class="bg-project-name">Abeokuta North Survey</div>
+      <div class="bg-project-sub">Line spacing 200m · 4 lines</div>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="bg-main">
+    <div class="bg-topbar">
+      <div class="bg-topbar-title">Visualisation — Residual anomaly</div>
+      <div class="bg-topbar-right">
+        <div class="bg-btn-sm">RTP</div>
+        <div class="bg-btn-sm">1VD</div>
+        <div class="bg-btn-sm primary">Export</div>
+      </div>
+    </div>
+
+    <div class="bg-canvas">
+      <div class="bg-map"></div>
+      <div class="bg-grid"></div>
+
+      <!-- Contour lines SVG -->
+      <svg class="bg-contours" viewBox="0 0 900 600" preserveAspectRatio="xMidYMid slice">
+        <ellipse cx="560" cy="260" rx="210" ry="140" fill="none" stroke="#ff6a00" stroke-width="1.5"/>
+        <ellipse cx="560" cy="260" rx="160" ry="100" fill="none" stroke="#ff8800" stroke-width="1.2"/>
+        <ellipse cx="560" cy="260" rx="110" ry="65" fill="none" stroke="#ffaa00" stroke-width="1"/>
+        <ellipse cx="560" cy="260" rx="65" ry="38" fill="none" stroke="#ffcc44" stroke-width="0.8"/>
+        <ellipse cx="330" cy="360" rx="160" ry="110" fill="none" stroke="#1e90ff" stroke-width="1.5"/>
+        <ellipse cx="330" cy="360" rx="110" ry="75" fill="none" stroke="#44aaff" stroke-width="1.2"/>
+        <ellipse cx="330" cy="360" rx="65" ry="44" fill="none" stroke="#88ccff" stroke-width="1"/>
+        <ellipse cx="680" cy="160" rx="120" ry="80" fill="none" stroke="#ffdd00" stroke-width="1.3"/>
+        <ellipse cx="680" cy="160" rx="80" ry="52" fill="none" stroke="#ffee55" stroke-width="1"/>
+        <ellipse cx="180" cy="220" rx="90" ry="60" fill="none" stroke="#00cc77" stroke-width="1.2"/>
+        <ellipse cx="180" cy="220" rx="55" ry="36" fill="none" stroke="#44ee99" stroke-width="1"/>
+        <ellipse cx="480" cy="440" rx="100" ry="65" fill="none" stroke="#cc44ff" stroke-width="1.2"/>
+        <ellipse cx="480" cy="440" rx="62" ry="40" fill="none" stroke="#dd88ff" stroke-width="1"/>
+      </svg>
+
+      <div class="bg-compass">N</div>
+
+      <!-- Scale bar -->
+      <div class="bg-scalebar">
+        <div class="bg-scale-row">
+          <div class="bg-scale-label">0</div>
+          <div class="bg-scale-line" style="width:80px"></div>
+          <div class="bg-scale-label">2 km</div>
+        </div>
+      </div>
+
+      <!-- Data cards -->
+      <div class="bg-cards">
+        <div class="bg-card">
+          <div class="bg-card-label">Peak anomaly</div>
+          <div class="bg-card-val">+847 nT</div>
+          <div class="bg-card-sub">Above IGRF baseline</div>
+          <div class="bg-card-bar"><div class="bg-card-fill" style="width:78%;background:linear-gradient(90deg,#f97316,#facc15)"></div></div>
+        </div>
+        <div class="bg-card">
+          <div class="bg-card-label">Trough anomaly</div>
+          <div class="bg-card-val">−312 nT</div>
+          <div class="bg-card-sub">Residual field</div>
+          <div class="bg-card-bar"><div class="bg-card-fill" style="width:36%;background:linear-gradient(90deg,#3b82f6,#06b6d4)"></div></div>
+        </div>
+        <div class="bg-card">
+          <div class="bg-card-label">Survey coverage</div>
+          <div class="bg-card-val">98.4%</div>
+          <div class="bg-card-sub">14 280 stations</div>
+          <div class="bg-card-bar"><div class="bg-card-fill" style="width:98%;background:linear-gradient(90deg,#22c55e,#16a34a)"></div></div>
+        </div>
+        <div class="bg-card">
+          <div class="bg-card-label">Diurnal range</div>
+          <div class="bg-card-val">±23 nT</div>
+          <div class="bg-card-sub">Post-correction</div>
+          <div class="bg-card-bar"><div class="bg-card-fill" style="width:22%;background:linear-gradient(90deg,#a855f7,#ec4899)"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── DARK OVERLAY ── -->
+<div class="overlay"></div>
+
+<!-- ── LOGIN CARD ── -->
+<div class="login-stage">
+  <div class="login-card">
+
+    <div class="card-brand">
+      <div class="card-brand-name">GAIA Magnetics</div>
+      <div class="card-brand-sep"></div>
+      <div class="card-brand-sub">Geophysical Platform</div>
+    </div>
+
+    <div class="form-title" id="formTitle">Welcome back</div>
+    <div class="form-caption" id="formCaption">Sign in to your workspace.</div>
+
+    <div class="seg">
+      <button class="seg-btn active" id="tabSignin" onclick="switchTab('signin')">Sign in</button>
+      <button class="seg-btn" id="tabSignup" onclick="switchTab('signup')">Create account</button>
+    </div>
+
+    <!-- SIGN IN -->
+    <div id="formSignin">
+      <div class="field">
+        <label class="field-label">Email address</label>
+        <input type="email" id="siEmail" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="field">
+        <label class="field-label">Password</label>
+        <input type="password" id="siPassword" placeholder="Enter your password" autocomplete="current-password">
+      </div>
+      <button class="btn-primary" id="btnSignin" onclick="doSignin()">Sign in</button>
+      <div class="or-row">or</div>
+      <button class="btn-google" onclick="doGoogle()">
+        <svg width="18" height="18" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+          <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+          <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+          <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+          <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+        </svg>
+        Continue with Google
+      </button>
+    </div>
+
+    <!-- CREATE ACCOUNT -->
+    <div id="formSignup" style="display:none">
+      <div class="field">
+        <label class="field-label">Full name</label>
+        <input type="text" id="suName" placeholder="Your full name" autocomplete="name">
+      </div>
+      <div class="field">
+        <label class="field-label">Email address</label>
+        <input type="email" id="suEmail" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="field">
+        <label class="field-label">Password</label>
+        <input type="password" id="suPassword" placeholder="Create a strong password" autocomplete="new-password"
+          oninput="checkPwStrength(this.value)" onfocus="showPwReqs()" onblur="hidePwReqs()">
+        <div class="pw-reqs" id="pwReqs">
+          <div class="pw-reqs-label">Password must include</div>
+          <div class="pw-grid">
+            <div class="pw-req" id="req-upper">
+              <div class="pw-dot"><svg viewBox="0 0 10 10"><polyline points="2,5 4,7.5 8,2.5"/></svg></div>Uppercase (A–Z)
+            </div>
+            <div class="pw-req" id="req-lower">
+              <div class="pw-dot"><svg viewBox="0 0 10 10"><polyline points="2,5 4,7.5 8,2.5"/></svg></div>Lowercase (a–z)
+            </div>
+            <div class="pw-req" id="req-number">
+              <div class="pw-dot"><svg viewBox="0 0 10 10"><polyline points="2,5 4,7.5 8,2.5"/></svg></div>Number (0–9)
+            </div>
+            <div class="pw-req" id="req-special">
+              <div class="pw-dot"><svg viewBox="0 0 10 10"><polyline points="2,5 4,7.5 8,2.5"/></svg></div>Special character
+            </div>
+            <div class="pw-req" id="req-length">
+              <div class="pw-dot"><svg viewBox="0 0 10 10"><polyline points="2,5 4,7.5 8,2.5"/></svg></div>8+ characters
+            </div>
+          </div>
+        </div>
+      </div>
+      <button class="btn-primary" id="btnSignup" onclick="doSignup()">Create account</button>
+      <div class="or-row">or</div>
+      <button class="btn-google" onclick="doGoogle()">
+        <svg width="18" height="18" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+          <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+          <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+          <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+          <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+        </svg>
+        Continue with Google
+      </button>
+      <div class="terms-note">By creating an account you agree to our terms of service and privacy policy.</div>
+    </div>
+
+    <div class="error-box" id="authError"></div>
+  </div>
+</div>
+
+<script type="module">
+import {signInWithGoogle, signInWithEmail, signUpWithEmail, waitForAuth} from "/frontend/js/auth.js";
+
+waitForAuth().then((user) => {
+  if (user) window.location.replace("/");
+});
+
+window.switchTab = (tab) => {
+  const signin = tab === "signin";
+  document.getElementById("formSignin").style.display = signin ? "" : "none";
+  document.getElementById("formSignup").style.display = signin ? "none" : "";
+  document.getElementById("tabSignin").classList.toggle("active", signin);
+  document.getElementById("tabSignup").classList.toggle("active", !signin);
+  document.getElementById("formTitle").textContent = signin ? "Welcome back" : "Create your account";
+  document.getElementById("formCaption").textContent = signin
+    ? "Sign in to your workspace."
+    : "Set up your account to get started.";
+  hideError();
+};
+
+window.showPwReqs = () => { document.getElementById("pwReqs").classList.add("visible"); };
+window.hidePwReqs = () => {
+  if (!document.getElementById("suPassword").value)
+    document.getElementById("pwReqs").classList.remove("visible");
+};
+window.checkPwStrength = (val) => {
+  const set = (id, ok) => document.getElementById(id).classList.toggle("met", ok);
+  set("req-upper",   /[A-Z]/.test(val));
+  set("req-lower",   /[a-z]/.test(val));
+  set("req-number",  /[0-9]/.test(val));
+  set("req-special", /[^A-Za-z0-9]/.test(val));
+  set("req-length",  val.length >= 8);
+};
+
+function pwValid(val) {
+  return /[A-Z]/.test(val) && /[a-z]/.test(val) && /[0-9]/.test(val) && /[^A-Za-z0-9]/.test(val) && val.length >= 8;
+}
+
+function setLoading(id, loading) {
+  const btn = document.getElementById(id);
+  btn.disabled = loading;
+  btn.textContent = loading ? "Please wait…" : {btnSignin:"Sign in",btnSignup:"Create account"}[id];
+}
+
+function showError(msg) {
+  const el = document.getElementById("authError");
+  el.textContent = msg; el.classList.add("show");
+  el.scrollIntoView({behavior:"smooth",block:"nearest"});
+}
+function hideError() { document.getElementById("authError").classList.remove("show"); }
+
+window.doSignin = async () => {
+  hideError();
+  const email = document.getElementById("siEmail").value.trim();
+  const password = document.getElementById("siPassword").value;
+  if (!email || !password) return showError("Please enter your email and password.");
+  setLoading("btnSignin", true);
+  try { await signInWithEmail(email, password); window.location.replace("/"); }
+  catch (err) { showError(friendlyError(err.code)); setLoading("btnSignin", false); }
+};
+
+window.doSignup = async () => {
+  hideError();
+  const name     = document.getElementById("suName").value.trim();
+  const email    = document.getElementById("suEmail").value.trim();
+  const password = document.getElementById("suPassword").value;
+  if (!name)  return showError("Please enter your full name.");
+  if (!email) return showError("Please enter your email address.");
+  if (!pwValid(password)) return showError("Password must be at least 8 characters and include uppercase, lowercase, a number, and a special character.");
+  setLoading("btnSignup", true);
+  try { await signUpWithEmail(email, password, name); window.location.replace("/"); }
+  catch (err) { showError(friendlyError(err.code)); setLoading("btnSignup", false); }
+};
+
+window.doGoogle = async () => {
+  hideError();
+  try { await signInWithGoogle(); window.location.replace("/"); }
+  catch (err) { if (err.code !== "auth/popup-closed-by-user") showError(friendlyError(err.code)); }
+};
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  document.getElementById("formSignin").style.display !== "none" ? doSignin() : doSignup();
+});
+
+function friendlyError(code) {
+  return ({
+    "auth/user-not-found":        "No account found with that email address.",
+    "auth/wrong-password":        "Incorrect password. Please try again.",
+    "auth/invalid-credential":    "Incorrect email or password.",
+    "auth/email-already-in-use":  "An account with this email already exists. Try signing in.",
+    "auth/weak-password":         "Please choose a stronger password.",
+    "auth/invalid-email":         "Please enter a valid email address.",
+    "auth/too-many-requests":     "Too many failed attempts. Please wait a few minutes.",
+    "auth/network-request-failed":"Network error. Check your connection and try again.",
+    "auth/unauthorized-domain":   "Sign-in is not authorised from this domain. Contact your administrator.",
+  })[code] || "Something went wrong. Please try again.";
+}
+</script>
+</body>
+</html>
