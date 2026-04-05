@@ -7,7 +7,7 @@ from backend.gcp.cloud_run_jobs import CloudRunJobsBackend
 from backend.gcp.firestore_store import FirestoreStore
 from backend.gcp.maps import MapsSecretProvider
 from backend.gcp.storage_backend import StorageBackend
-from backend.gcp.vertex_ai import VertexClaudeClient, VertexGeminiClient
+from backend.gcp.vertex_ai import AnthropicClaudeClient, VertexClaudeClient, VertexGeminiClient
 from backend.services.ai_service import AIService
 from backend.services.analysis_service import AnalysisService
 from backend.services.export_service import ExportService
@@ -46,10 +46,15 @@ def get_analysis_service() -> AnalysisService:
 @lru_cache(maxsize=1)
 def get_ai_service() -> AIService:
     settings = get_settings()
+    export_client = (
+        AnthropicClaudeClient(settings)
+        if settings.use_direct_anthropic_exports
+        else VertexClaudeClient(settings)
+    )
     return AIService(
         get_store(),
         VertexGeminiClient(settings),
-        VertexClaudeClient(settings),
+        export_client,
         get_storage_backend(),
     )
 

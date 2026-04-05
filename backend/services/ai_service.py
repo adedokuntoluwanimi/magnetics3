@@ -4,42 +4,58 @@ import csv
 import io
 import json
 import logging
+from functools import lru_cache
+from pathlib import Path
 import re
 import zipfile
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
 
 from backend.models import AuroraResponse
+from backend.gcp.vertex_ai import ExportProviderError
 from backend.services.preview_service import _auto_utm_zone, _utm_to_wgs84
 from backend.services.processing_service import _infer_base_station_mask
 
 logger = logging.getLogger(__name__)
 
-_EXPORT_SYSTEM_PROMPT = """You are a senior geophysicist, technical report writer, and presentation designer.
-Generate client-ready DOCX, PDF, and PPTX deliverables from processed magnetic survey results.
-Use only the provided project data, processed outputs, QA, configuration, and uploaded-file summaries.
 
-Design intent:
-- the report and slides must feel premium, deliberate, and presentation-ready
-- avoid plain filler text and generic section names where a stronger title is justified
-- write for a professional client audience with crisp hierarchy and compelling visual callouts
-- slide content should feel like a real consulting deck: clear storyline, punchy bullets, useful speaker notes
-- every visual_ref should correspond to a meaningful figure or layer that can be shown prominently
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-Content rules:
-- stay grounded in the actual outputs and metadata
-- do not invent layers, corrections, or findings
-- if prediction was off, say so clearly
-- if QA or fallbacks matter, surface them clearly but professionally
+
+@lru_cache(maxsize=1)
+def _cached_export_agent_text() -> str:
+    try:
+        root = Path(__file__).resolve().parents[2]
+        spec_path = root / "export_agent.md"
+        if not spec_path.exists():
+            spec_path = Path("/app/export_agent.md")
+        if not spec_path.exists():
+            return ""
+        return spec_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+
+_EXPORT_SYSTEM_PROMPT = """You are the GAIA Magnetics export authoring engine.
+Generate client-ready DOCX, PDF, and PPTX packages from actual processed magnetic survey outputs.
+
+Non-negotiable rules:
+- use only the supplied project metadata, processing path, diagnostics, QA, generated layers, selected export options, and available figures
+- do not invent geology, anomalies, structures, corrections, metrics, or recommendations
+- do not include unsupported sections, placeholder strings, raw JSON, raw dict/list output, raw CSV rows, template filler, or repeated paragraphs
+- keep scientific labels truthful: do not mislabel fallbacks as strict geophysical products
+- reflect degraded QA or fallback-heavy runs honestly
+- DOCX is detailed, PDF is polished and concise, PPTX is visual and condensed
 
 Return only valid JSON in the required schema. Do not add markdown fences or prose outside the JSON."""
 
 
 class AIService:
-    _MAX_REF_CHARS = 6000
-    _MAX_CHAT_CONTEXT_CHARS = 6000
-    _MAX_UPLOAD_SNIPPET_CHARS = 2000
+    _MAX_REF_CHARS = 50000
+    _MAX_CHAT_CONTEXT_CHARS = 24000
+    _MAX_UPLOAD_SNIPPET_CHARS = 20000
 
     def __init__(self, store, chat_client, export_client, storage_backend=None) -> None:
         self._store = store
@@ -101,7 +117,7 @@ class AIService:
                 text = self._fallback_text(project, task, outputs, location, question)
         return self._parse_chat_response(text, location)
 
-    def generate_export_report(self, project_id: str, task_id: str, full_results: dict) -> AuroraResponse:
+    def generate_export_report(self, project_id: str, task_id: str, full_results: dict, export_context: dict | None = None) -> AuroraResponse:
         project = self._store.get_project(project_id)
         task = self._store.get_task(task_id)
         if not project or not task:
@@ -110,15 +126,32 @@ class AIService:
         config = task.get("analysis_config") or {}
         stats = full_results.get("stats") or {}
         upload_context = self._collect_uploaded_file_context(task)
-        user_prompt = self._build_export_data_prompt(project, task, config, full_results, stats, upload_context)
+        export_context = export_context or {}
+        user_prompt = self._build_export_data_prompt(project, task, config, full_results, stats, upload_context, export_context)
+        self._log_export_token_estimate(task_id, project_id, _EXPORT_SYSTEM_PROMPT, user_prompt)
 
+        provider_errors: list[str] = []
         try:
             text = self._export_client.generate(
                 system_prompt=_EXPORT_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
                 max_tokens=4000,
             )
-            report_data = self._parse_export_json(text)
+            report_data = self._prepare_export_package(self._parse_export_json(text), full_results, export_context)
+        except ExportProviderError as exc:
+            provider_errors.append(str(exc))
+            logger.warning(
+                "Aurora export provider failure",
+                extra={
+                    "task_id": task_id,
+                    "project_id": project_id,
+                    "provider": exc.provider,
+                    "model": exc.model,
+                    "category": exc.category,
+                    "retryable": exc.retryable,
+                },
+            )
+            report_data = None
         except Exception as exc:
             logger.exception("Aurora export report generation failed", extra={"task_id": task_id, "project_id": project_id, "error": str(exc)})
             report_data = None
@@ -132,28 +165,41 @@ class AIService:
                     full_results,
                     stats,
                     (upload_context or "")[:1200],
+                    export_context,
                 )
                 text = self._export_client.generate(
                     system_prompt=_EXPORT_SYSTEM_PROMPT,
                     user_prompt=compact_prompt,
                     max_tokens=2500,
                 )
-                report_data = self._parse_export_json(text)
+                report_data = self._prepare_export_package(self._parse_export_json(text), full_results, export_context)
+            except ExportProviderError as exc:
+                provider_errors.append(str(exc))
+                logger.warning(
+                    "Aurora export retry provider failure",
+                    extra={
+                        "task_id": task_id,
+                        "project_id": project_id,
+                        "provider": exc.provider,
+                        "model": exc.model,
+                        "category": exc.category,
+                        "retryable": exc.retryable,
+                    },
+                )
+                report_data = None
             except Exception as exc:
                 logger.exception("Aurora export retry failed", extra={"task_id": task_id, "project_id": project_id, "error": str(exc)})
                 report_data = None
 
         if report_data:
-            report = report_data.get("report", {})
             highlights = []
-            for layer in (report.get("results_interpretation") or [])[:5]:
-                obs = layer.get("observations", "")
-                if obs:
-                    highlights.append(f"{layer.get('layer', 'Layer')}: {obs[:120]}")
-            recommendations = report.get("recommendations", "")
-            if recommendations:
-                highlights.append(f"Recommendation: {recommendations[:200]}")
-            summary = report_data.get("executive_summary", "")
+            primary_doc = report_data.get("pdf") or report_data.get("docx") or report_data.get("pptx") or {}
+            for section in (primary_doc.get("sections") or [])[:5]:
+                title = section.get("title") or section.get("type") or "Section"
+                body = " ".join(section.get("bullets") or [])[:140]
+                if body:
+                    highlights.append(f"{title}: {body}")
+            summary = primary_doc.get("executive_summary") or report_data.get("summary") or ""
             return AuroraResponse(
                 location="export",
                 summary=summary,
@@ -162,12 +208,16 @@ class AIService:
                 report_data=report_data,
             )
 
-        fallback_report = self._build_fallback_report_data(project, task, config, full_results, stats, upload_context)
-        fallback_summary = fallback_report.get("executive_summary", "")
+        fallback_context = dict(export_context)
+        if provider_errors:
+            fallback_context["provider_errors"] = provider_errors
+        fallback_report = self._build_fallback_export_package(project, task, config, full_results, stats, upload_context, fallback_context)
+        fallback_report = self._prepare_export_package(fallback_report, full_results, fallback_context) or fallback_report
+        fallback_summary = fallback_report.get("summary", "")
         return AuroraResponse(
             location="export",
             summary=fallback_summary,
-            highlights=fallback_report.get("report", {}).get("recommendations", "").splitlines()[:4],
+            highlights=(fallback_report.get("pdf") or {}).get("recommendations", [])[:4],
             message=fallback_summary,
             report_data=fallback_report,
         )
@@ -196,9 +246,11 @@ class AIService:
             return None
         if not isinstance(data, dict):
             return None
-        if "report" not in data and "executive_summary" not in data:
-            return None
-        return data
+        if {"docx", "pdf", "pptx"}.issubset(set(data.keys())):
+            return self._validate_export_package(data)
+        if "report" in data or "executive_summary" in data:
+            return self._convert_legacy_export_report(data)
+        return None
 
     def _build_chat_system_prompt(
         self,
@@ -310,7 +362,7 @@ class AIService:
             f"Outputs: {', '.join(config.get('add_ons') or []) or 'none'}\n"
             f"Stats: mean={stats.get('mean', 0):.2f} nT, range={float(stats.get('max', 0) or 0) - float(stats.get('min', 0) or 0):.2f} nT, points={stats.get('point_count', 0)}\n"
             f"Base-station readings recognised: {self._resolved_base_station_count(outputs)}\n"
-            f"Available layers: {', '.join(self._list_available_layers(outputs)) or 'TMF only'}\n"
+            f"Available layers: {', '.join(self._list_available_layers(outputs)) or 'Corrected Magnetic Field only'}\n"
             f"{ui_summary}"
         )
 
@@ -322,82 +374,630 @@ class AIService:
         full_results: dict,
         stats: dict,
         upload_context: str | None,
+        export_context: dict | None,
     ) -> str:
+        data = self._build_export_context_data(project, task, config, full_results, stats, upload_context, export_context or {})
+        export_spec_excerpt = self._load_export_agent_excerpt(data, export_context or {})
+        return (
+            "Task: build one JSON export package.\n"
+            "Schema:\n"
+            "- top keys: docx, pdf, pptx, summary\n"
+            "- docx/pdf/pptx keys: title, subtitle, executive_summary, sections, visuals, recommendations, file_manifest, quality_checks\n"
+            "- section keys: type, title, include, bullets, body, visual_refs, figure_title, caption, interpretation, implication, layout, callouts, table_rows, speaker_notes\n\n"
+            "Constraints:\n"
+            "- use only allowed_export_sections, selected_layers, selected_visual_refs, qa_summary, processing_path, diagnostics_summary, and findings_summary\n"
+            "- omit unsupported sections and absent layers\n"
+            "- no raw dumps, placeholders, duplicate paragraphs, filler, or invented geology\n"
+            "- keep QA/fallback honesty in workflow, reliability, conclusions, and recommendations\n"
+            "- PPTX: <=5 bullets per slide, no long paragraphs, one idea per slide\n"
+            "- recommendations must be limitation-driven\n"
+            "- use exact visual_refs only\n\n"
+            + (f"Relevant export rules:\n{export_spec_excerpt}\n\n" if export_spec_excerpt else "")
+            + "Context JSON:\n"
+            + json.dumps(data, separators=(",", ":"), ensure_ascii=True)
+            + "\nReturn only JSON."
+        )
+
+    def _load_export_agent_excerpt(self, context_data: dict[str, Any], export_context: dict[str, Any]) -> str:
+        try:
+            text = _cached_export_agent_text()
+            if not text:
+                return ""
+            formats = {str(item).lower() for item in (export_context.get("formats") or [])}
+            headings = [
+                "CORE PRINCIPLE",
+                "GLOBAL RULES",
+                "PART 1 - AI REPORTING OUTPUTS",
+                "PART 7 - VISUAL INTEGRATION RULES",
+                "PART 8 - TERMINOLOGY CONSISTENCY",
+                "PART 9 - FALLBACK HONESTY",
+            ]
+            if "pptx" in formats:
+                headings.append("PART 2 - PPTX-SPECIFIC RULES")
+            if {"pdf", "word", "docx"} & formats:
+                headings.append("PART 3 - DOCX/PDF FORMATTING RULES")
+            if context_data.get("actual_results", {}).get("selected_layers"):
+                headings.append("PART 6 - EXPORT SELECTION ENFORCEMENT")
+            excerpts = []
+            for heading in headings:
+                excerpt = self._extract_markdown_heading_block(text, heading)
+                if excerpt:
+                    excerpts.append(excerpt)
+            combined = "\n\n".join(excerpts)
+            return combined[:4200]
+        except Exception:
+            return ""
+
+    def _build_export_context_data(
+        self,
+        project: dict,
+        task: dict,
+        config: dict,
+        full_results: dict,
+        stats: dict,
+        upload_context: str | None,
+        export_context: dict,
+    ) -> dict[str, Any]:
         corrections = config.get("corrections") or []
         add_ons = config.get("add_ons") or []
-        scenario = task.get("scenario") or "automatic"
-        model = config.get("model") or "not specified"
-        selected_add_ons = full_results.get("selected_add_ons") or add_ons
-        layer_map = {
-            "rtp": "Reduction to Pole (RTP)",
-            "analytic_signal": "Analytic Signal",
-            "first_vertical_derivative": "First Vertical Derivative (FVD)",
-            "horizontal_derivative": "Horizontal Derivative",
-            "tilt_derivative": "Tilt Derivative",
-            "total_gradient": "Total Gradient",
-            "emag2": "Regional Residual",
-            "uncertainty": "Uncertainty Surface",
-        }
-        derived_layers = [layer_map.get(key, key) for key in selected_add_ons]
-        sample_lines = []
-        for point in (full_results.get("points") or [])[:30]:
-            latitude = self._to_float(point.get("latitude"))
-            longitude = self._to_float(point.get("longitude"))
-            magnetic = self._point_value_for_context(point)
-            if latitude is None or longitude is None or magnetic is None:
-                continue
-            sample_lines.append(f"{latitude:.5f}, {longitude:.5f}, {magnetic:.2f} nT")
-
         qa_report = full_results.get("qa_report") or {}
-        model_meta = full_results.get("model_metadata") or {}
         validation = full_results.get("validation_summary") or {}
+        model_meta = full_results.get("model_metadata") or {}
+        processing_quality_score = qa_report.get("quality_score", 1.0)
+        available_layers = self._list_available_layers(full_results)
+        available_visual_assets = self._build_export_visual_refs(full_results)
+        selected_sections = list(export_context.get("aurora_sections") or [])
+        export_options = dict(export_context.get("export_options") or {})
+        scenario = task.get("scenario") or "automatic"
+        acquisition_summary = self._build_export_acquisition_summary(task, full_results, stats, validation)
+        derived_findings = self._build_export_findings(task, config, full_results, stats)
+        selected_layer_labels = self._selected_export_layer_labels(full_results, export_options)
+        qa_summary = self._build_compact_qa_summary(full_results)
+        diagnostics_summary = self._build_compact_diagnostics_summary(full_results, stats, model_meta)
+        processing_path = self._build_compact_processing_path(task, full_results, corrections, add_ons)
         data = {
-            "project_name": project.get("name", ""),
-            "project_context": project.get("context", ""),
-            "task_name": task.get("name", ""),
-            "task_description": task.get("description", ""),
-            "platform": task.get("platform", "not specified"),
-            "scenario": scenario,
-            "processing_mode": task.get("processing_mode", "not specified"),
-            "corrections_applied": corrections,
-            "correction_report": self._build_export_correction_report(full_results, corrections),
-            "model": model,
-            "model_diagnostics": {
-                "model_used": full_results.get("model_used", model),
-                "algorithm": model_meta.get("algorithm"),
-                "rmse": model_meta.get("rmse", stats.get("rmse")),
-                "mae": model_meta.get("mae"),
-                "r2": model_meta.get("r2"),
-                "support_fraction": model_meta.get("support_fraction"),
-                "observed_points": len([p for p in (full_results.get("points") or []) if not p.get("is_predicted")]),
-                "predicted_points": len(full_results.get("predicted_points") or []),
+            "project": {
+                "name": project.get("name", ""),
+                "context": self._compact_text(project.get("context", ""), 220),
+                "task_name": task.get("name", ""),
+                "task_description": self._compact_text(task.get("description", ""), 220),
+                "platform": task.get("platform", "not specified"),
+                "scenario": scenario,
+                "processing_mode": task.get("processing_mode", "not specified"),
             },
-            "base_station_readings": int((validation or {}).get("base_station_count", 0)),
-            "add_ons_enabled": add_ons,
-            "derived_layers": derived_layers,
-            "all_layers": ["Total Magnetic Field (TMF)"] + derived_layers,
-            "available_visualisations": ["Magnetic Surface (heatmap + contour)", "Map overlay", "Line profiles"] + derived_layers,
+            "actual_results": {
+                "selected_layers": selected_layer_labels,
+                "selected_visual_refs": [item["visual_ref"] for item in available_visual_assets],
+                "actual_emag2_reference": bool(full_results.get("emag2_reference") or full_results.get("emag2_reference_data")),
+                "rtp_label": self._rtp_label(full_results),
+            },
+            "allowed_export_sections": self._selected_export_section_titles(full_results, export_context),
+            "export_request": {
+                "formats": export_context.get("formats") or [],
+                "selected_sections": selected_sections,
+                "toggles": {key: value for key, value in export_options.items() if value},
+            },
+            "processing_path": processing_path,
+            "qa_summary": qa_summary,
+            "diagnostics_summary": diagnostics_summary,
+            "acquisition_summary": acquisition_summary,
+            "findings_summary": self._compact_findings_summary(derived_findings),
+            "validation_summary": self._build_compact_validation_summary(validation),
+            "residual_summary": {
+                "definition": self._compact_text(full_results.get("residual_definition"), 160),
+                "regional_vs_residual": self._compact_text(full_results.get("regional_vs_residual_summary"), 180),
+            },
+            "uploaded_files_summary": self._compact_text(upload_context[: self._MAX_UPLOAD_SNIPPET_CHARS] if upload_context else "", 600),
+            "token_budget": {"optimize_for": "low_input_tokens_high_quality"},
+        }
+        return self._sanitize_export_context_payload(data)
+
+    def _build_export_visual_refs(self, full_results: dict) -> list[dict[str, Any]]:
+        visual_map = [
+            ("Corrected Magnetic Field", "corrected_heatmap", "corrected_heatmap.png", "heatmap", "corrected_heatmap_b64", "Corrected magnetic field heatmap."),
+            ("Corrected Magnetic Field", "corrected_contour", "corrected_contour.png", "contour", "corrected_contour_b64", "Corrected magnetic field contour map."),
+            ("Corrected Magnetic Field", "corrected_surface", "surface.png", "surface", "surface", "Corrected magnetic field surface preview."),
+            ("Regional Magnetic Field", "regional_heatmap", "regional_heatmap.png", "heatmap", "regional_heatmap_b64", "Regional magnetic field heatmap."),
+            ("Regional Magnetic Field", "regional_contour", "regional_contour.png", "contour", "regional_contour_b64", "Regional magnetic field contour map."),
+            ("Regional Magnetic Field", "regional_surface", "regional_surface.png", "surface", "regional_surface", "Regional magnetic field surface preview."),
+            ("Residual Magnetic Field", "residual_heatmap", "residual_heatmap.png", "heatmap", "residual_heatmap_b64", "Residual magnetic field heatmap."),
+            ("Residual Magnetic Field", "residual_contour", "residual_contour.png", "contour", "residual_contour_b64", "Residual magnetic field contour map."),
+            ("Residual Magnetic Field", "residual_surface", "residual_surface.png", "surface", "residual_surface", "Residual magnetic field surface preview."),
+            (self._rtp_label(full_results) or "Reduction to Pole (RTP)", "rtp", "rtp.png", "map", "rtp_surface", f"{self._rtp_label(full_results) or 'Reduction to Pole (RTP)'} map."),
+            ("Analytic Signal", "analytic_signal", "analytic_signal.png", "map", "analytic_signal", "Analytic Signal map."),
+            ("Tilt Derivative", "tilt_derivative", "tilt_derivative.png", "map", "tilt_derivative", "Tilt Derivative map."),
+            ("Total Gradient", "total_gradient", "total_gradient.png", "map", "total_gradient", "Total Gradient map."),
+            ("First Vertical Derivative", "first_vertical_derivative", "first_vertical_derivative.png", "map", "first_vertical_derivative", "First Vertical Derivative map."),
+            ("Horizontal Derivative", "horizontal_derivative", "horizontal_derivative.png", "map", "horizontal_derivative", "Horizontal Derivative map."),
+            ("Uncertainty", "uncertainty", "uncertainty.png", "map", "uncertainty", "Uncertainty map."),
+            ("Line Profiles", "line_profile", "line_profile.png", "profile", "line_profile_b64", "Line profile view."),
+        ]
+        available: list[dict[str, Any]] = []
+        for layer_label, slug, file_name, figure_type, data_key, caption in visual_map:
+            if full_results.get(data_key) is None:
+                continue
+            available.append(
+                {
+                    "layer": layer_label,
+                    "visual_ref": file_name,
+                    "type": figure_type,
+                    "slug": slug,
+                    "caption": caption,
+                }
+            )
+        return available
+
+    def _build_export_acquisition_summary(self, task: dict, full_results: dict, stats: dict, validation: dict) -> dict[str, Any]:
+        points = full_results.get("points") or []
+        coordinate_system = validation.get("coordinate_system") or ((task.get("column_mapping") or {}).get("coordinate_system")) or "not reported"
+        line_ids = {str(point.get("line_id")) for point in points if point.get("line_id") is not None}
+        support_geometry = "single-traverse dominated" if len(line_ids) <= 1 else "multi-line support"
+        return {
+            "point_count": stats.get("point_count", len(points)),
+            "coordinate_system": coordinate_system,
+            "base_station_count": int(validation.get("base_station_count", 0) or 0),
+            "line_count": validation.get("line_count", len(line_ids)),
+            "station_spacing_m": self._infer_station_spacing(points),
+            "support_geometry": support_geometry,
+            "scenario": task.get("scenario") or "automatic",
+            "platform": task.get("platform") or "not specified",
+        }
+
+    def _infer_station_spacing(self, points: list[dict]) -> float | None:
+        distances = []
+        ordered = [point for point in points if point.get("along_line_m") is not None and not point.get("is_base_station")]
+        ordered.sort(key=lambda item: (item.get("line_id") or 0, item.get("along_line_m") or 0))
+        previous_by_line: dict[str, float] = {}
+        for point in ordered:
+            line_key = str(point.get("line_id") or "line")
+            current = self._to_float(point.get("along_line_m"))
+            if current is None:
+                continue
+            previous = previous_by_line.get(line_key)
+            if previous is not None:
+                gap = current - previous
+                if gap > 0:
+                    distances.append(gap)
+            previous_by_line[line_key] = current
+        if not distances:
+            return None
+        distances.sort()
+        return round(distances[len(distances) // 2], 2)
+
+    def _grid_stats(self, values: Any) -> dict[str, float] | None:
+        if not isinstance(values, list) or not values:
+            return None
+        flattened = []
+        for row in values:
+            if isinstance(row, list):
+                flattened.extend(value for value in row if isinstance(value, (int, float)))
+            elif isinstance(row, (int, float)):
+                flattened.append(row)
+        if not flattened:
+            return None
+        mean = sum(flattened) / len(flattened)
+        variance = sum((value - mean) ** 2 for value in flattened) / len(flattened)
+        return {"min": min(flattened), "max": max(flattened), "mean": mean, "std": variance ** 0.5, "range": max(flattened) - min(flattened)}
+
+    def _dominant_grid_gradient(self, values: Any) -> str | None:
+        try:
+            import numpy as np
+
+            arr = np.asarray(values, dtype=float)
+            if arr.ndim != 2 or min(arr.shape) < 2:
+                return None
+            gy, gx = np.gradient(arr)
+            mean_gx = float(np.nanmean(np.abs(gx)))
+            mean_gy = float(np.nanmean(np.abs(gy)))
+            if mean_gx <= 0 and mean_gy <= 0:
+                return None
+            if mean_gx > mean_gy * 1.2:
+                return "east-west gradient dominance"
+            if mean_gy > mean_gx * 1.2:
+                return "north-south gradient dominance"
+            return "mixed gradient orientation"
+        except Exception:
+            return None
+
+    def _build_export_findings(self, task: dict, config: dict, full_results: dict, stats: dict) -> dict[str, Any]:
+        corrected = self._grid_stats(full_results.get("surface"))
+        regional = self._grid_stats(full_results.get("regional_field") or full_results.get("regional_surface"))
+        residual = self._grid_stats(full_results.get("regional_residual") or full_results.get("residual_surface"))
+        analytic = self._grid_stats(full_results.get("analytic_signal"))
+        fvd = self._grid_stats(full_results.get("first_vertical_derivative"))
+        hd = self._grid_stats(full_results.get("horizontal_derivative"))
+        uncertainty = self._grid_stats(full_results.get("uncertainty"))
+        findings: list[str] = []
+        if corrected:
+            findings.append(
+                f"The corrected magnetic field spans about {corrected['range']:.2f} nT, setting the parent response against which the regional and residual products should be judged."
+            )
+        if regional and residual:
+            relationship = "pronounced residual contrast" if residual["std"] > regional["std"] * 0.8 else "subdued residual contrast"
+            findings.append(
+                f"Regional separation leaves {relationship}, indicating that the run contains {'localized magnetic variation' if relationship == 'pronounced residual contrast' else 'a stronger broad background trend'} after the long-wavelength field is removed."
+            )
+        if analytic or fvd or hd:
+            derivative_terms = []
+            if analytic:
+                derivative_terms.append("analytic signal")
+            if fvd:
+                derivative_terms.append("first vertical derivative")
+            if hd:
+                derivative_terms.append("horizontal derivative")
+            findings.append(
+                f"Derivative behaviour is expressed through {', '.join(derivative_terms)}, which helps test whether residual anomalies sharpen into clearer edges or remain diffuse."
+            )
+        if uncertainty:
+            findings.append(
+                f"Uncertainty ranges across about {uncertainty['range']:.2f} units, so confidence should remain highest close to measured support and more restrained where support thins."
+            )
+        corrected_orientation = self._dominant_grid_gradient(full_results.get("surface"))
+        residual_orientation = self._dominant_grid_gradient(full_results.get("regional_residual") or full_results.get("residual_surface"))
+        return {
+            "key_findings": findings[:4],
+            "corrected_orientation": corrected_orientation,
+            "residual_orientation": residual_orientation,
+            "observed_only_surface": not bool(config.get("run_prediction", True)),
+            "regional_stats": regional,
+            "residual_stats": residual,
+            "corrected_stats": corrected,
+        }
+
+    def _sanitize_export_context_payload(self, data: dict[str, Any]) -> dict[str, Any]:
+        payload = json.loads(json.dumps(data, default=str))
+        payload.pop("sample_stations", None)
+        uploaded = payload.get("uploaded_files_summary")
+        if isinstance(uploaded, str):
+            uploaded = re.sub(r"(?im)^\s*[\w\s-]*,?latitude,longitude,.*$", "", uploaded)
+            payload["uploaded_files_summary"] = uploaded[: self._MAX_UPLOAD_SNIPPET_CHARS]
+        return payload
+
+    def _build_compact_qa_summary(self, full_results: dict) -> dict[str, Any]:
+        qa_report = full_results.get("qa_report") or {}
+        warnings = [self._compact_text(item, 140) for item in (qa_report.get("warnings") or []) if item][:4]
+        fallbacks = []
+        for event in (qa_report.get("fallback_events") or [])[:4]:
+            if not isinstance(event, dict):
+                continue
+            fallbacks.append(
+                {
+                    "requested": event.get("requested"),
+                    "actual": event.get("actual"),
+                    "reason": self._compact_text(event.get("reason"), 140),
+                    "severity": event.get("severity"),
+                }
+            )
+        return {
+            "status": qa_report.get("status", "unknown"),
+            "quality_score": qa_report.get("quality_score"),
+            "warnings": warnings,
+            "fallback_events": fallbacks,
+        }
+
+    def _build_compact_diagnostics_summary(self, full_results: dict, stats: dict, model_meta: dict) -> dict[str, Any]:
+        points = full_results.get("points") or []
+        return {
             "stats": {
-                "mean_nT": round(float(stats.get("mean", 0)), 3),
-                "std_nT": round(float(stats.get("std", 0)), 3),
-                "min_nT": round(float(stats.get("min", 0)), 3),
-                "max_nT": round(float(stats.get("max", 0)), 3),
-                "range_nT": round(float(stats.get("max", 0)) - float(stats.get("min", 0)), 3),
                 "point_count": stats.get("point_count", 0),
+                "range_nT": round(float(stats.get("max", 0) or 0) - float(stats.get("min", 0) or 0), 3),
+                "std_nT": round(float(stats.get("std", 0) or 0), 3),
                 "anomaly_count": stats.get("anomaly_count", 0),
             },
-            "validation_summary": validation,
-            "qa_report": qa_report,
-            "processing_quality_score": qa_report.get("quality_score", 1.0),
-            "run_status": qa_report.get("status", "completed"),
-            "sample_stations_lat_lon_nT": sample_lines,
-            "uploaded_files_summary": upload_context[: self._MAX_UPLOAD_SNIPPET_CHARS] if upload_context else None,
+            "model": {
+                "used": full_results.get("model_used") or model_meta.get("algorithm"),
+                "rmse": model_meta.get("rmse", stats.get("rmse")),
+                "r2": model_meta.get("r2"),
+                "support_fraction": model_meta.get("support_fraction"),
+                "observed_points": len([p for p in points if not p.get("is_predicted")]),
+                "predicted_points": len(full_results.get("predicted_points") or []),
+            },
         }
-        return (
-            "INPUT DATA - use this to generate the dynamic technical deliverable:\n\n"
-            + json.dumps(data, indent=2)
-            + "\n\nReturn only the JSON structure described in the system prompt."
+
+    def _build_compact_processing_path(self, task: dict, full_results: dict, corrections: list[str], add_ons: list[str]) -> dict[str, Any]:
+        correction_report = full_results.get("correction_report") or {}
+        applied_order = correction_report.get("applied_order") or corrections
+        actual_steps = [str(step) for step in applied_order if step]
+        if full_results.get("regional_field") is not None:
+            actual_steps.append("regional_field_generation")
+        if full_results.get("regional_residual") is not None or full_results.get("residual_surface") is not None:
+            actual_steps.append("residual_field_generation")
+        actual_steps.extend(str(item) for item in add_ons if item and str(item) not in actual_steps)
+        deduped: list[str] = []
+        for step in actual_steps:
+            if step not in deduped:
+                deduped.append(step)
+        return {
+            "steps_applied": deduped[:14],
+            "model": full_results.get("model_used") or (task.get("analysis_config") or {}).get("model") or "not specified",
+            "regional_method": full_results.get("regional_method_used"),
+        }
+
+    def _build_compact_validation_summary(self, validation: dict) -> dict[str, Any]:
+        return {
+            "status": validation.get("status", "unknown"),
+            "coordinate_system": validation.get("coordinate_system") or "not reported",
+            "line_count": validation.get("line_count"),
+            "base_station_count": validation.get("base_station_count", 0),
+            "warnings": [self._compact_text(item, 120) for item in (validation.get("warnings") or [])[:3] if item],
+        }
+
+    def _compact_findings_summary(self, derived_findings: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "key_findings": [self._compact_text(item, 180) for item in (derived_findings.get("key_findings") or [])[:4]],
+            "corrected_orientation": derived_findings.get("corrected_orientation"),
+            "residual_orientation": derived_findings.get("residual_orientation"),
+            "observed_only_surface": derived_findings.get("observed_only_surface"),
+        }
+
+    def _compact_text(self, text: Any, max_chars: int) -> str:
+        value = re.sub(r"\s+", " ", str(text or "")).strip()
+        if len(value) <= max_chars:
+            return value
+        return value[: max_chars - 3].rstrip() + "..."
+
+    def _extract_markdown_heading_block(self, text: str, heading: str) -> str:
+        pattern = re.compile(rf"(?ms)^#{{1,6}}\s+{re.escape(heading)}\s*\n(.*?)(?=^#{{1,6}}\s+|\Z)")
+        match = pattern.search(text)
+        if not match:
+            return ""
+        body = match.group(1).strip()
+        return f"{heading}\n{body}"
+
+    def _estimate_tokens(self, text: str) -> int:
+        return max(1, (len(text or "") + 3) // 4)
+
+    def _log_export_token_estimate(self, task_id: str, project_id: str, system_prompt: str, user_prompt: str) -> None:
+        system_tokens = self._estimate_tokens(system_prompt)
+        user_tokens = self._estimate_tokens(user_prompt)
+        logger.info(
+            "Export prompt token estimate",
+            extra={
+                "task_id": task_id,
+                "project_id": project_id,
+                "system_tokens_est": system_tokens,
+                "user_tokens_est": user_tokens,
+                "total_tokens_est": system_tokens + user_tokens,
+            },
         )
+
+    def _selected_export_layer_labels(self, full_results: dict, export_options: dict[str, Any]) -> list[str]:
+        allowed = []
+        for label in self._list_available_layers(full_results):
+            lowered = label.lower()
+            if lowered.startswith("regional") and not export_options.get("include_regional_field", False):
+                continue
+            if lowered.startswith("residual") and not export_options.get("include_residual_field", False):
+                continue
+            if lowered.startswith("corrected") and not export_options.get("include_corrected_field", True):
+                continue
+            allowed.append(label)
+        return allowed
+
+    def _selected_export_section_titles(self, full_results: dict, export_context: dict[str, Any]) -> list[str]:
+        selected = set(export_context.get("aurora_sections") or [])
+        base_sections = [
+            "Cover",
+            "Executive Summary",
+            "Project Overview",
+            "Survey/Data Summary",
+            "Processing Workflow and QA",
+            "Key Findings",
+            "Main Result Interpretation",
+            "Limitations and Reliability",
+            "Conclusions",
+        ]
+        for title in self._selected_export_layer_labels(full_results, dict(export_context.get("export_options") or {})):
+            base_sections.append(title)
+        optional_map = {
+            "Structural interpretation": "Structural / Geological Interpretation",
+            "Anomaly catalogue": "Anomaly Catalogue",
+            "Coverage gap analysis": "Coverage Gap Analysis",
+            "Drilling recommendations": "Drilling Recommendations",
+            "Correction report": "Processing Workflow and QA",
+            "QA summary": "Limitations and Reliability",
+        }
+        for raw, normalized in optional_map.items():
+            if raw in selected:
+                base_sections.append(normalized)
+        deduped: list[str] = []
+        for title in base_sections:
+            if title not in deduped:
+                deduped.append(title)
+        return deduped
+
+    def _rtp_label(self, full_results: dict) -> str:
+        fallback_events = (full_results.get("qa_report") or {}).get("fallback_events") or []
+        if any("rtp" in str(event.get("requested") or "").lower() for event in fallback_events):
+            return "Low-latitude fallback transform"
+        return "Reduction to Pole (RTP)" if full_results.get("rtp_surface") is not None else ""
+
+    def _prepare_export_package(self, data: dict | None, full_results: dict, export_context: dict | None) -> dict | None:
+        if not data:
+            return None
+        prepared = self._validate_export_package(data)
+        if not prepared:
+            return None
+        prepared = self._filter_export_package_to_context(prepared, full_results, export_context or {})
+        issues = self._collect_export_package_issues(prepared, full_results, export_context or {})
+        if issues:
+            logger.warning("Rejected export package during validation", extra={"issues": issues[:12]})
+            return None
+        return prepared
+
+    def _filter_export_package_to_context(self, data: dict, full_results: dict, export_context: dict[str, Any]) -> dict:
+        available_visuals = {item.get("visual_ref") for item in self._build_export_visual_refs(full_results)}
+        allowed_layers = set(self._selected_export_layer_labels(full_results, dict(export_context.get("export_options") or {})))
+        allowed_sections = set(self._selected_export_section_titles(full_results, export_context))
+        universal_types = {
+            "cover",
+            "executive_summary",
+            "project_overview",
+            "data_summary",
+            "processing_workflow",
+            "key_findings",
+            "data_quality",
+            "conclusions",
+            "quality_check",
+        }
+        for key in ("docx", "pdf", "pptx"):
+            payload = data.get(key) or {}
+            cleaned_sections = []
+            for section in payload.get("sections") or []:
+                title = str(section.get("title") or "").strip()
+                section_type = str(section.get("type") or "").strip().lower()
+                if section_type not in universal_types and title and title not in allowed_sections and title not in allowed_layers:
+                    continue
+                section["visual_refs"] = [ref for ref in (section.get("visual_refs") or []) if ref in available_visuals]
+                cleaned_sections.append(section)
+            payload["sections"] = cleaned_sections
+            payload["visuals"] = [visual for visual in (payload.get("visuals") or []) if isinstance(visual, dict) and visual.get("visual_ref") in available_visuals]
+        return data
+
+    def _collect_export_package_issues(self, data: dict, full_results: dict, export_context: dict[str, Any]) -> list[str]:
+        issues: list[str] = []
+        fallback_events = (full_results.get("qa_report") or {}).get("fallback_events") or []
+        fallback_text = json.dumps(fallback_events).lower()
+        actual_emag2 = bool(full_results.get("emag2_reference") or full_results.get("emag2_reference_data"))
+        allowed_titles = set(self._selected_export_section_titles(full_results, export_context))
+        allowed_layers = set(self._selected_export_layer_labels(full_results, dict(export_context.get("export_options") or {})))
+        blocked_fragments = (
+            "[insert",
+            "todo",
+            "tbd",
+            "lorem ipsum",
+            "{{",
+            "}}",
+            "\"type\":",
+            "'type':",
+            "\"properties\":",
+            "undefined",
+            "null",
+            "none",
+        )
+        repeated_passages: dict[str, str] = {}
+        for key in ("docx", "pdf", "pptx"):
+            payload = data.get(key) or {}
+            for section in payload.get("sections") or []:
+                title = str(section.get("title") or "").strip()
+                section_type = str(section.get("type") or "").strip().lower()
+                if section_type not in {"cover", "executive_summary", "project_overview", "data_summary", "processing_workflow", "key_findings", "data_quality", "conclusions", "quality_check"}:
+                    if title and title not in allowed_titles and title not in allowed_layers:
+                        issues.append(f"{key}:{title}:unsupported_section")
+                text_parts = [payload.get("executive_summary") or "", title, section.get("body") or "", section.get("interpretation") or "", section.get("implication") or "", section.get("speaker_notes") or ""] + [str(item) for item in (section.get("bullets") or [])]
+                for part in text_parts:
+                    normalized = re.sub(r"\s+", " ", str(part).strip())
+                    lower = normalized.lower()
+                    if not normalized:
+                        continue
+                    if any(fragment in lower for fragment in blocked_fragments):
+                        issues.append(f"{key}:{title}:blocked_content")
+                    if "latitude,longitude" in lower or lower.count(",") > 35:
+                        issues.append(f"{key}:{title}:raw_csv_like_content")
+                    if normalized.startswith("{") or normalized.startswith("["):
+                        issues.append(f"{key}:{title}:raw_dump_content")
+                    if len(normalized) > 80:
+                        seen_title = repeated_passages.get(lower)
+                        if seen_title and seen_title != f"{key}:{title}":
+                            issues.append(f"{key}:{title}:repeated_passage")
+                        else:
+                            repeated_passages[lower] = f"{key}:{title}"
+                    if not actual_emag2 and "emag2" in lower:
+                        issues.append(f"{key}:{title}:emag2_mislabel")
+                    if "reduction to pole" in lower or re.search(r"\brtp\b", lower):
+                        if "rtp" in fallback_text and "fallback" not in lower and "low-latitude" not in lower and "equator" not in lower:
+                            issues.append(f"{key}:{title}:rtp_mislabel")
+                    if "diurnal correction" in lower and "diurnal" in fallback_text and "fallback" not in lower and "approximate" not in lower:
+                        issues.append(f"{key}:{title}:diurnal_mislabel")
+                if key == "pptx":
+                    bullets = section.get("bullets") or []
+                    if len(bullets) > 4 or len(str(section.get("body") or "")) > 280:
+                        issues.append(f"{key}:{title}:slide_density")
+            recommendations = " ".join(str(item) for item in (payload.get("recommendations") or []))
+            if recommendations:
+                low = recommendations.lower()
+                if any(marker in low for marker in ("consider follow-up", "more data may help", "additional work may be needed")):
+                    issues.append(f"{key}:generic_recommendations")
+                if not any(term in low for term in ("tie", "crossover", "inclination", "declination", "station", "support", "uncertainty", "fallback", "level", "prediction", "base-station")):
+                    issues.append(f"{key}:untethered_recommendations")
+            if (full_results.get("qa_report") or {}).get("warnings") or fallback_events:
+                deck_text = " ".join(str((section.get("body") or "")) + " " + " ".join(str(item) for item in (section.get("bullets") or [])) for section in (payload.get("sections") or []))
+                if not any(term in deck_text.lower() for term in ("warning", "fallback", "uncertainty", "confidence", "reliability", "caution")):
+                    issues.append(f"{key}:missing_qa_reflection")
+        return sorted(set(issues))
+
+    def _validate_export_package(self, data: dict) -> dict | None:
+        for key in ("docx", "pdf", "pptx"):
+            payload = data.get(key)
+            if not isinstance(payload, dict):
+                return None
+            payload.setdefault("title", "")
+            payload.setdefault("subtitle", "")
+            payload.setdefault("executive_summary", "")
+            cleaned_sections = []
+            for section in (payload.get("sections") or []):
+                if not isinstance(section, dict) or not section.get("include", True):
+                    continue
+                section.setdefault("type", "section")
+                section.setdefault("title", "")
+                section.setdefault("bullets", [])
+                section.setdefault("body", "")
+                section.setdefault("visual_refs", [])
+                section.setdefault("figure_title", "")
+                section.setdefault("caption", "")
+                section.setdefault("interpretation", "")
+                section.setdefault("implication", "")
+                section.setdefault("layout", "narrative")
+                section.setdefault("callouts", [])
+                section.setdefault("table_rows", [])
+                section.setdefault("speaker_notes", "")
+                section["title"] = str(section.get("title") or "").strip()
+                section["type"] = str(section.get("type") or "section").strip()
+                section["body"] = str(section.get("body") or "").strip()
+                section["interpretation"] = str(section.get("interpretation") or "").strip()
+                section["implication"] = str(section.get("implication") or "").strip()
+                section["caption"] = str(section.get("caption") or "").strip()
+                section["figure_title"] = str(section.get("figure_title") or "").strip()
+                section["speaker_notes"] = str(section.get("speaker_notes") or "").strip()
+                section["bullets"] = [str(item).strip() for item in (section.get("bullets") or []) if str(item).strip()]
+                section["visual_refs"] = [str(item).strip() for item in (section.get("visual_refs") or []) if str(item).strip()]
+                section["callouts"] = [str(item).strip() for item in (section.get("callouts") or []) if str(item).strip()]
+                section["table_rows"] = [row for row in (section.get("table_rows") or []) if isinstance(row, dict)]
+                cleaned_sections.append(section)
+            payload["sections"] = cleaned_sections
+            payload.setdefault("visuals", [])
+            payload["visuals"] = [item for item in (payload.get("visuals") or []) if isinstance(item, dict)]
+            payload["recommendations"] = [str(item).strip() for item in (payload.get("recommendations") or []) if str(item).strip()]
+            payload.setdefault("file_manifest", [])
+            payload["file_manifest"] = [str(item).strip() for item in (payload.get("file_manifest") or []) if str(item).strip()]
+            payload["quality_checks"] = [str(item).strip() for item in (payload.get("quality_checks") or []) if str(item).strip()]
+        data.setdefault("summary", (data.get("pdf") or {}).get("executive_summary") or "")
+        return data
+
+    def _convert_legacy_export_report(self, data: dict) -> dict:
+        report = data.get("report") or {}
+        executive_summary = data.get("executive_summary") or ""
+        sections = []
+        if report.get("project_overview"):
+            sections.append({"type": "project_overview", "title": "Project Overview", "include": True, "bullets": [], "body": report.get("project_overview"), "visual_refs": []})
+        if report.get("data_description"):
+            sections.append({"type": "data_summary", "title": "Data and Survey Summary", "include": True, "bullets": [], "body": report.get("data_description"), "visual_refs": []})
+        for layer in (report.get("results_interpretation") or []):
+            sections.append({
+                "type": "layer",
+                "title": layer.get("layer", "Layer"),
+                "include": True,
+                "bullets": [layer.get("description", ""), layer.get("interpretation", ""), layer.get("implication", "")],
+                "body": layer.get("observations", ""),
+                "visual_refs": [f"{layer.get('layer', 'layer').lower().replace(' ', '_')}.png"],
+            })
+        package = {
+            "summary": executive_summary,
+            "docx": {"title": "DOCX Export", "executive_summary": executive_summary, "sections": sections, "visuals": [], "recommendations": [report.get("recommendations", "")], "file_manifest": []},
+            "pdf": {"title": "PDF Export", "executive_summary": executive_summary, "sections": sections, "visuals": [], "recommendations": [report.get("recommendations", "")], "file_manifest": []},
+            "pptx": {"title": "PPTX Export", "executive_summary": executive_summary, "sections": sections, "visuals": data.get("slides") or [], "recommendations": [report.get("recommendations", "")], "file_manifest": []},
+        }
+        return self._validate_export_package(package) or package
 
     def _build_export_correction_report(self, full_results: dict, corrections: list[str]) -> dict[str, Any]:
         qa_report = full_results.get("qa_report") or {}
@@ -646,21 +1246,74 @@ class AIService:
 
     def _summarize_csv(self, raw: bytes) -> str | None:
         text = raw.decode("utf-8", errors="replace")
-        reader = csv.reader(io.StringIO(text))
-        rows = []
         try:
-            for _, row in zip(range(6), reader):
-                rows.append(row)
+            rows = list(csv.reader(io.StringIO(text)))
         except Exception:
             return None
         if not rows:
             return None
-        lines = [f"CSV with columns: {', '.join(rows[0][:20]) or 'unknown'}"]
-        if len(rows) > 1:
-            lines.append("Sample rows:")
-            for row in rows[1:6]:
-                lines.append(", ".join((cell or "").strip()[:40] for cell in row[:8]))
-        return "\n".join(lines)
+        header = rows[0]
+        data_rows = rows[1:]
+        if len(text) <= self._MAX_UPLOAD_SNIPPET_CHARS:
+            return text
+
+        lines = [
+            f"CSV with columns: {', '.join(header[:30]) or 'unknown'}",
+            f"Total rows: {len(data_rows)}",
+        ]
+
+        normalized_headers = [str(cell or "").strip().lower() for cell in header]
+        longitude_index = next((idx for idx, value in enumerate(normalized_headers) if value in {"long", "long.", "longitude", "lon", "x", "easting"}), None)
+        latitude_index = next((idx for idx, value in enumerate(normalized_headers) if value in {"lat", "lat.", "latitude", "y", "northing"}), None)
+
+        base_like_rows: list[list[str]] = []
+        for row in data_rows:
+            row_text = " ".join((cell or "").strip().lower() for cell in row)
+            if re.search(r"\b(bs|base|base station|base_station)\b", row_text):
+                base_like_rows.append(row)
+
+        if base_like_rows:
+            lines.append(f"Rows containing base-station labels: {len(base_like_rows)}")
+            if longitude_index is not None and latitude_index is not None:
+                unique_locations = []
+                seen_locations = set()
+                for row in base_like_rows:
+                    if longitude_index >= len(row) or latitude_index >= len(row):
+                        continue
+                    key = (
+                        str(row[longitude_index]).strip(),
+                        str(row[latitude_index]).strip(),
+                    )
+                    if key in seen_locations:
+                        continue
+                    seen_locations.add(key)
+                    unique_locations.append(key)
+                if unique_locations:
+                    lines.append(f"Unique base-station coordinate pairs in labelled rows: {len(unique_locations)}")
+                    for lon_value, lat_value in unique_locations[:20]:
+                        lines.append(f"Base coordinate: lon={lon_value}, lat={lat_value}")
+
+        def _row_preview(row: list[str]) -> str:
+            return ", ".join((cell or "").strip()[:60] for cell in row[: min(len(header), 12)])
+
+        if data_rows:
+            lines.append("First rows:")
+            for row in data_rows[:15]:
+                lines.append(_row_preview(row))
+
+            if len(data_rows) > 15:
+                lines.append("Last rows:")
+                for row in data_rows[-10:]:
+                    lines.append(_row_preview(row))
+
+        if base_like_rows:
+            lines.append("Base-like rows:")
+            for row in base_like_rows[:25]:
+                lines.append(_row_preview(row))
+
+        lines.append("Raw CSV excerpt:")
+        lines.append(text[: min(len(text), self._MAX_UPLOAD_SNIPPET_CHARS // 2)])
+        return "\n".join(lines)[: self._MAX_UPLOAD_SNIPPET_CHARS]
 
     def _build_results_context(self, outputs: dict) -> str:
         if not outputs:
@@ -788,18 +1441,18 @@ class AIService:
 
     def _list_available_layers(self, outputs: dict) -> list[str]:
         layer_map = {
-            "surface": "Total Magnetic Field (TMF)",
+            "surface": "Corrected Magnetic Field",
             "corrected_field": "Corrected Magnetic Field",
             "filtered_surface": "Filtered Surface",
-            "rtp_surface": "Reduction to Pole (RTP)",
+            "rtp_surface": self._rtp_label(outputs) or "Reduction to Pole (RTP)",
             "analytic_signal": "Analytic Signal",
             "first_vertical_derivative": "First Vertical Derivative (FVD)",
             "horizontal_derivative": "Horizontal Derivative",
-            "regional_field": "Regional Field",
-            "regional_surface": "Regional Field",
-            "regional_residual": "Regional Residual",
-            "residual_surface": "Regional Residual",
-            "emag2_residual": "Regional Residual",
+            "regional_field": "Regional Magnetic Field",
+            "regional_surface": "Regional Magnetic Field",
+            "regional_residual": "Residual Magnetic Field",
+            "residual_surface": "Residual Magnetic Field",
+            "emag2_residual": "Residual Magnetic Field",
             "uncertainty": "Uncertainty Surface",
             "tilt_derivative": "Tilt Derivative",
             "total_gradient": "Total Gradient",
@@ -812,22 +1465,22 @@ class AIService:
 
     def _output_key_for_layer(self, label: str) -> str:
         reverse = {
-            "Total Magnetic Field (TMF)": "surface",
             "Corrected Magnetic Field": "corrected_field",
             "Filtered Surface": "filtered_surface",
             "Reduction to Pole (RTP)": "rtp_surface",
+            "Low-latitude fallback transform": "rtp_surface",
             "Analytic Signal": "analytic_signal",
             "First Vertical Derivative (FVD)": "first_vertical_derivative",
             "Horizontal Derivative": "horizontal_derivative",
-            "Regional Field": "regional_field",
-            "Regional Residual": "regional_residual",
+            "Regional Magnetic Field": "regional_field",
+            "Residual Magnetic Field": "regional_residual",
             "Uncertainty Surface": "uncertainty",
             "Tilt Derivative": "tilt_derivative",
             "Total Gradient": "total_gradient",
         }
         return reverse.get(label, "")
 
-    def _build_fallback_report_data(
+    def _build_fallback_export_package(
         self,
         project: dict,
         task: dict,
@@ -835,96 +1488,326 @@ class AIService:
         full_results: dict,
         stats: dict,
         upload_context: str | None,
+        export_context: dict | None,
     ) -> dict:
         qa_report = full_results.get("qa_report") or {}
         validation = full_results.get("validation_summary") or {}
         layers = self._list_available_layers(full_results)
         corrections = ", ".join(config.get("corrections") or []) or "None"
         add_ons = ", ".join(config.get("add_ons") or []) or "None"
-        recommendations = [
-            "Review the QA warnings and fallback events before treating the export as final.",
-            "Use the regional/residual and derivative layers together when comparing shallow versus broad responses.",
-            "Verify any interpretation against survey geometry, support coverage, and uncertainty before drilling or engineering decisions.",
-        ]
-        if int(validation.get("base_station_count", 0) or 0) == 0:
-            recommendations.insert(0, "This run did not recognise base-station readings, so diurnal correction fell back and should be reviewed.")
+        fallback_events = qa_report.get("fallback_events") or []
+        warnings = qa_report.get("warnings") or []
+        provider_errors = list((export_context or {}).get("provider_errors") or [])
+        quality_score = qa_report.get("quality_score")
+        confidence_phrase = "moderate confidence"
+        if qa_report.get("status") == "valid" and not warnings and not fallback_events:
+            confidence_phrase = "relatively strong confidence"
+        elif qa_report.get("status") in {"degraded", "failed"} or fallback_events:
+            confidence_phrase = "cautious confidence"
+        run_prediction = bool(config.get("run_prediction", True))
+        observed_only = not run_prediction or str(task.get("scenario") or "").lower() in {"off", "none"}
+        leveling_limited = ("level" in corrections or "micro_leveling" in corrections) and any((event.get("requested") or "").lower().startswith("level") for event in fallback_events)
+
+        recommendations = []
+        if any((event.get("requested") or "").lower().startswith("level") for event in fallback_events):
+            recommendations.append("Acquire tie lines or crossover support before relying on subtle line-to-line magnetic differences.")
+        if any((event.get("requested") or "").lower().startswith("rtp") for event in fallback_events):
+            recommendations.append("Provide inclination and declination so RTP can be recomputed as a physically reliable transform.")
+        if any((event.get("requested") or "").lower().startswith("diurnal") for event in fallback_events) or int(validation.get("base_station_count", 0) or 0) == 0:
+            recommendations.append("Improve base-station coverage or timing overlap so diurnal correction is constrained by measured drift rather than fallback behavior.")
+        if (task.get("scenario") or "").lower() == "sparse":
+            recommendations.append("Increase station density in lower-support zones before treating short-wavelength residual features as drilling-scale targets.")
+        if observed_only:
+            recommendations.append("Do not project anomaly confidence beyond measured support because this run is based on observed-data representation rather than an interpolative prediction surface.")
+        if not recommendations:
+            recommendations = [
+                "Carry the corrected, regional, residual, and derivative layers together into follow-up interpretation so anomaly scale is not judged from a single map alone.",
+                "Prioritise additional field control where uncertainty or sparse support weakens confidence in local anomaly geometry.",
+            ]
+        if provider_errors:
+            recommendations.append("Review the export AI provider health before relying on richer narrative formatting, because this package was regenerated through the deterministic fallback path.")
+
         executive_summary = (
             f"{task.get('name', 'Task')} for project {project.get('name', 'Project')} processed "
             f"{stats.get('point_count', 0)} points with {qa_report.get('status', 'unknown')} QA status. "
-            f"Configured corrections were {corrections}; configured add-ons were {add_ons}."
+            f"The interpretation carries {confidence_phrase} after considering the correction path, support coverage, and QA outcomes."
         )
-        return {
-            "executive_summary": executive_summary,
-            "report": {
-                "survey_context": {
-                    "project_name": project.get("name", ""),
-                    "project_context": project.get("context", ""),
-                    "task_name": task.get("name", ""),
-                    "task_description": task.get("description", ""),
-                    "platform": task.get("platform"),
-                    "scenario": task.get("scenario") or "automatic",
-                    "processing_mode": task.get("processing_mode"),
-                    "configured_corrections": config.get("corrections") or [],
-                    "configured_add_ons": config.get("add_ons") or [],
-                    "configured_model": config.get("model") or "not specified",
-                },
-                "project_overview": f"Project: {project.get('name', '')}. Context: {project.get('context', '')}",
-                "data_description": f"Task: {task.get('name', '')}. Description: {task.get('description', '')}. Uploaded context: {(upload_context or 'No uploaded-file summary was available.')[:1200]}",
-                "processing_workflow": {
-                    "project_and_task": f"Platform={task.get('platform')}, scenario={task.get('scenario') or 'automatic'}, processing_mode={task.get('processing_mode')}",
-                    "configured_pipeline": f"Corrections={corrections}. Model={config.get('model') or 'not specified'}. Add-ons={add_ons}.",
-                    "regional_residual": json.dumps(
-                        {
-                            "regional_method_used": full_results.get("regional_method_used"),
-                            "regional_scale_or_degree": full_results.get("regional_scale_or_degree"),
-                            "residual_definition": full_results.get("residual_definition"),
-                            "regional_vs_residual_summary": full_results.get("regional_vs_residual_summary"),
-                        },
-                        indent=2,
-                    ),
-                    "qa_and_fallbacks": json.dumps(
-                        {
-                            "qa_status": qa_report.get("status"),
-                            "fallback_events": qa_report.get("fallback_events") or [],
-                            "warnings": qa_report.get("warnings") or [],
-                        },
-                        indent=2,
-                    ),
-                },
-                "results_interpretation": [
-                    {
-                        "layer": layer,
-                        "description": (
-                            "Broadly corrected magnetic field carried forward from the correction and modelling workflow."
-                            if layer == "Corrected Magnetic Field"
-                            else "Broad regional magnetic trend representing long-wavelength field behaviour."
-                            if layer == "Regional Field"
-                            else "Residual magnetic field isolating local anomaly expression after subtracting the regional field."
-                            if layer == "Regional Residual"
-                            else f"{layer} was generated for this run."
-                        ),
-                        "observations": f"Overall range: {stats.get('min', 0):.2f} to {stats.get('max', 0):.2f} nT across {stats.get('point_count', 0)} points.",
-                        "interpretation": "Interpretation should be tied to the actual QA status, fallback path, and survey support shown in the processing outputs.",
-                        "implication": "Use this layer alongside uncertainty and QA metadata before drawing operational conclusions.",
-                    }
-                    for layer in layers[:6]
+        if observed_only:
+            executive_summary += " The mapped surface should be treated as an observed-data representation rather than as a fully interpolated prediction surface."
+        selected_sections = list((export_context or {}).get("aurora_sections") or [])
+        visuals = self._build_export_visual_refs(full_results)
+        acquisition_summary = self._build_export_acquisition_summary(task, full_results, stats, validation)
+        derived_findings = self._build_export_findings(task, config, full_results, stats)
+        layer_sections = []
+        layer_logic = {
+            "Corrected Magnetic Field": {
+                "bullets": [
+                    "This layer anchors the overall magnetic response before regional separation.",
+                    "Its value is strongest when read together with the regional and residual products rather than in isolation.",
                 ],
-                "modelling": json.dumps(full_results.get("model_metadata") or {}, indent=2),
-                "data_quality": json.dumps(
-                    {
-                        "validation": validation,
-                        "qa_report": qa_report,
-                    },
-                    indent=2,
-                ),
-                "conclusions": (
-                    f"QA status: {qa_report.get('status', 'unknown')}\n"
-                    f"Base-station readings recognised: {validation.get('base_station_count', 0)}\n"
-                    f"Available layers: {', '.join(layers) or 'TMF only'}"
-                ),
-                "recommendations": "\n".join(recommendations),
+                "body": "The corrected magnetic field establishes the full processed signal, including both broad background behaviour and shorter-wavelength anomaly content. It therefore provides the baseline against which the regional field and residual field should be compared.",
+                "interpretation": "Broad amplitude changes that persist into the regional field indicate long-wavelength background structure, while departures that intensify in the residual map mark more localised magnetic sources.",
+                "implication": "Use this layer to frame the total signal first, then use regional/residual separation and derivatives to decide which responses remain important at the target scale.",
+            },
+            "Regional Magnetic Field": {
+                "bullets": [
+                    "This surface isolates the longer-wavelength magnetic trend that also influences the corrected field.",
+                    "Regional behaviour should be compared directly with the residual layer to separate broad trend from anomaly expression.",
+                ],
+                "body": "The regional field captures the broader magnetic background that underlies the corrected response. Where the corrected field varies smoothly and the residual remains subdued, the dominant behaviour is more likely regional than target-scale.",
+                "interpretation": "Longer-wavelength gradients here explain the background tilt of the corrected field and help prevent those broader components from being misread as discrete local anomalies.",
+                "implication": "Targets should be prioritised where residual anomalies depart clearly from this regional background rather than where the response is driven mainly by the broad trend itself.",
+            },
+            "Residual Magnetic Field": {
+                "bullets": [
+                    "Residual behaviour should be judged against both the corrected field and the regional background.",
+                    "Sharper features that persist into derivatives are more likely to represent localised magnetic contrasts.",
+                ],
+                "body": "The residual field subtracts the regional background from the corrected field so that shorter-wavelength anomaly content becomes easier to isolate. This is the key bridge between the total field and the derivative products.",
+                "interpretation": "Residual highs and lows that align with stronger edge responses in the derivatives are more consistent with local magnetic sources than with broad background drift.",
+                "implication": "Use the residual layer as the main anomaly-screening surface, but confirm edge geometry and continuity with derivative layers before drawing structural or drilling conclusions.",
+            },
+            "Analytic Signal": {
+                "bullets": [
+                    "Analytic Signal should be read against the residual field rather than against the regional field alone.",
+                    "It strengthens source-edge and amplitude focus where residual anomalies are already evident.",
+                ],
+                "body": "Analytic Signal sharpens the response around magnetic source contrasts without preserving anomaly sign in the same way as the corrected or residual fields. It therefore serves best as an edge-and-source-strength companion to the residual surface.",
+                "interpretation": "Where Analytic Signal reinforces compact residual anomalies, the anomaly edges are more likely to be coherent and geologically meaningful than where only the total field is elevated.",
+                "implication": "Use this layer to refine anomaly footprint and edge continuity after the residual field has isolated local magnetic behaviour.",
+            },
+            "First Vertical Derivative (FVD)": {
+                "bullets": [
+                    "FVD should be compared with the residual and horizontal derivative to judge edge sharpness rather than amplitude alone.",
+                    "Sharper derivative responses are more sensitive to noise and QA limitations than the corrected field.",
+                ],
+                "body": "The first vertical derivative enhances short-wavelength changes and suppresses broader background behaviour, making it useful for assessing the sharpness of residual anomalies and the likelihood of near-surface magnetic contrasts.",
+                "interpretation": "If FVD strengthens the same features that appear in the residual map, those responses are more likely to reflect sharper source boundaries than simple background trend.",
+                "implication": "Treat this layer as an edge-sharpening diagnostic rather than a standalone target map, especially where QA warnings or support limitations reduce confidence.",
+            },
+            "Horizontal Derivative": {
+                "bullets": [
+                    "Horizontal Derivative should be compared with FVD and the residual field to judge lateral edge continuity.",
+                    "Edge alignment matters more than isolated amplitude spikes in this layer.",
+                ],
+                "body": "The horizontal derivative emphasises lateral magnetic gradients and is most useful where it outlines the margins of anomalies already expressed in the residual or corrected field.",
+                "interpretation": "Consistent edge trends here strengthen the case for laterally coherent boundaries, whereas diffuse or fragmented responses imply weaker structural resolution.",
+                "implication": "Use this layer to test whether residual anomalies have laterally consistent margins before assigning structural significance.",
             },
         }
+        for layer in layers[:8]:
+            match_key = "Residual Magnetic Field" if layer == "Residual Magnetic Field" else layer
+            logic = layer_logic.get(match_key, None)
+            visual_refs = [item["visual_ref"] for item in visuals if layer.lower().split(" (")[0] in item["layer"].lower()][:2]
+            caution = []
+            if warnings or fallback_events:
+                qa_reason = f"QA reported {len(warnings)} warning(s) and {len(fallback_events)} fallback event(s)"
+                if layer == "Corrected Magnetic Field":
+                    caution.append(f"The parent magnetic response is read with {confidence_phrase} because {qa_reason}.")
+                elif layer == "Regional Magnetic Field":
+                    caution.append(f"The regional trend should be treated with {confidence_phrase} because {qa_reason}.")
+                elif layer == "Residual Magnetic Field":
+                    caution.append(f"Residual anomaly contrast is read with {confidence_phrase} because {qa_reason}.")
+                elif layer == "Analytic Signal":
+                    caution.append(f"Edge-strength interpretation stays at {confidence_phrase} because {qa_reason}.")
+                elif layer == "First Vertical Derivative (FVD)":
+                    caution.append(f"Derivative sharpening carries {confidence_phrase} because {qa_reason}.")
+                elif layer == "Horizontal Derivative":
+                    caution.append(f"Lateral boundary mapping remains at {confidence_phrase} because {qa_reason}.")
+            if any((event.get("requested") or "").lower().startswith("rtp") for event in fallback_events) and "RTP" in layer:
+                caution.append("RTP was degraded by a fallback path, so map geometry here should not be treated as a physically robust pole-reduced response.")
+            if leveling_limited and layer in {"Corrected Magnetic Field", "Residual Magnetic Field", "First Vertical Derivative (FVD)", "Horizontal Derivative"}:
+                caution.append("Leveling confidence is limited, so subtle line-parallel bias may still influence weak gradients or low-amplitude residual features.")
+            if observed_only and layer in {"Corrected Magnetic Field", "Residual Magnetic Field", "Regional Magnetic Field"}:
+                if layer == "Corrected Magnetic Field":
+                    caution.append("The corrected field represents measured support rather than an interpolated prediction surface beyond the observed stations.")
+                elif layer == "Regional Magnetic Field":
+                    caution.append("The regional trend should not be treated as a confident interpolated background away from measured support because this run remained observed-only.")
+                elif layer == "Residual Magnetic Field":
+                    caution.append("Residual amplitudes outside measured support should not be treated as interpolatively verified because this run stayed in observed-only mode.")
+            layer_sections.append(
+                {
+                    "type": "layer",
+                    "title": layer,
+                    "include": True,
+                    "bullets": (logic or {}).get("bullets", [f"{layer} should be interpreted in relation to the corrected, residual, and derivative layers rather than as a standalone map."]) + caution,
+                    "body": (logic or {}).get("body", f"{layer} contributes part of the processed magnetic interpretation chain and is most useful when cross-checked against adjacent products."),
+                    "visual_refs": visual_refs,
+                    "figure_title": f"{layer} Interpretation",
+                    "caption": f"{layer} viewed in the context of the processed magnetic workflow.",
+                    "interpretation": (logic or {}).get("interpretation", f"{layer} should be read against the neighbouring layers so that broad trend, local anomaly content, and edge sharpening are not conflated."),
+                    "implication": (logic or {}).get("implication", "Use this layer as supporting evidence within the full processing sequence, not as a standalone conclusion."),
+                    "callouts": caution,
+                    "table_rows": [],
+                    "speaker_notes": (logic or {}).get("body", ""),
+                }
+            )
+        common_sections = [
+            {
+                "type": "project_overview",
+                "title": "Project Overview",
+                "include": True,
+                "bullets": [project.get("context", "")],
+                "body": f"Project: {project.get('name', '')}. Task: {task.get('name', '')}.",
+                "visual_refs": [],
+            },
+            {
+                "type": "data_summary",
+                "title": "Data and Survey Summary",
+                "include": True,
+                "bullets": [
+                    f"Scenario: {acquisition_summary.get('scenario')}",
+                    f"Platform: {acquisition_summary.get('platform')}",
+                    f"Coordinate system: {acquisition_summary.get('coordinate_system')}",
+                    f"Base-station readings recognised: {acquisition_summary.get('base_station_count')}",
+                ],
+                "body": (
+                    f"The run is based on approximately {acquisition_summary.get('point_count', 0)} points across "
+                    f"{acquisition_summary.get('line_count', 0)} line grouping(s), with "
+                    f"{acquisition_summary.get('support_geometry')} support. "
+                    + (
+                        f"Inferred station spacing is about {acquisition_summary.get('station_spacing_m')} m where along-line support is reliable. "
+                        if acquisition_summary.get("station_spacing_m") is not None
+                        else "Station spacing could not be inferred reliably from the stored run outputs. "
+                    )
+                    + ("Raw uploaded rows are not repeated here; acquisition detail is summarised so the interpretation remains readable." if upload_context else "")
+                ),
+                "visual_refs": [],
+                "table_rows": [
+                    {"Metric": "Point count", "Value": acquisition_summary.get("point_count", 0)},
+                    {"Metric": "Coordinate system", "Value": acquisition_summary.get("coordinate_system")},
+                    {"Metric": "Base-station count", "Value": acquisition_summary.get("base_station_count")},
+                    {"Metric": "Station spacing (m)", "Value": acquisition_summary.get("station_spacing_m") or "not inferred"},
+                    {"Metric": "Support geometry", "Value": acquisition_summary.get("support_geometry")},
+                ],
+            },
+            {
+                "type": "key_findings",
+                "title": "Key Findings",
+                "include": True,
+                "bullets": derived_findings.get("key_findings") or [
+                    "The corrected, regional, residual, and derivative products should be read together to define scale, edge sharpness, and support limitations."
+                ],
+                "body": "These findings summarise the strongest run-specific magnetic signals before the detailed layer-by-layer discussion.",
+                "visual_refs": [item["visual_ref"] for item in visuals if item["visual_ref"] in {"corrected_heatmap.png", "regional_heatmap.png", "residual_heatmap.png"}][:2],
+            },
+            {
+                "type": "processing_workflow",
+                "title": "Processing Workflow Summary",
+                "include": True,
+                "bullets": [
+                    f"Corrections: {corrections}",
+                    f"Add-ons: {add_ons}",
+                    f"Model: {config.get('model') or 'not specified'}",
+                ],
+                "body": "Processing interpretation is conditioned by the actual correction path applied. Where a requested correction downgraded to a fallback, the resulting layers should be read with more caution than a fully supported physical workflow.",
+                "visual_refs": [],
+                "callouts": [f"{event.get('requested')}: {event.get('reason')}" for event in fallback_events[:3] if event.get("requested") and event.get("reason")] + provider_errors[:2],
+                "table_rows": [{"Correction": key, "Status": ("fallback affected" if any((event.get("requested") or "") == key for event in fallback_events) else "configured")} for key in (config.get("corrections") or [])[:6]],
+            },
+            *layer_sections,
+            {
+                "type": "data_quality",
+                "title": "Data Quality and Reliability",
+                "include": True,
+                "bullets": [
+                    f"QA status: {qa_report.get('status', 'unknown')}",
+                    f"Processing quality score: {qa_report.get('quality_score', 'n/a')}",
+                    f"Base-station support recognised in QA: {validation.get('base_station_count', 0)}",
+                ],
+                "body": f"The overall interpretation carries {confidence_phrase}. Reliability is strongest where corrected, residual, and derivative behaviour agree, and weakens where QA warnings, sparse support, or fallback corrections affect the processing path.",
+                "visual_refs": [item["visual_ref"] for item in visuals if "uncertainty" in item["visual_ref"]],
+                "callouts": list(warnings[:3]) + [event.get("reason") for event in fallback_events[:3] if event.get("reason")],
+                "table_rows": [
+                    {"Metric": "QA status", "Value": qa_report.get("status", "unknown")},
+                    {"Metric": "Quality score", "Value": quality_score if quality_score is not None else "n/a"},
+                    {"Metric": "Fallback events", "Value": len(fallback_events)},
+                    {"Metric": "Warnings", "Value": len(warnings)},
+                ],
+            },
+        ]
+        if "Anomaly catalogue" in selected_sections:
+            common_sections.append({
+                "type": "anomaly_catalogue",
+                "title": "Anomaly Catalogue",
+                "include": True,
+                "bullets": [
+                    "Formal anomaly extraction was not run as a separate catalogue stage for this export.",
+                    "Observable anomaly behaviour should therefore be described qualitatively from the residual and derivative layers rather than as a ranked anomaly list.",
+                ],
+                "body": "Where residual amplitudes tighten into sharper derivative responses, anomaly behaviour is still evident even though a formal anomaly table was not generated.",
+                "visual_refs": [item["visual_ref"] for item in visuals if item["visual_ref"] in {"residual_heatmap.png", "analytic_signal.png", "line_profile.png"}],
+                "figure_title": "Qualitative Anomaly Behaviour",
+                "caption": "Residual and derivative products used for qualitative anomaly screening.",
+                "interpretation": "Shorter-wavelength residual features that persist into the derivatives deserve more attention than broad responses seen only in the corrected field.",
+                "implication": "A formal anomaly extraction pass would be the next step if ranked target zones are required.",
+            })
+        if "Coverage gap analysis" in selected_sections:
+            common_sections.append({
+                "type": "coverage_gap_analysis",
+                "title": "Coverage Gap Analysis",
+                "include": True,
+                "bullets": [
+                    "Coverage confidence depends on station support, prediction mode, and uncertainty behaviour.",
+                    "Areas that require interpolation or sit farther from measured control carry weaker constraint than densely sampled zones.",
+                ],
+                "body": "Where uncertainty broadens or support thins, local anomaly geometry should be treated more cautiously than in densely controlled parts of the survey.",
+                "visual_refs": [item["visual_ref"] for item in visuals if "uncertainty" in item["visual_ref"]],
+            })
+        if "Drilling recommendations" in selected_sections:
+            common_sections.append({"type": "drilling_recommendations", "title": "Drilling Recommendations", "include": True, "bullets": recommendations[:4], "body": "Recommendations are tied directly to the current processing limitations and interpretation confidence rather than to generic drilling language.", "visual_refs": []})
+        if "Structural interpretation" in selected_sections:
+            structural_body = "Structural resolution is limited where anomaly edges are diffuse, support is sparse, or QA fallbacks weaken confidence in derivative geometry."
+            if any(label in layers for label in ["Residual Magnetic Field", "Analytic Signal", "Horizontal Derivative", "First Vertical Derivative (FVD)"]):
+                structural_body = "Structural interpretation should focus on features that remain coherent from the residual field into the derivative products; where that continuity breaks down, structural confidence is limited by data geometry or QA constraints."
+            common_sections.append({"type": "structural_interpretation", "title": "Structural / Geological Interpretation", "include": True, "bullets": ["Structural interpretation is strongest only where residual and derivative responses reinforce the same boundaries."], "body": structural_body, "visual_refs": [item["visual_ref"] for item in visuals if item["visual_ref"] in {"residual_contour.png", "analytic_signal.png", "horizontal_derivative.png", "first_vertical_derivative.png"}]})
+
+        common_sections.append(
+            {
+                "type": "conclusions",
+                "title": "Conclusions",
+                "include": True,
+                "bullets": [
+                    "The corrected field frames the total processed magnetic response.",
+                    "Regional separation defines the long-wavelength background, while the residual and derivative layers isolate the more local anomaly behaviour.",
+                    f"The final interpretation carries {confidence_phrase} after considering QA, support coverage, and fallback behavior.",
+                ],
+                "body": "The most reliable conclusions are the ones supported consistently across the corrected field, regional trend separation, residual response, and derivative sharpening rather than by any single layer alone.",
+                "visual_refs": [],
+                "callouts": (["Observed-only surface logic limits confidence outside measured support."] if observed_only else []) + (["Residual line-based bias may persist because leveling support was limited."] if leveling_limited else []),
+            }
+        )
+        package = {
+            "summary": executive_summary,
+            "docx": {
+                "title": f"{project.get('name', 'Project')} Technical Report",
+                "subtitle": "Integrated magnetic interpretation report",
+                "executive_summary": executive_summary,
+                "sections": common_sections,
+                "visuals": visuals,
+                "recommendations": recommendations,
+                "file_manifest": [],
+            },
+            "pdf": {
+                "title": f"{project.get('name', 'Project')} Executive Report",
+                "subtitle": "Condensed client-facing interpretation",
+                "executive_summary": executive_summary,
+                "sections": common_sections,
+                "visuals": visuals,
+                "recommendations": recommendations,
+                "file_manifest": [],
+            },
+            "pptx": {
+                "title": f"{project.get('name', 'Project')} Presentation",
+                "subtitle": "Key magnetic interpretation findings",
+                "executive_summary": executive_summary,
+                "sections": common_sections,
+                "visuals": visuals,
+                "recommendations": recommendations,
+                "file_manifest": [],
+            },
+        }
+        return self._validate_export_package(package) or package
 
     def _summarize_numeric_grid(self, values: Any) -> str | None:
         if not isinstance(values, list) or not values:

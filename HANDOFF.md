@@ -21,7 +21,7 @@ Read these first:
 - AI project:
   `app-01-488817-ai`
 - Latest live revision:
-  `gaia-magnetics-00088-w6w`
+  `gaia-magnetics-00097-thc`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
@@ -35,50 +35,54 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 
 ## What Changed Most Recently
 
-### This session (2026-04-04)
+### This session (2026-04-05)
 
 **Live deploys completed:**
-- `gaia-magnetics-00087-sgq` — visualisation scale/stat alignment, preview Aurora count fix, single `Projects` button on home.
-- `gaia-magnetics-00088-w6w` — Aurora now receives rich screen-aware UI context from Preview and Visualisation.
+- `gaia-magnetics-00092-nlz` - export layout and narrative quality refactor deployed.
+- `gaia-magnetics-00093-cvs` - direct Anthropic export client path deployed from local `.env`.
+- `gaia-magnetics-00095-pdg` - Cloud Run now reads `ANTHROPIC_API_KEY` from Secret Manager secret `gaia-anthropic-api-key`.
+- `gaia-magnetics-00096-sfz` - export routing locked so live DOCX/PDF/PPTX generation uses the Anthropic key whenever it exists, regardless of older provider env labels.
+- `gaia-magnetics-00097-thc` - export pipeline hardened for truthful report generation, stricter scientific labeling, clearer Anthropic failure handling, and lower-token prompt payloads.
 
-**Visualisation and processing fixes now live:**
-- Line profiles show `point.magnetic` instead of `raw_magnetic`.
-- Base station points are excluded from line profiles and map overlay.
-- Traverse distance no longer stretches through off-line base-station revisits; backend `along_line_m` and frontend profile distance both follow survey points only.
-- Point-based views (`Map`, `Line Profiles`) now compute scale/stat ranges from the displayed point values instead of unrelated grid-wide values.
-- Grid-based views (`Contour`, `Heatmap`, `3D`) still use grid-surface stats.
-- Home page hero now has one `Projects` button, not two.
+**Export state now live:**
+- Export generation for `DOCX`, `PDF`, and `PPTX` now uses direct Anthropic whenever `ANTHROPIC_API_KEY` is present.
+- Cloud Run has `ANTHROPIC_API_KEY` attached from Secret Manager.
+- The export system reads `export_agent.md`, builds structured `{docx,pdf,pptx}` packages, and renders them through the backend builders.
+- The export path now rejects raw JSON/CSV-like narrative output, placeholder strings, repeated paragraphs, unsupported sections, and misleading labels before rendering.
+- Anthropic export failures are now classified more clearly, and fallback output is held to stricter truthfulness and formatting rules.
+- Export prompts now send a smaller filtered payload plus a smaller relevant slice of `export_agent.md` to reduce token use.
+- Live export failures seen on 2026-04-04 were not provider-routing mistakes; Cloud Run logs showed `anthropic.RateLimitError` with `429 RESOURCE_EXHAUSTED`, after which the system fell back to `_build_fallback_export_package(...)`. That provider-side risk still exists.
 
-**Aurora AI fixes now live:**
-- Preview Aurora rebuilds preview-side context from uploaded survey data instead of depending only on saved processed outputs.
-- Aurora request payloads now include `ui_context`.
-- On Visualisation, Aurora now knows the active layer, visual mode, selected traverse, approximate line start/end coordinates, whether the user is on a map or profile plot, displayed value source, displayed stats, and key processing metadata like diurnal method and regional method.
-- On Preview, Aurora now knows preview bounds, preview point count, base-station count, and traverse count from the current screen state.
-
-### Previous session
-
-- Diurnal correction: interval-based consecutive base-station interpolation is the preferred path.
-- Regional and residual are first-class outputs with configurable methods.
-- Corrected, regional, and residual surfaces are persisted separately.
-- Export and Aurora reporting receive distinct corrected/regional/residual context.
+**Previously deployed scientific and UX fixes still live:**
+- Interval-based diurnal correction remains the preferred path.
+- Corrected, regional, and residual outputs remain first-class products.
+- Line profiles and point-based scales use the displayed survey values instead of unrelated grid-wide stats.
+- Preview and Visualisation Aurora context upgrades remain live.
+- Home page still shows a single `Projects` button.
 
 ## Most Important Files Right Now
 
-- `backend/services/processing_service.py` — `_clean_dataframe`, `_infer_base_station_mask`, `_apply_diurnal_correction`
-- `backend/services/ai_service.py` — preview rebuild path, UI-context prompt assembly
-- `backend/models/ai.py` — Aurora request schema
-- `frontend/js/shared/ai_chat.js` — shared chat payload assembly
-- `frontend/js/sections/visualisation.js` — line profiles, map overlay, stats source, Aurora context builder
-- `frontend/js/sections/preview.js` — preview chat context builder
-- `frontend/index.html` — shared UI shell and home-page hero
+- `backend/services/processing_service.py` - `_clean_dataframe`, `_infer_base_station_mask`, `_apply_diurnal_correction`
+- `backend/services/ai_service.py` - preview rebuild path, export prompt assembly, fallback export package
+- `backend/services/export_service.py` - DOCX/PDF/PPTX builders and export quality gate
+- `backend/services/container.py` - live export-client selection
+- `backend/gcp/vertex_ai.py` - `AnthropicClaudeClient` and Vertex clients
+- `backend/config.py` - `.env` loading, export settings, Anthropic key detection
+- `backend/models/ai.py` - Aurora request schema
+- `frontend/js/shared/ai_chat.js` - shared chat payload assembly
+- `frontend/js/sections/visualisation.js` - line profiles, map overlay, stats source, Aurora context builder
+- `frontend/js/sections/preview.js` - preview chat context builder
+- `frontend/js/sections/export.js` - export request payload assembly
+- `frontend/index.html` - shared UI shell and home-page hero
 
 ## Remaining Gaps
 
-1. **`_xlsx_to_csv_bytes` text fallback** — bold-only detection still misses partially-bold BS rows. Add text-based row detection at upload time.
-2. **Browser QA on revision `00088-w6w`** — confirm Aurora answers correctly from both Preview and Visualisation with a real processed task.
-3. **Re-process the known dataset** on revision `00088-w6w` and verify saved outputs reflect the corrected along-line distance path.
-4. Claude-backed export drafting quality pass.
-5. Update docs again after the next processing rerun if new scientific findings emerge.
+1. **`_xlsx_to_csv_bytes` text fallback** - bold-only detection still misses partially-bold BS rows. Add text-based row detection at upload time.
+2. **Fresh live export QA after hardening deploy** - generate a new `DOCX/PDF/PPTX` set after revision `00097-thc` and verify the output quality on the live service.
+3. **Anthropic 429 handling** - keep improving export resilience because Cloud Run logs already showed `anthropic.RateLimitError` `429 RESOURCE_EXHAUSTED` during previous live exports.
+4. **Browser QA on current revision** - confirm Aurora answers correctly from both Preview and Visualisation with a real processed task.
+5. **Re-process the known dataset** and verify saved outputs reflect the corrected along-line distance path.
+6. Update docs again after the next live export verification run if the export behavior changes.
 
 ## Working Style
 

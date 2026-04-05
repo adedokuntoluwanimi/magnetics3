@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-import google.auth
-from google.auth.transport.requests import AuthorizedSession
-
 from backend.config import Settings
+
+
+class ExportProviderError(RuntimeError):
+    def __init__(self, message: str, *, category: str, provider: str, model: str, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.category = category
+        self.provider = provider
+        self.model = model
+        self.retryable = retryable
 
 
 class VertexGeminiClient:
@@ -20,6 +26,9 @@ class VertexGeminiClient:
         messages: list | None = None,
         max_tokens: int = 1500,
     ) -> str:
+        import google.auth
+        from google.auth.transport.requests import AuthorizedSession
+
         creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
         session = AuthorizedSession(creds)
         location = self._settings.aurora_chat_region or self._settings.ai_region or self._settings.region
@@ -100,6 +109,82 @@ class VertexClaudeClient:
             "claude-sonnet-4": "claude-sonnet-4@20250514",
         }
         return aliases.get(normalized, normalized)
+
+
+class AnthropicClaudeClient:
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    def generate(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str | None = None,
+        messages: list | None = None,
+        max_tokens: int = 1500,
+    ) -> str:
+        from anthropic import Anthropic
+
+        if not self._settings.anthropic_api_key:
+            raise ExportProviderError(
+                "ANTHROPIC_API_KEY is not configured for direct Claude export usage.",
+                category="configuration",
+                provider="anthropic",
+                model=self._normalize_model_name(self._settings.aurora_export_model),
+                retryable=False,
+            )
+
+        client = Anthropic(api_key=self._settings.anthropic_api_key)
+        model_name = self._normalize_model_name(self._settings.aurora_export_model)
+        if messages is None:
+            messages = [{"role": "user", "content": user_prompt or ""}]
+        try:
+            response = client.messages.create(
+                model=model_name,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=messages,
+            )
+        except Exception as exc:
+            raise self._classify_error(exc, model_name) from exc
+        return "".join(block.text for block in response.content if getattr(block, "text", None))
+
+    def _normalize_model_name(self, model_name: str) -> str:
+        normalized = (model_name or "").strip()
+        aliases = {
+            "claude-sonnet-4@20250514": "claude-sonnet-4-6-20250514",
+            "claude-sonnet-4": "claude-sonnet-4-6-20250514",
+            "claude-sonnet-4-6": "claude-sonnet-4-6-20250514",
+            "claude-sonnet-4.6": "claude-sonnet-4-6-20250514",
+            "claude-sonnet-4-5": "claude-sonnet-4-6-20250514",
+            "claude-sonnet-4.5": "claude-sonnet-4-6-20250514",
+            "claude-sonnet-latest": "claude-sonnet-4-6-20250514",
+        }
+        return aliases.get(normalized, normalized)
+
+    def _classify_error(self, exc: Exception, model_name: str) -> ExportProviderError:
+        error_name = exc.__class__.__name__
+        category = "provider_failure"
+        retryable = False
+        if error_name in {"AuthenticationError", "PermissionDeniedError"}:
+            category = "permission_failure"
+        elif error_name in {"RateLimitError"}:
+            category = "rate_limit"
+            retryable = True
+        elif error_name in {"NotFoundError"}:
+            category = "model_unavailable"
+        elif error_name in {"BadRequestError"} and "model" in str(exc).lower():
+            category = "model_unavailable"
+        elif error_name in {"APIConnectionError", "APIError", "InternalServerError", "ServiceUnavailableError"}:
+            category = "provider_failure"
+            retryable = True
+        return ExportProviderError(
+            f"Anthropic export generation failed ({category}): {exc}",
+            category=category,
+            provider="anthropic",
+            model=model_name,
+            retryable=retryable,
+        )
 
 
 VertexAIClient = VertexClaudeClient

@@ -1,6 +1,6 @@
 # GAIA Magnetics Context
 
-Last updated: `2026-04-04`
+Last updated: `2026-04-05`
 
 ## Purpose
 
@@ -23,7 +23,7 @@ This file captures the current working context for `gaia-magnetics`.
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00088-w6w`
+  `gaia-magnetics-00097-thc`
 - Region:
   `us-central1`
 - Infra project:
@@ -45,7 +45,7 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 
 - Preserve the existing folder structure.
 - Use `frontend/index.html` as the shared UI shell.
-- Keep integrations real: Firestore, Cloud Storage, Cloud Run, Google Maps, Vertex AI.
+- Keep integrations real: Firestore, Cloud Storage, Cloud Run, Google Maps, Gemini chat, and Anthropic export generation.
 - Do not reintroduce dummy data or misleading labels.
 - User-visible assistant branding should remain `Aurora AI`.
 - The frontend still mixes static shell markup and modular JS; meaningful changes often need both.
@@ -64,24 +64,18 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 
 Detection happens in two places:
 
-### 1. At upload time — `task_service.py:_xlsx_to_csv_bytes`
+### 1. At upload time - `task_service.py:_xlsx_to_csv_bytes`
 
 - Converts `.xlsx` to CSV and adds `__is_base_station__`.
 - Detects BS rows by bold formatting.
 - Known gap: partially bold BS rows can still be missed.
 - Text-based BS detection still needs to be added here.
 
-### 2. At processing time — `processing_service.py:_infer_base_station_mask`
+### 2. At processing time - `processing_service.py:_infer_base_station_mask`
 
 - Reads the existing `__is_base_station__` column.
 - Scans text/object columns for `bs`, `base`, `base station`, and `base_station`.
 - Uses coordinate repeat detection with a tight tolerance.
-
-### Known issue with `Traverse 1.xlsx`
-
-- The first BS row is only partially bold, so upload-time detection can miss it.
-- Processing-time text detection should recover it.
-- Preview and Visualisation Aurora context is now stronger, but the dataset should still be reprocessed and QA’d on the latest revision.
 
 ## Current Functional Shape
 
@@ -90,7 +84,7 @@ Detection happens in two places:
 - Core route sequence is:
   `Home -> Projects -> Setup -> Analysis -> Preview -> Processing -> Visualisation -> Export`
 - Selected project and task IDs persist across refreshes.
-- Home hero now uses a single `Projects` button.
+- Home hero uses a single `Projects` button.
 
 ### Setup and analysis
 
@@ -119,18 +113,34 @@ Detection happens in two places:
 - Point-based views (`Map`, `Line Profiles`) use displayed point values for stats/scale.
 - Grid-based views use grid-surface values for stats/scale.
 - Layers are grouped as `Main processed field`, `Regional field`, `Residual field`, and `Derived products`.
-- Aurora chat on Visualisation now receives active layer, visual mode, traverse selection, approximate line endpoints, displayed stats, displayed-value provenance, and key processing metadata.
+- Aurora chat on Visualisation receives active layer, visual mode, traverse selection, approximate line endpoints, displayed stats, displayed-value provenance, and key processing metadata.
 
 ### Export
 
 - Export jobs complete and bundle outputs are being generated.
 - Corrected/regional/residual report content can be selected independently.
-- Claude-backed narrative generation still needs a quality pass.
+- Export AI generation now uses direct Anthropic for `DOCX`, `PDF`, and `PPTX` whenever `ANTHROPIC_API_KEY` is present.
+- Cloud Run now gets `ANTHROPIC_API_KEY` from Secret Manager secret `gaia-anthropic-api-key`.
+- Chat remains on the existing chat path; the Anthropic switch was made for exports.
+- DOCX, PDF, and PPTX exports consume structured `{docx, pdf, pptx}` AI output packages.
+- Export prompts now send a compressed, filtered run context instead of a large verbose payload.
+- Export AI output is now validated more aggressively for placeholder text, raw dumps, unsupported sections, repeated passages, and misleading scientific labels before rendering.
+- DOCX/PDF/PPTX builders now enforce cleaner ordering, tighter PPTX density, and more explicit QA/fallback callouts.
+- CSV, GeoJSON, KMZ/KML, GDB-style, and map-image bundles include `metadata.json`.
+- Native FileGDB output is still not implemented; the current `gdb_bundle` is a geospatial delivery bundle with feature-class-style GeoJSON members.
+
+## Live Export Failure Context
+
+- The export provider/key routing is now correct in Cloud Run.
+- Revision `00097-thc` hardened the Anthropic export path with clearer provider-error classification and stronger output validation.
+- Cloud Run logs on 2026-04-04 showed `anthropic.RateLimitError` with HTTP `429 RESOURCE_EXHAUSTED`.
+- When that happens, `backend/services/ai_service.py` still falls back, but the fallback package is now held to stricter truthfulness and formatting rules than before.
+- Fresh live export artifacts still need to be inspected to confirm the improved report quality on the deployed service.
 
 ## Known Follow-Up Areas
 
-1. **Fix bold detection in `_xlsx_to_csv_bytes`** — add text-based fallback so `BS`/`base` in any cell also flags the row.
-2. **Re-process the known dataset** — rerun on revision `00088-w6w` to verify saved outputs and Aurora responses against current code.
-3. **Browser-QA Aurora** — confirm Preview and Visualisation answers match the exact active screen context.
-4. Improve Claude-backed export drafting quality.
-5. Manual browser QA on the latest visualisation fixes.
+1. **Fix bold detection in `_xlsx_to_csv_bytes`** - add text-based fallback so `BS`/`base` in any cell also flags the row.
+2. **Fresh live export verification** - generate a new `DOCX/PDF/PPTX` set after revision `00097-thc` and inspect the real artifacts.
+3. **Anthropic 429 mitigation** - keep improving provider resilience because recent exports hit `RESOURCE_EXHAUSTED` even though fallback honesty and output quality gates are now stronger.
+4. **Browser-QA Aurora** - confirm Preview and Visualisation answers match the exact active screen context.
+5. **Re-process the known dataset** - rerun on the current revision to verify saved outputs and Aurora responses against current code.

@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY backend /app/backend
 COPY frontend /app/frontend
+COPY export_agent.md /app/export_agent.md
 
 EXPOSE 8080
 

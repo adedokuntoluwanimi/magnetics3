@@ -132,6 +132,7 @@ class PipelineRun(GaiaModel):
 class ExportRequest(GaiaModel):
     formats: list[str]
     aurora_sections: list[str] = Field(default_factory=list)
+    export_options: dict[str, Any] = Field(default_factory=dict)
 
 
 class ExportJob(GaiaModel):

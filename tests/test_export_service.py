@@ -53,25 +53,75 @@ class ExportServiceTests(unittest.TestCase):
         payload = self.service._build_csv_bundle(self.project, self.task, self.data)
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             names = set(archive.namelist())
-            self.assertIn("metadata/qa_report.json", names)
-            self.assertIn("points/measured/measured_points.csv", names)
-            self.assertIn("points/predicted/predicted_points.csv", names)
-            self.assertIn("analysis/tmf/grid.csv", names)
-            self.assertIn("analysis/analytic_signal/grid.csv", names)
+            self.assertIn("csv_bundle/metadata.json", names)
+            self.assertIn("csv_bundle/measured_points.csv", names)
+            self.assertIn("csv_bundle/predicted_points.csv", names)
+            self.assertIn("csv_bundle/corrected_field.csv", names)
+            self.assertIn("csv_bundle/analytic_signal.csv", names)
 
     def test_geojson_bundle_contains_traverses_and_grid_layers(self):
         payload = self.service._build_geojson_bundle(self.project, self.task, self.data)
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             names = set(archive.namelist())
-            self.assertIn("traverses/traverses.geojson", names)
-            self.assertIn("analysis/tmf/grid.geojson", names)
-            self.assertIn("points/measured/measured_points.geojson", names)
-            traverses = json.loads(archive.read("traverses/traverses.geojson"))
+            self.assertIn("geojson_bundle/corrected_points.geojson", names)
+            self.assertIn("geojson_bundle/corrected_surface.geojson", names)
+            self.assertIn("geojson_bundle/predicted_points.geojson", names)
+            traverses = json.loads(archive.read("geojson_bundle/corrected_points.geojson"))
             self.assertEqual(traverses["type"], "FeatureCollection")
 
     def test_artifact_stem_uses_task_and_project_names(self):
         stem = self.service._artifact_stem({"name": "Site C"}, {"name": "Permanent Site"})
         self.assertEqual(stem, "site_c_permanent_site")
+
+    def test_quality_check_payload_removes_placeholder_only_sections(self):
+        payload = {
+            "title": "Deck",
+            "sections": [
+                {"title": "Main Result", "include": True, "bullets": ["Real finding"], "body": "[Insert map here]", "visual_refs": []},
+                {"title": "Empty", "include": True, "bullets": [], "body": "", "visual_refs": []},
+            ],
+            "quality_checks": [],
+        }
+
+        cleaned = self.service._quality_check_payload(payload, slide_mode=True)
+
+        self.assertEqual(len(cleaned["sections"]), 1)
+        self.assertEqual(cleaned["sections"][0]["title"], "Main Result")
+        self.assertEqual(cleaned["sections"][0]["body"], "")
+
+    def test_layer_specs_use_truthful_residual_labeling(self):
+        specs = self.service._layer_specs({"emag2_residual": [[1.0]]})
+        labels = [spec["label"] for spec in specs]
+        slugs = [spec["slug"] for spec in specs]
+        self.assertIn("Regional Residual Product", labels)
+        self.assertNotIn("EMAG2 Comparison", labels)
+        self.assertIn("regional_residual_product", slugs)
+
+    def test_rtp_export_label_reflects_fallback(self):
+        label = self.service._rtp_export_label({"qa_report": {"fallback_events": [{"requested": "rtp", "actual": "low_latitude_fallback"}]}})
+        self.assertEqual(label, "Low-latitude fallback transform")
+
+    def test_document_payload_orders_core_sections(self):
+        aurora = _FakeAurora()
+        aurora.report_data = {
+            "pdf": {
+                "title": "Report",
+                "executive_summary": "Summary",
+                "sections": [
+                    {"type": "conclusions", "title": "Conclusions", "include": True, "bullets": ["Done"], "body": "", "visual_refs": []},
+                    {"type": "project_overview", "title": "Project Overview", "include": True, "bullets": ["Context"], "body": "", "visual_refs": []},
+                    {"type": "processing_workflow", "title": "Processing Workflow Summary", "include": True, "bullets": ["Workflow"], "body": "", "visual_refs": []},
+                ],
+                "visuals": [],
+                "recommendations": [],
+                "file_manifest": [],
+                "quality_checks": [],
+            }
+        }
+
+        payload = self.service._document_payload(aurora, "pdf")
+
+        self.assertEqual([section["type"] for section in payload["sections"][:3]], ["project_overview", "processing_workflow", "conclusions"])
 
     def test_pptx_builder_handles_missing_scenario(self):
         try:

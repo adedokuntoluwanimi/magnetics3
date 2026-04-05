@@ -72,6 +72,34 @@ function renderDownloads(job) {
   ` : "";
 }
 
+function isToggleChecked(id) {
+  return Boolean(document.getElementById(id)?.classList.contains("on"));
+}
+
+function buildExportOptions(results) {
+  return {
+    include_corrected_field: isToggleChecked("export-corrected-field"),
+    include_regional_field: isToggleChecked("export-regional-field"),
+    include_residual_field: isToggleChecked("export-residual-field"),
+    include_anomaly_catalogue: Array.from(document.querySelectorAll("#screen-export .chk.on .chk-t")).some((node) => node.textContent.trim() === "Anomaly catalogue"),
+    include_drilling_recommendations: Array.from(document.querySelectorAll("#screen-export .chk.on .chk-t")).some((node) => node.textContent.trim() === "Drilling recommendations"),
+    include_structural_interpretation: Array.from(document.querySelectorAll("#screen-export .chk.on .chk-t")).some((node) => node.textContent.trim() === "Structural interpretation"),
+    include_coverage_gap_analysis: Array.from(document.querySelectorAll("#screen-export .chk.on .chk-t")).some((node) => node.textContent.trim() === "Coverage gap analysis"),
+    available_layers: {
+      corrected: Boolean(results?.surface || results?.corrected_field),
+      regional: Boolean(results?.regional_field || results?.regional_surface),
+      residual: Boolean(results?.regional_residual || results?.residual_surface || results?.emag2_residual),
+      rtp: Boolean(results?.rtp_surface),
+      analytic_signal: Boolean(results?.analytic_signal),
+      tilt_derivative: Boolean(results?.tilt_derivative),
+      total_gradient: Boolean(results?.total_gradient),
+      first_vertical_derivative: Boolean(results?.first_vertical_derivative),
+      horizontal_derivative: Boolean(results?.horizontal_derivative),
+      uncertainty: Boolean(results?.uncertainty),
+    },
+  };
+}
+
 function setExportToggle(id, enabled, checked = enabled) {
   const card = document.getElementById(id);
   if (!card) return;
@@ -160,7 +188,11 @@ export async function runExport() {
   const formats = getSelectedFormats();
   renderProgress(formats, []);
   const sections = Array.from(document.querySelectorAll("#screen-export .chk.on .chk-t")).map((node) => node.textContent.trim());
-  const job = await createExport(appState.task.id, {formats, aurora_sections: sections});
+  const job = await createExport(appState.task.id, {
+    formats,
+    aurora_sections: sections,
+    export_options: buildExportOptions(appState.taskResults || {}),
+  });
   setTask({...appState.task, export_jobs: [...(appState.task.export_jobs || []), job]});
   renderWorkflowProgress();
   renderProgress(formats, job.details?.artifacts || []);
