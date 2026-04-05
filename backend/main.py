@@ -39,6 +39,13 @@ frontend_dir = Path(settings.frontend_dir)
 app.mount("/frontend", StaticFiles(directory=frontend_dir), name="frontend")
 
 
+@app.on_event("startup")
+def startup_checks() -> None:
+    from backend.services.container import get_ai_service
+
+    get_ai_service().run_startup_checks()
+
+
 @app.get("/", include_in_schema=False)
 def root() -> FileResponse:
     return FileResponse(frontend_dir / "index.html")

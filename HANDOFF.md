@@ -21,7 +21,7 @@ Read these first:
 - AI project:
   `app-01-488817-ai`
 - Latest live revision:
-  `gaia-magnetics-00097-thc`
+  `gaia-magnetics-00106-jmm`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
@@ -38,20 +38,44 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 ### This session (2026-04-05)
 
 **Live deploys completed:**
-- `gaia-magnetics-00092-nlz` - export layout and narrative quality refactor deployed.
-- `gaia-magnetics-00093-cvs` - direct Anthropic export client path deployed from local `.env`.
-- `gaia-magnetics-00095-pdg` - Cloud Run now reads `ANTHROPIC_API_KEY` from Secret Manager secret `gaia-anthropic-api-key`.
-- `gaia-magnetics-00096-sfz` - export routing locked so live DOCX/PDF/PPTX generation uses the Anthropic key whenever it exists, regardless of older provider env labels.
-- `gaia-magnetics-00097-thc` - export pipeline hardened for truthful report generation, stricter scientific labeling, clearer Anthropic failure handling, and lower-token prompt payloads.
+- `gaia-magnetics-00098-bt7` - structured export-path observability added for provider failures and fallback outcomes.
+- `gaia-magnetics-00099-r6r` - export model corrected to `claude-sonnet-4-6` with startup/preflight availability logging.
+- `gaia-magnetics-00100-z9k` - fenced JSON parsing and safer object extraction deployed.
+- `gaia-magnetics-00101-lz8` - wrapper-aware parsing improvements deployed.
+- `gaia-magnetics-00102-nx9` - parse-forensics logging deployed for exact JSON decode diagnostics.
+- `gaia-magnetics-00103-zvw` - export page reworked so users choose from actual processed outputs before report generation.
+- `gaia-magnetics-00104-8bb` - truncation-aware retry and smaller split report/pptx package generation deployed.
+- `gaia-magnetics-00105-qbj` - first block-based export generation rollout deployed.
+- `gaia-magnetics-00106-jmm` - smaller block prompts, wrapper unwrapping, and tighter block validation updates deployed.
 
 **Export state now live:**
-- Export generation for `DOCX`, `PDF`, and `PPTX` now uses direct Anthropic whenever `ANTHROPIC_API_KEY` is present.
+- Export generation for `DOCX`, `PDF`, and `PPTX` uses direct Anthropic whenever `ANTHROPIC_API_KEY` is present.
 - Cloud Run has `ANTHROPIC_API_KEY` attached from Secret Manager.
-- The export system reads `export_agent.md`, builds structured `{docx,pdf,pptx}` packages, and renders them through the backend builders.
-- The export path now rejects raw JSON/CSV-like narrative output, placeholder strings, repeated paragraphs, unsupported sections, and misleading labels before rendering.
-- Anthropic export failures are now classified more clearly, and fallback output is held to stricter truthfulness and formatting rules.
-- Export prompts now send a smaller filtered payload plus a smaller relevant slice of `export_agent.md` to reduce token use.
-- Live export failures seen on 2026-04-04 were not provider-routing mistakes; Cloud Run logs showed `anthropic.RateLimitError` with `429 RESOURCE_EXHAUSTED`, after which the system fell back to `_build_fallback_export_package(...)`. That provider-side risk still exists.
+- The configured export model is `claude-sonnet-4-6`.
+- The export system reads `export_agent.md`.
+- Export-path logging now includes provider failures, parse-forensics, retry modes, block outcomes, validation rejection reasons, and final path outcomes.
+- The export page now exposes actual processed outputs and lets users choose which outputs should be allowed into report exports before any `DOCX`, `PDF`, or `PPTX` is generated.
+- Export generation is no longer one large all-in-one package attempt. It is now a block-based server-side merge flow with per-block fallback.
+
+**Current live export reality:**
+- The export path is still not fixed.
+- The latest checked export on `00106-jmm` for task `5f3ed2605e3144a19edc43f5c9af1ffa` ended with:
+  `export.path.outcome = anthropic_response_invalid_fallback_used`
+- Successful blocks in that live run:
+  - `executive_summary`
+  - `pptx_group_3`
+  - `pptx_group_4`
+- Failed blocks in that live run:
+  - `project_setup` -> parse failure, `failure_class = truncated_json`
+  - `pptx_group_1` -> parse failure, `failure_class = truncated_json`
+  - `pptx_group_2` -> block validation failure, `missing_expected_section`
+- Final package validation also failed with:
+  - `pptx:Data and Survey Summary:slide_density`
+- Files still generate, but they are still fallback-backed. Do not treat that as success.
+
+**Success condition:**
+- The export path is only considered fixed when Cloud Logging shows:
+  `export.path.outcome = anthropic_success`
 
 **Previously deployed scientific and UX fixes still live:**
 - Interval-based diurnal correction remains the preferred path.
@@ -62,27 +86,27 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 
 ## Most Important Files Right Now
 
+- `backend/services/ai_service.py` - block-based export generation, parse forensics, retry logic, merge logic
+- `backend/services/export_service.py` - DOCX/PDF/PPTX builders and final package validation
+- `backend/gcp/vertex_ai.py` - `AnthropicClaudeClient`, provider error classification, preflight
+- `backend/config.py` - export model configuration
+- `backend/models/ai.py` - Aurora response shape
 - `backend/services/processing_service.py` - `_clean_dataframe`, `_infer_base_station_mask`, `_apply_diurnal_correction`
-- `backend/services/ai_service.py` - preview rebuild path, export prompt assembly, fallback export package
-- `backend/services/export_service.py` - DOCX/PDF/PPTX builders and export quality gate
-- `backend/services/container.py` - live export-client selection
-- `backend/gcp/vertex_ai.py` - `AnthropicClaudeClient` and Vertex clients
-- `backend/config.py` - `.env` loading, export settings, Anthropic key detection
-- `backend/models/ai.py` - Aurora request schema
-- `frontend/js/shared/ai_chat.js` - shared chat payload assembly
-- `frontend/js/sections/visualisation.js` - line profiles, map overlay, stats source, Aurora context builder
-- `frontend/js/sections/preview.js` - preview chat context builder
-- `frontend/js/sections/export.js` - export request payload assembly
-- `frontend/index.html` - shared UI shell and home-page hero
+- `backend/services/task_service.py` - `_xlsx_to_csv_bytes`
+- `frontend/js/sections/export.js` - export request payload assembly and user output selection
+- `frontend/index.html` - export UI shell
 
 ## Remaining Gaps
 
-1. **`_xlsx_to_csv_bytes` text fallback** - bold-only detection still misses partially-bold BS rows. Add text-based row detection at upload time.
-2. **Fresh live export QA after hardening deploy** - generate a new `DOCX/PDF/PPTX` set after revision `00097-thc` and verify the output quality on the live service.
-3. **Anthropic 429 handling** - keep improving export resilience because Cloud Run logs already showed `anthropic.RateLimitError` `429 RESOURCE_EXHAUSTED` during previous live exports.
-4. **Browser QA on current revision** - confirm Aurora answers correctly from both Preview and Visualisation with a real processed task.
-5. **Re-process the known dataset** and verify saved outputs reflect the corrected along-line distance path.
-6. Update docs again after the next live export verification run if the export behavior changes.
+1. **`_xlsx_to_csv_bytes` text fallback** - bold-only BS detection still misses partially-bold rows. Add text-based row detection at upload time.
+2. **Split the still-failing export blocks further** - `project_setup` and `pptx_group_1` are still truncating live.
+3. **Fix PPTX validation tension** - `pptx_group_2` can fail `missing_expected_section`, and merged PPTX validation can fail `slide_density`.
+4. **Reach a true live Anthropic success** - no more fallback-backed “success” claims. The only acceptable success marker is:
+   `export.path.outcome = anthropic_success`
+5. **Fresh live export QA after success** - once the live path reaches `anthropic_success`, inspect a real frontend-generated `DOCX/PDF/PPTX` set.
+6. **Browser QA on current revision** - confirm Aurora answers correctly from both Preview and Visualisation with a real processed task.
+7. **Re-process the known dataset** after the export path stabilizes.
+8. Update docs again after the next live export change or success/failure shift.
 
 ## Working Style
 

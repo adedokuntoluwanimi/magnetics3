@@ -15,6 +15,7 @@ import pandas as pd
 
 from backend.models import AuroraResponse
 from backend.gcp.vertex_ai import ExportProviderError
+from backend.logging_utils import log_event
 from backend.services.preview_service import _auto_utm_zone, _utm_to_wgs84
 from backend.services.processing_service import _infer_base_station_mask
 
@@ -48,6 +49,10 @@ Non-negotiable rules:
 - keep scientific labels truthful: do not mislabel fallbacks as strict geophysical products
 - reflect degraded QA or fallback-heavy runs honestly
 - DOCX is detailed, PDF is polished and concise, PPTX is visual and condensed
+- return compact JSON only
+- keep strings concise and omit nonessential optional fields if space is limited
+- never add prose or markdown outside the JSON object
+- never begin a field that cannot be completed; prioritize valid finished JSON over richness
 
 Return only valid JSON in the required schema. Do not add markdown fences or prose outside the JSON."""
 
@@ -62,6 +67,11 @@ class AIService:
         self._chat_client = chat_client
         self._export_client = export_client
         self._storage = storage_backend
+
+    def run_startup_checks(self) -> None:
+        preflight = getattr(self._export_client, "preflight_model_availability", None)
+        if callable(preflight):
+            preflight()
 
     def generate_preview(self, project_id: str, task_id: str) -> AuroraResponse:
         return self.generate_response(project_id, task_id, location="preview")
@@ -127,71 +137,50 @@ class AIService:
         stats = full_results.get("stats") or {}
         upload_context = self._collect_uploaded_file_context(task)
         export_context = export_context or {}
-        user_prompt = self._build_export_data_prompt(project, task, config, full_results, stats, upload_context, export_context)
-        self._log_export_token_estimate(task_id, project_id, _EXPORT_SYSTEM_PROMPT, user_prompt)
-
+        export_type = ",".join(export_context.get("formats") or []) or "unspecified"
+        provider = "anthropic"
+        model = getattr(getattr(self._export_client, "_settings", None), "aurora_export_model", "unknown")
         provider_errors: list[str] = []
-        try:
-            text = self._export_client.generate(
-                system_prompt=_EXPORT_SYSTEM_PROMPT,
-                user_prompt=user_prompt,
-                max_tokens=4000,
-            )
-            report_data = self._prepare_export_package(self._parse_export_json(text), full_results, export_context)
-        except ExportProviderError as exc:
-            provider_errors.append(str(exc))
-            logger.warning(
-                "Aurora export provider failure",
-                extra={
-                    "task_id": task_id,
-                    "project_id": project_id,
-                    "provider": exc.provider,
-                    "model": exc.model,
-                    "category": exc.category,
-                    "retryable": exc.retryable,
-                },
-            )
-            report_data = None
-        except Exception as exc:
-            logger.exception("Aurora export report generation failed", extra={"task_id": task_id, "project_id": project_id, "error": str(exc)})
-            report_data = None
+        fallback_package = self._build_fallback_export_package(project, task, config, full_results, stats, upload_context, export_context)
+        block_package, block_status = self._generate_export_blocks(
+            project=project,
+            task=task,
+            config=config,
+            full_results=full_results,
+            stats=stats,
+            upload_context=upload_context,
+            export_context=export_context,
+            fallback_package=fallback_package,
+            project_id=project_id,
+            task_id=task_id,
+            provider=provider,
+            model=model,
+        )
+        provider_errors.extend(block_status.get("provider_errors") or [])
+        final_outcome = "anthropic_success"
+        if block_status.get("request_failed"):
+            final_outcome = "anthropic_request_failed_fallback_used"
+        if block_status.get("response_invalid") or block_status.get("validation_failed"):
+            final_outcome = "anthropic_response_invalid_fallback_used"
 
-        if not report_data:
-            try:
-                compact_prompt = self._build_export_data_prompt(
-                    project,
-                    task,
-                    config,
-                    full_results,
-                    stats,
-                    (upload_context or "")[:1200],
-                    export_context,
-                )
-                text = self._export_client.generate(
-                    system_prompt=_EXPORT_SYSTEM_PROMPT,
-                    user_prompt=compact_prompt,
-                    max_tokens=2500,
-                )
-                report_data = self._prepare_export_package(self._parse_export_json(text), full_results, export_context)
-            except ExportProviderError as exc:
-                provider_errors.append(str(exc))
-                logger.warning(
-                    "Aurora export retry provider failure",
-                    extra={
-                        "task_id": task_id,
-                        "project_id": project_id,
-                        "provider": exc.provider,
-                        "model": exc.model,
-                        "category": exc.category,
-                        "retryable": exc.retryable,
-                    },
-                )
-                report_data = None
-            except Exception as exc:
-                logger.exception("Aurora export retry failed", extra={"task_id": task_id, "project_id": project_id, "error": str(exc)})
-                report_data = None
-
-        if report_data:
+        report_data = self._prepare_export_package(
+            block_package,
+            full_results,
+            export_context,
+            task_id=task_id,
+            export_type=export_type,
+            provider=provider,
+            model=model,
+            attempt_number=0,
+        )
+        if report_data and final_outcome == "anthropic_success":
+            self._log_export_outcome(
+                task_id=task_id,
+                export_type=export_type,
+                provider=provider,
+                model=model,
+                outcome="anthropic_success",
+            )
             highlights = []
             primary_doc = report_data.get("pdf") or report_data.get("docx") or report_data.get("pptx") or {}
             for section in (primary_doc.get("sections") or [])[:5]:
@@ -213,6 +202,15 @@ class AIService:
             fallback_context["provider_errors"] = provider_errors
         fallback_report = self._build_fallback_export_package(project, task, config, full_results, stats, upload_context, fallback_context)
         fallback_report = self._prepare_export_package(fallback_report, full_results, fallback_context) or fallback_report
+        if final_outcome == "anthropic_success":
+            final_outcome = "anthropic_response_invalid_fallback_used"
+        self._log_export_outcome(
+            task_id=task_id,
+            export_type=export_type,
+            provider=provider,
+            model=model,
+            outcome=final_outcome,
+        )
         fallback_summary = fallback_report.get("summary", "")
         return AuroraResponse(
             location="export",
@@ -221,6 +219,973 @@ class AIService:
             message=fallback_summary,
             report_data=fallback_report,
         )
+
+    def _generate_export_blocks(
+        self,
+        *,
+        project: dict,
+        task: dict,
+        config: dict,
+        full_results: dict,
+        stats: dict,
+        upload_context: str | None,
+        export_context: dict[str, Any],
+        fallback_package: dict[str, Any],
+        project_id: str,
+        task_id: str,
+        provider: str,
+        model: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        package = json.loads(json.dumps(fallback_package, default=str))
+        status = {
+            "provider_errors": [],
+            "request_failed": False,
+            "response_invalid": False,
+            "validation_failed": False,
+        }
+        for block in self._export_block_definitions(full_results, export_context):
+            result = self._run_export_block(
+                project=project,
+                task=task,
+                config=config,
+                full_results=full_results,
+                stats=stats,
+                upload_context=upload_context,
+                export_context=export_context,
+                fallback_package=fallback_package,
+                project_id=project_id,
+                task_id=task_id,
+                provider=provider,
+                model=model,
+                block=block,
+                current_package=package,
+            )
+            status["provider_errors"].extend(result.get("provider_errors") or [])
+            status["request_failed"] = status["request_failed"] or bool(result.get("request_failed"))
+            status["response_invalid"] = status["response_invalid"] or bool(result.get("response_invalid"))
+            status["validation_failed"] = status["validation_failed"] or bool(result.get("validation_failed"))
+            block_payload = result.get("payload")
+            if isinstance(block_payload, dict):
+                package = self._merge_export_block_payload(package, block, block_payload)
+        return package, status
+
+    def _export_block_definitions(self, full_results: dict, export_context: dict[str, Any]) -> list[dict[str, Any]]:
+        blocks: list[dict[str, Any]] = []
+        requested_keys = self._requested_export_document_keys(export_context)
+        layer_titles = self._selected_export_layer_labels(full_results, dict(export_context.get("export_options") or {}))
+        selected_sections = set(export_context.get("aurora_sections") or (export_context.get("export_options") or {}).get("selected_narrative_sections") or [])
+        if {"pdf", "docx"} & set(requested_keys):
+            blocks.extend(
+                [
+                    {"name": "executive_summary", "doc_key": "report", "target_titles": [], "max_tokens": 360, "retry_max_tokens": 240},
+                    {"name": "project_setup", "doc_key": "report", "target_titles": ["Project Overview"], "max_tokens": 420, "retry_max_tokens": 280},
+                    {"name": "task_summary", "doc_key": "report", "target_titles": ["Data and Survey Summary"], "max_tokens": 420, "retry_max_tokens": 280},
+                    {"name": "processing_qa", "doc_key": "report", "target_titles": ["Processing Workflow Summary"], "max_tokens": 460, "retry_max_tokens": 320},
+                    {"name": "key_findings", "doc_key": "report", "target_titles": ["Key Findings"], "max_tokens": 420, "retry_max_tokens": 300},
+                    {"name": "result_layers", "doc_key": "report", "target_titles": layer_titles[:5], "max_tokens": 720, "retry_max_tokens": 460},
+                    {"name": "limitations", "doc_key": "report", "target_titles": ["Data Quality and Reliability"], "max_tokens": 420, "retry_max_tokens": 300},
+                    {"name": "recommendations", "doc_key": "report", "target_titles": ["Conclusions"], "max_tokens": 360, "retry_max_tokens": 260},
+                ]
+            )
+        if "pptx" in requested_keys:
+            pptx_layers = layer_titles[:3]
+            blocks.extend(
+                [
+                    {"name": "pptx_group_1", "doc_key": "pptx", "target_titles": ["Executive Summary"], "max_tokens": 340, "retry_max_tokens": 220},
+                    {"name": "pptx_group_2", "doc_key": "pptx", "target_titles": ["Project Overview", "Data and Survey Summary", "Processing Workflow Summary"], "max_tokens": 420, "retry_max_tokens": 280},
+                    {"name": "pptx_group_3", "doc_key": "pptx", "target_titles": ["Key Findings"] + pptx_layers, "max_tokens": 620, "retry_max_tokens": 380},
+                    {"name": "pptx_group_4", "doc_key": "pptx", "target_titles": ["Data Quality and Reliability", "Conclusions"], "max_tokens": 360, "retry_max_tokens": 240},
+                ]
+            )
+        filtered: list[dict[str, Any]] = []
+        for block in blocks:
+            if block["name"] == "result_layers" and not block["target_titles"]:
+                continue
+            if block["name"] == "recommendations" and "Drilling recommendations" not in selected_sections and "Coverage gap analysis" not in selected_sections and "QA summary" not in selected_sections:
+                block = dict(block)
+            filtered.append(block)
+        return filtered
+
+    def _run_export_block(
+        self,
+        *,
+        project: dict,
+        task: dict,
+        config: dict,
+        full_results: dict,
+        stats: dict,
+        upload_context: str | None,
+        export_context: dict[str, Any],
+        fallback_package: dict[str, Any],
+        project_id: str,
+        task_id: str,
+        provider: str,
+        model: str,
+        block: dict[str, Any],
+        current_package: dict[str, Any],
+    ) -> dict[str, Any]:
+        provider_errors: list[str] = []
+        result = {"payload": None, "provider_errors": provider_errors, "request_failed": False, "response_invalid": False, "validation_failed": False}
+        prompt_context = self._build_export_block_context(
+            project,
+            task,
+            config,
+            full_results,
+            stats,
+            upload_context,
+            export_context,
+            fallback_package,
+            block,
+        )
+        user_prompt = self._build_export_block_prompt(block, prompt_context, retry_mode="initial")
+        self._log_export_token_estimate(task_id, project_id, _EXPORT_SYSTEM_PROMPT, user_prompt)
+        try:
+            text = self._export_client.generate(
+                system_prompt=_EXPORT_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                max_tokens=int(block.get("max_tokens") or 320),
+            )
+            parsed, parse_meta = self._parse_export_block_json(text)
+            if parsed:
+                validated, issues = self._validate_export_block_payload(block, parsed, full_results, export_context, current_package)
+                if validated:
+                    self._log_export_block_event(
+                        task_id=task_id,
+                        export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                        provider=provider,
+                        model=model,
+                        block_name=block["name"],
+                        action="export.block.outcome",
+                        outcome="success",
+                        attempt_number=1,
+                    )
+                    result["payload"] = validated
+                    return result
+                self._log_export_failure(
+                    task_id=task_id,
+                    export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                    provider=provider,
+                    model=model,
+                    attempt_number=1,
+                    phase="block_validation",
+                    category="validation_rejected",
+                    message="Export block was rejected during validation.",
+                    validation_reasons=issues[:10],
+                    block_name=block["name"],
+                )
+                result["validation_failed"] = True
+                return result
+            self._log_export_parse_forensics(
+                task_id=task_id,
+                export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                provider=provider,
+                model=model,
+                attempt_number=1,
+                phase="api_response_parse",
+                forensics=parse_meta.get("forensics") or [],
+                block_name=block["name"],
+            )
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                provider=provider,
+                model=model,
+                attempt_number=1,
+                phase="api_response_parse",
+                category=parse_meta.get("failure_category") or "response_parse_failed",
+                message="Export block response could not be parsed.",
+                parse_strategy_attempted=parse_meta.get("strategies"),
+                fenced_json_detected=parse_meta.get("fenced_json_detected"),
+                object_extraction_attempted=parse_meta.get("object_extraction_attempted"),
+                object_candidate_count=parse_meta.get("object_candidate_count"),
+                response_preview=self._safe_preview(text),
+                block_name=block["name"],
+            )
+            failure_class = self._primary_failure_class(parse_meta)
+            retry_mode = "same_request_retry"
+            compact_context = prompt_context
+            if failure_class == "truncated_json":
+                retry_mode = "compact_schema_retry"
+                compact_context = self._compact_block_context(prompt_context)
+            self._log_export_retry_mode(
+                task_id=task_id,
+                export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                provider=provider,
+                model=model,
+                retry_mode=retry_mode,
+                attempt_number=2,
+                reason=failure_class or "response_parse_failed",
+                block_name=block["name"],
+            )
+        except ExportProviderError as exc:
+            provider_errors.append(str(exc))
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                provider=exc.provider,
+                model=exc.model,
+                attempt_number=1,
+                phase="api_request",
+                category=exc.category,
+                message=exc.provider_message,
+                request_id=exc.request_id,
+                status_code=exc.status_code,
+                retryable=exc.retryable,
+                block_name=block["name"],
+            )
+            result["request_failed"] = True
+            return result
+        except Exception as exc:
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                provider=provider,
+                model=model,
+                attempt_number=1,
+                phase="api_request",
+                category="unexpected_request_failure",
+                message=str(exc),
+                block_name=block["name"],
+            )
+            result["request_failed"] = True
+            return result
+
+        try:
+            retry_prompt = self._build_export_block_prompt(block, compact_context, retry_mode=retry_mode)
+            text = self._export_client.generate(
+                system_prompt=_EXPORT_SYSTEM_PROMPT,
+                user_prompt=retry_prompt,
+                max_tokens=int(block.get("retry_max_tokens") or 220),
+            )
+            parsed, parse_meta = self._parse_export_block_json(text)
+            if parsed:
+                validated, issues = self._validate_export_block_payload(block, parsed, full_results, export_context, current_package)
+                if validated:
+                    self._log_export_block_event(
+                        task_id=task_id,
+                        export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                        provider=provider,
+                        model=model,
+                        block_name=block["name"],
+                        action="export.block.outcome",
+                        outcome="success_after_retry",
+                        attempt_number=2,
+                    )
+                    result["payload"] = validated
+                    return result
+                self._log_export_failure(
+                    task_id=task_id,
+                    export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                    provider=provider,
+                    model=model,
+                    attempt_number=2,
+                    phase="block_validation",
+                    category="validation_rejected",
+                    message="Export block retry was rejected during validation.",
+                    validation_reasons=issues[:10],
+                    block_name=block["name"],
+                )
+                result["validation_failed"] = True
+                return result
+            self._log_export_parse_forensics(
+                task_id=task_id,
+                export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                provider=provider,
+                model=model,
+                attempt_number=2,
+                phase="api_response_parse",
+                forensics=parse_meta.get("forensics") or [],
+                block_name=block["name"],
+            )
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                provider=provider,
+                model=model,
+                attempt_number=2,
+                phase="api_response_parse",
+                category=parse_meta.get("failure_category") or "response_parse_failed",
+                message="Export block retry response could not be parsed.",
+                parse_strategy_attempted=parse_meta.get("strategies"),
+                fenced_json_detected=parse_meta.get("fenced_json_detected"),
+                object_extraction_attempted=parse_meta.get("object_extraction_attempted"),
+                object_candidate_count=parse_meta.get("object_candidate_count"),
+                response_preview=self._safe_preview(text),
+                block_name=block["name"],
+            )
+            result["response_invalid"] = True
+            self._log_export_block_event(
+                task_id=task_id,
+                export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                provider=provider,
+                model=model,
+                block_name=block["name"],
+                action="export.block.outcome",
+                outcome="fallback_used",
+                attempt_number=2,
+            )
+            return result
+        except ExportProviderError as exc:
+            provider_errors.append(str(exc))
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                provider=exc.provider,
+                model=exc.model,
+                attempt_number=2,
+                phase="api_request",
+                category=exc.category,
+                message=exc.provider_message,
+                request_id=exc.request_id,
+                status_code=exc.status_code,
+                retryable=exc.retryable,
+                block_name=block["name"],
+            )
+            result["request_failed"] = True
+            return result
+        except Exception as exc:
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=",".join(export_context.get("formats") or []) or "unspecified",
+                provider=provider,
+                model=model,
+                attempt_number=2,
+                phase="api_request",
+                category="unexpected_retry_failure",
+                message=str(exc),
+                block_name=block["name"],
+            )
+            result["request_failed"] = True
+            return result
+
+    def _build_export_block_context(
+        self,
+        project: dict,
+        task: dict,
+        config: dict,
+        full_results: dict,
+        stats: dict,
+        upload_context: str | None,
+        export_context: dict[str, Any],
+        fallback_package: dict[str, Any],
+        block: dict[str, Any],
+    ) -> dict[str, Any]:
+        block_name = block["name"]
+        export_options = dict(export_context.get("export_options") or {})
+        fallback_sections = self._fallback_sections_by_title(fallback_package, "pptx" if block.get("doc_key") == "pptx" else "pdf")
+        selected_layers = self._selected_export_layer_labels(full_results, export_options)
+        common = {
+            "project": {
+                "name": project.get("name", ""),
+                "task_name": task.get("name", ""),
+                "platform": task.get("platform", "not specified"),
+                "scenario": task.get("scenario") or "automatic",
+            },
+            "qa_summary": self._build_compact_qa_summary(full_results),
+            "processing_path": self._build_compact_processing_path(task, full_results, config.get("corrections") or [], config.get("add_ons") or []),
+            "diagnostics_summary": self._build_compact_diagnostics_summary(full_results, stats, full_results.get("model_metadata") or {}),
+            "selected_layers": selected_layers,
+            "selected_visual_refs": [item["visual_ref"] for item in self._build_export_visual_refs(full_results)],
+            "rtp_label": self._rtp_label(full_results),
+        }
+        if block_name == "executive_summary":
+            common["fallback_block"] = {
+                "title": (fallback_package.get("pdf") or {}).get("title"),
+                "subtitle": (fallback_package.get("pdf") or {}).get("subtitle"),
+                "executive_summary": (fallback_package.get("pdf") or {}).get("executive_summary"),
+            }
+        else:
+            common["fallback_sections"] = [fallback_sections.get(title) for title in block.get("target_titles") or [] if fallback_sections.get(title)]
+            if block_name in {"recommendations", "pptx_group_4"}:
+                common["fallback_recommendations"] = (fallback_package.get("pdf") or {}).get("recommendations") or []
+            if block_name in {"result_layers", "pptx_group_3"}:
+                common["layer_summaries"] = self._build_compact_layer_summaries(full_results, block.get("target_titles") or [])
+            if block_name in {"project_setup", "task_summary"} and upload_context:
+                common["uploaded_files_summary"] = self._compact_text(upload_context, 220)
+        return self._sanitize_export_context_payload(common)
+
+    def _build_export_block_prompt(self, block: dict[str, Any], context: dict[str, Any], *, retry_mode: str) -> str:
+        block_name = block["name"]
+        doc_key = block.get("doc_key")
+        limits = self._block_prompt_limits(block, retry_mode)
+        if block_name == "executive_summary":
+            schema = '- keys: title, subtitle, executive_summary'
+        elif doc_key == "pptx":
+            schema = '- keys: sections, recommendations\n- each section keys: type, title, bullets, visual_refs, speaker_notes, callouts'
+        else:
+            schema = '- keys: sections, recommendations\n- each section keys: type, title, bullets, body, visual_refs, interpretation, implication, callouts'
+        return (
+            f"Task: write the compact export block `{block_name}` for `{doc_key}`.\n"
+            f"Retry mode: {retry_mode}\n"
+            "Return one small JSON object only.\n"
+            "Keep every string concise.\n"
+            "Use only the provided context and fallback block content.\n"
+            "Do not repeat text already implied by QA or processing path.\n"
+            "Do not output markdown, prose, or comments.\n"
+            "If space is tight, shorten bullets before dropping required meaning.\n"
+            "Keep scientific labels honest.\n"
+            f"Max sections: {limits['max_sections']}. Max bullets per section: {limits['max_bullets']}. Max bullet chars: {limits['max_bullet_chars']}.\n"
+            f"Max body chars: {limits['max_body_chars']}. Max interpretation chars: {limits['max_interpretation_chars']}. Max recommendation chars: {limits['max_recommendation_chars']}.\n"
+            "Do not wrap the payload inside the block name.\n"
+            + schema
+            + "\nContext JSON:\n"
+            + json.dumps(context, separators=(",", ":"), ensure_ascii=True)
+        )
+
+    def _block_prompt_limits(self, block: dict[str, Any], retry_mode: str) -> dict[str, int]:
+        base = {
+            "max_sections": 2 if block.get("doc_key") == "pptx" else 3,
+            "max_bullets": 3 if block.get("doc_key") == "pptx" else 3,
+            "max_bullet_chars": 70 if block.get("doc_key") == "pptx" else 95,
+            "max_body_chars": 140 if block.get("doc_key") == "pptx" else 220,
+            "max_interpretation_chars": 100 if block.get("doc_key") == "pptx" else 140,
+            "max_recommendation_chars": 110,
+        }
+        if block["name"] == "executive_summary":
+            base.update({"max_sections": 0, "max_bullets": 0, "max_body_chars": 0, "max_interpretation_chars": 0})
+        if block["name"] in {"pptx_group_4", "recommendations"}:
+            base.update({"max_sections": 2, "max_bullets": 2, "max_bullet_chars": 60, "max_body_chars": 110, "max_interpretation_chars": 90, "max_recommendation_chars": 95})
+        if retry_mode == "compact_schema_retry":
+            base["max_sections"] = min(base["max_sections"], 2)
+            base["max_bullets"] = min(base["max_bullets"], 2)
+            base["max_bullet_chars"] = min(base["max_bullet_chars"], 55 if block.get("doc_key") == "pptx" else 80)
+            base["max_body_chars"] = min(base["max_body_chars"], 90 if block.get("doc_key") == "pptx" else 160)
+            base["max_interpretation_chars"] = min(base["max_interpretation_chars"], 70 if block.get("doc_key") == "pptx" else 110)
+            base["max_recommendation_chars"] = min(base["max_recommendation_chars"], 85)
+        return base
+
+    def _compact_block_context(self, context: dict[str, Any]) -> dict[str, Any]:
+        compact = json.loads(json.dumps(context, default=str))
+        if isinstance(compact.get("fallback_sections"), list):
+            compact["fallback_sections"] = compact["fallback_sections"][:2]
+            for section in compact["fallback_sections"]:
+                if not isinstance(section, dict):
+                    continue
+                if isinstance(section.get("bullets"), list):
+                    section["bullets"] = [self._compact_text(item, 90) for item in section["bullets"][:3]]
+                section["body"] = self._compact_text(section.get("body"), 160)
+                section["interpretation"] = self._compact_text(section.get("interpretation"), 120)
+                section["implication"] = self._compact_text(section.get("implication"), 120)
+        if isinstance(compact.get("layer_summaries"), list):
+            compact["layer_summaries"] = compact["layer_summaries"][:3]
+        if isinstance(compact.get("fallback_recommendations"), list):
+            compact["fallback_recommendations"] = [self._compact_text(item, 110) for item in compact["fallback_recommendations"][:2]]
+        if isinstance(compact.get("qa_summary"), dict):
+            compact["qa_summary"]["warnings"] = [self._compact_text(item, 80) for item in (compact["qa_summary"].get("warnings") or [])[:2]]
+            compact["qa_summary"]["fallback_events"] = (compact["qa_summary"].get("fallback_events") or [])[:2]
+        return compact
+
+    def _fallback_sections_by_title(self, package: dict[str, Any], key: str) -> dict[str, dict[str, Any]]:
+        payload = package.get(key) or {}
+        return {str(section.get("title") or ""): json.loads(json.dumps(section, default=str)) for section in (payload.get("sections") or []) if section.get("title")}
+
+    def _build_compact_layer_summaries(self, full_results: dict, target_titles: list[str]) -> list[dict[str, Any]]:
+        summaries: list[dict[str, Any]] = []
+        for title in target_titles:
+            grid = full_results.get(self._result_key_for_export_layer(title))
+            stats = self._grid_stats(grid)
+            entry = {"title": title, "visual_refs": [item["visual_ref"] for item in self._build_export_visual_refs(full_results) if item["layer"] == title][:2]}
+            if stats:
+                entry["range_nT"] = round(float(stats.get("range", 0) or 0), 2)
+                entry["std_nT"] = round(float(stats.get("std", 0) or 0), 2)
+            summaries.append(entry)
+        return summaries
+
+    def _result_key_for_export_layer(self, title: str) -> str:
+        mapping = {
+            "Corrected Magnetic Field": "surface",
+            "Regional Magnetic Field": "regional_field",
+            "Residual Magnetic Field": "regional_residual",
+            "Reduction to Pole (RTP)": "rtp_surface",
+            "Low-latitude fallback transform": "rtp_surface",
+            "Analytic Signal": "analytic_signal",
+            "Tilt Derivative": "tilt_derivative",
+            "Total Gradient": "total_gradient",
+            "First Vertical Derivative": "first_vertical_derivative",
+            "First Vertical Derivative (FVD)": "first_vertical_derivative",
+            "Horizontal Derivative": "horizontal_derivative",
+            "Uncertainty": "uncertainty",
+            "Line Profiles": "line_profile_b64",
+        }
+        return mapping.get(title, "")
+
+    def _parse_export_block_json(self, text: str) -> tuple[dict | None, dict[str, Any]]:
+        parsed, meta = self._parse_json_object(text)
+        if parsed is None:
+            return None, meta
+        if not isinstance(parsed, dict):
+            meta["failure_category"] = "response_parse_failed"
+            return None, meta
+        return parsed, meta
+
+    def _unwrap_block_wrapper(self, block: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        lowered = block["name"].lower()
+        if lowered in {str(key).lower() for key in payload.keys()} and isinstance(payload.get(block["name"]), dict):
+            return payload[block["name"]]
+        if len(payload) == 1:
+            only_value = next(iter(payload.values()))
+            if isinstance(only_value, dict):
+                return only_value
+        return payload
+
+    def _validate_export_block_payload(
+        self,
+        block: dict[str, Any],
+        payload: dict[str, Any],
+        full_results: dict,
+        export_context: dict[str, Any],
+        current_package: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, list[str]]:
+        issues: list[str] = []
+        cleaned = self._unwrap_block_wrapper(block, json.loads(json.dumps(payload, default=str)))
+        if block["name"] == "executive_summary":
+            for key in ("title", "subtitle", "executive_summary"):
+                if key in cleaned:
+                    cleaned[key] = self._compact_text(cleaned.get(key), 220 if key != "executive_summary" else 420)
+            if not cleaned.get("executive_summary"):
+                issues.append("missing_executive_summary")
+        else:
+            sections = []
+            for section in (cleaned.get("sections") or []):
+                if not isinstance(section, dict):
+                    continue
+                title = str(section.get("title") or "").strip()
+                section["title"] = title
+                section["type"] = str(section.get("type") or "section").strip()
+                section["include"] = True
+                section["bullets"] = [self._compact_text(item, 140 if block.get("doc_key") != "pptx" else 90) for item in (section.get("bullets") or []) if str(item).strip()][: (5 if block.get("doc_key") != "pptx" else 4)]
+                section["body"] = self._compact_text(section.get("body"), 320 if block.get("doc_key") != "pptx" else 180)
+                section["interpretation"] = self._compact_text(section.get("interpretation"), 180 if block.get("doc_key") != "pptx" else 120)
+                section["implication"] = self._compact_text(section.get("implication"), 180 if block.get("doc_key") != "pptx" else 120)
+                section["caption"] = self._compact_text(section.get("caption"), 120)
+                section["speaker_notes"] = self._compact_text(section.get("speaker_notes"), 180)
+                section["callouts"] = [self._compact_text(item, 120) for item in (section.get("callouts") or []) if str(item).strip()][:3]
+                section["visual_refs"] = [str(item).strip() for item in (section.get("visual_refs") or []) if str(item).strip()][:2]
+                sections.append(section)
+            cleaned["sections"] = sections
+            cleaned["recommendations"] = [self._compact_text(item, 150) for item in (cleaned.get("recommendations") or []) if str(item).strip()][:4]
+            expected_titles = set(block.get("target_titles") or [])
+            normalized_expected = {self._normalize_block_title(title) for title in expected_titles}
+            if expected_titles and not any(self._normalize_block_title(section.get("title") or "") in normalized_expected for section in sections):
+                issues.append("missing_expected_section")
+            existing_texts = self._collect_existing_export_texts(current_package, block.get("doc_key"))
+            for section in sections:
+                text_blob = " ".join(section.get("bullets") or []) + " " + (section.get("body") or "") + " " + (section.get("interpretation") or "")
+                normalized = re.sub(r"\s+", " ", text_blob).strip().lower()
+                if normalized and normalized in existing_texts:
+                    issues.append("repeated_block_content")
+                if any(fragment in normalized for fragment in ("latitude,longitude", "\"type\":", "[insert", "todo", "lorem ipsum")):
+                    issues.append("blocked_content")
+            if cleaned.get("recommendations"):
+                low = " ".join(cleaned["recommendations"]).lower()
+                if not any(term in low for term in ("support", "uncertainty", "fallback", "level", "base-station", "prediction", "inclination", "declination", "crossover", "qa")):
+                    issues.append("untethered_recommendations")
+        return (cleaned if not issues else None), issues
+
+    def _normalize_block_title(self, value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+    def _collect_existing_export_texts(self, package: dict[str, Any], doc_key: str | None) -> set[str]:
+        keys = ["pptx"] if doc_key == "pptx" else ["pdf", "docx"]
+        seen: set[str] = set()
+        for key in keys:
+            payload = package.get(key) or {}
+            values = [payload.get("executive_summary") or ""] + [str(item) for item in (payload.get("recommendations") or [])]
+            for section in payload.get("sections") or []:
+                values.append(" ".join(section.get("bullets") or []))
+                values.append(section.get("body") or "")
+                values.append(section.get("interpretation") or "")
+            for value in values:
+                normalized = re.sub(r"\s+", " ", str(value).strip()).lower()
+                if normalized:
+                    seen.add(normalized)
+        return seen
+
+    def _merge_export_block_payload(self, package: dict[str, Any], block: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        merged = json.loads(json.dumps(package, default=str))
+        if block["doc_key"] == "report":
+            for key in ("pdf", "docx"):
+                merged[key] = self._apply_block_payload_to_document(merged.get(key) or {}, block, payload)
+            if payload.get("executive_summary"):
+                merged["summary"] = payload.get("executive_summary")
+        else:
+            merged["pptx"] = self._apply_block_payload_to_document(merged.get("pptx") or {}, block, payload)
+        return merged
+
+    def _apply_block_payload_to_document(self, document: dict[str, Any], block: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        doc = json.loads(json.dumps(document, default=str))
+        for key in ("title", "subtitle", "executive_summary"):
+            if payload.get(key):
+                doc[key] = payload[key]
+        if block["name"] == "executive_summary":
+            return doc
+        section_map = {str(section.get("title") or ""): section for section in (doc.get("sections") or []) if section.get("title")}
+        for section in payload.get("sections") or []:
+            title = str(section.get("title") or "").strip()
+            if title and title in section_map:
+                original = section_map[title]
+                original.update(section)
+            elif title:
+                (doc.setdefault("sections", [])).append(section)
+        if payload.get("recommendations"):
+            doc["recommendations"] = payload["recommendations"]
+        return doc
+
+    def _log_export_block_event(
+        self,
+        *,
+        task_id: str,
+        export_type: str,
+        provider: str,
+        model: str,
+        block_name: str,
+        action: str,
+        outcome: str,
+        attempt_number: int,
+    ) -> None:
+        log_event(
+            "INFO",
+            "Export block outcome",
+            action=action,
+            task_id=task_id,
+            export_type=export_type,
+            provider=provider,
+            model=model,
+            block_name=block_name,
+            outcome=outcome,
+            attempt_number=attempt_number,
+        )
+
+    def _build_export_generation_jobs(self, export_context: dict[str, Any]) -> list[dict[str, Any]]:
+        requested = [str(item).lower() for item in (export_context.get("formats") or [])]
+        if not requested:
+            requested = ["pdf", "docx", "pptx"]
+        jobs: list[dict[str, Any]] = []
+        report_formats = []
+        if "pdf" in requested:
+            report_formats.append("pdf")
+        if "word" in requested or "docx" in requested:
+            report_formats.append("docx")
+        report_formats = list(dict.fromkeys(report_formats))
+        if report_formats:
+            jobs.append(
+                {
+                    "job_type": "report",
+                    "expected_formats": report_formats,
+                    "max_tokens": 1800,
+                    "retry_max_tokens": 1100,
+                }
+            )
+        if "pptx" in requested:
+            jobs.append(
+                {
+                    "job_type": "pptx",
+                    "expected_formats": ["pptx"],
+                    "max_tokens": 950,
+                    "retry_max_tokens": 650,
+                }
+            )
+        return jobs
+
+    def _complete_fragment_for_requested_formats(self, parsed: dict[str, Any], expected_formats: list[str]) -> dict[str, Any]:
+        fragment: dict[str, Any] = {"summary": str(parsed.get("summary") or "").strip()}
+        report_payload = parsed.get("report")
+        if isinstance(report_payload, dict):
+            for fmt in expected_formats:
+                if fmt in {"pdf", "docx"}:
+                    fragment[fmt] = json.loads(json.dumps(report_payload))
+        for fmt in expected_formats:
+            payload = parsed.get(fmt)
+            if isinstance(payload, dict):
+                fragment[fmt] = payload
+        for fmt in expected_formats:
+            if fmt in {"pdf", "docx"} and fmt not in fragment:
+                source = fragment.get("pdf") or fragment.get("docx")
+                if isinstance(source, dict):
+                    fragment[fmt] = json.loads(json.dumps(source))
+        if not fragment.get("summary"):
+            primary = None
+            for fmt in ("pdf", "docx", "pptx"):
+                payload = fragment.get(fmt)
+                if isinstance(payload, dict):
+                    primary = payload
+                    break
+            if isinstance(primary, dict):
+                fragment["summary"] = str(primary.get("executive_summary") or "").strip()
+        return fragment
+
+    def _merge_export_fragments(self, fragments: list[dict[str, Any]], export_context: dict[str, Any]) -> dict[str, Any]:
+        merged: dict[str, Any] = {"summary": ""}
+        for fragment in fragments:
+            if not merged.get("summary") and fragment.get("summary"):
+                merged["summary"] = fragment["summary"]
+            for key in ("docx", "pdf", "pptx"):
+                payload = fragment.get(key)
+                if isinstance(payload, dict):
+                    merged[key] = payload
+        requested = {str(item).lower() for item in (export_context.get("formats") or [])}
+        if "pdf" in requested and "pdf" not in merged and isinstance(merged.get("docx"), dict):
+            merged["pdf"] = json.loads(json.dumps(merged["docx"]))
+        if ("word" in requested or "docx" in requested) and "docx" not in merged and isinstance(merged.get("pdf"), dict):
+            merged["docx"] = json.loads(json.dumps(merged["pdf"]))
+        for key in ("docx", "pdf", "pptx"):
+            merged.setdefault(key, {"title": "", "subtitle": "", "executive_summary": "", "sections": [], "visuals": [], "recommendations": [], "file_manifest": [], "quality_checks": []})
+        if not merged.get("summary"):
+            merged["summary"] = str((merged.get("pdf") or {}).get("executive_summary") or (merged.get("docx") or {}).get("executive_summary") or (merged.get("pptx") or {}).get("executive_summary") or "").strip()
+        return merged
+
+    def _build_retry_export_context(self, export_context: dict[str, Any], *, reduced_scope: bool) -> dict[str, Any]:
+        retry_context = json.loads(json.dumps(export_context or {}, default=str))
+        export_options = dict(retry_context.get("export_options") or {})
+        selected_sections = list(export_options.get("selected_narrative_sections") or retry_context.get("aurora_sections") or [])
+        if reduced_scope:
+            keep = {
+                "Structural interpretation",
+                "Anomaly catalogue",
+                "Coverage gap analysis",
+                "Drilling recommendations",
+                "QA summary",
+            }
+            selected_sections = [item for item in selected_sections if item in keep][:2]
+        retry_context["aurora_sections"] = selected_sections
+        export_options["selected_narrative_sections"] = selected_sections
+        retry_context["export_options"] = export_options
+        return retry_context
+
+    def _primary_failure_class(self, parse_meta: dict[str, Any]) -> str:
+        for forensic in parse_meta.get("forensics") or []:
+            failure_class = str(forensic.get("failure_class") or "").strip()
+            if failure_class:
+                return failure_class
+        return ""
+
+    def _log_export_retry_mode(
+        self,
+        *,
+        task_id: str,
+        export_type: str,
+        provider: str,
+        model: str,
+        retry_mode: str,
+        attempt_number: int,
+        reason: str,
+        block_name: str | None = None,
+    ) -> None:
+        log_event(
+            "INFO",
+            "Export retry mode",
+            action="export.path.retry",
+            task_id=task_id,
+            export_type=export_type,
+            provider=provider,
+            model=model,
+            retry_mode=retry_mode,
+            attempt_number=attempt_number,
+            reason=reason,
+            block_name=block_name,
+        )
+
+    def _run_export_generation_job(
+        self,
+        *,
+        project: dict,
+        task: dict,
+        config: dict,
+        full_results: dict,
+        stats: dict,
+        upload_context: str | None,
+        export_context: dict[str, Any],
+        project_id: str,
+        task_id: str,
+        provider: str,
+        model: str,
+        job: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, str, list[str]]:
+        errors: list[str] = []
+        export_type = ",".join(export_context.get("formats") or []) or "unspecified"
+        expected_formats = list(job.get("expected_formats") or [])
+        retry_mode = "same_request_retry"
+        retry_export_context = dict(export_context)
+        try:
+            user_prompt = self._build_export_data_prompt(
+                project,
+                task,
+                config,
+                full_results,
+                stats,
+                upload_context,
+                export_context,
+                expected_formats=expected_formats,
+                retry_mode="initial",
+            )
+        except Exception as exc:
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=export_type,
+                provider=provider,
+                model=model,
+                attempt_number=0,
+                phase="prompt_build",
+                category="prompt_build_failed",
+                message=str(exc),
+            )
+            raise
+        self._log_export_token_estimate(task_id, project_id, _EXPORT_SYSTEM_PROMPT, user_prompt)
+        try:
+            text = self._export_client.generate(
+                system_prompt=_EXPORT_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                max_tokens=int(job.get("max_tokens") or 2000),
+            )
+            parsed, parse_meta = self._parse_export_json(text, expected_formats=expected_formats)
+            if parsed:
+                return self._complete_fragment_for_requested_formats(parsed, expected_formats), "success", errors
+            self._log_export_parse_forensics(
+                task_id=task_id,
+                export_type=export_type,
+                provider=provider,
+                model=model,
+                attempt_number=1,
+                phase="api_response_parse",
+                forensics=parse_meta.get("forensics") or [],
+            )
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=export_type,
+                provider=provider,
+                model=model,
+                attempt_number=1,
+                phase="api_response_parse",
+                category=parse_meta.get("failure_category") or "response_parse_failed",
+                message="Export response could not be parsed into a valid package.",
+                parse_strategy_attempted=parse_meta.get("strategies"),
+                fenced_json_detected=parse_meta.get("fenced_json_detected"),
+                object_extraction_attempted=parse_meta.get("object_extraction_attempted"),
+                object_candidate_count=parse_meta.get("object_candidate_count"),
+                response_preview=self._safe_preview(text),
+            )
+            failure_class = self._primary_failure_class(parse_meta)
+            retry_expected_formats = list(expected_formats)
+            if failure_class == "truncated_json":
+                if str(job.get("job_type") or "") == "report":
+                    retry_mode = "reduced_scope_retry"
+                    retry_export_context = self._build_retry_export_context(export_context, reduced_scope=True)
+                else:
+                    retry_mode = "compact_schema_retry"
+                    retry_export_context = self._build_retry_export_context(export_context, reduced_scope=False)
+            self._log_export_retry_mode(
+                task_id=task_id,
+                export_type=export_type,
+                provider=provider,
+                model=model,
+                retry_mode=retry_mode,
+                attempt_number=2,
+                reason=failure_class or "response_parse_failed",
+            )
+        except ExportProviderError as exc:
+            errors.append(str(exc))
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=export_type,
+                provider=exc.provider,
+                model=exc.model,
+                attempt_number=1,
+                phase="api_request",
+                category=exc.category,
+                message=exc.provider_message,
+                request_id=exc.request_id,
+                status_code=exc.status_code,
+                retryable=exc.retryable,
+            )
+            return None, "request_failed", errors
+        except Exception as exc:
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=export_type,
+                provider=provider,
+                model=model,
+                attempt_number=1,
+                phase="api_request",
+                category="unexpected_request_failure",
+                message=str(exc),
+            )
+            logger.exception("Aurora export report generation failed", extra={"task_id": task_id, "project_id": project_id, "error": str(exc)})
+            return None, "request_failed", errors
+
+        try:
+            compact_prompt = self._build_export_data_prompt(
+                project,
+                task,
+                config,
+                full_results,
+                stats,
+                (upload_context or "")[:900],
+                retry_export_context,
+                expected_formats=retry_expected_formats,
+                retry_mode=retry_mode,
+            )
+            text = self._export_client.generate(
+                system_prompt=_EXPORT_SYSTEM_PROMPT,
+                user_prompt=compact_prompt,
+                max_tokens=int(job.get("retry_max_tokens") or 1200),
+            )
+            parsed, parse_meta = self._parse_export_json(text, expected_formats=retry_expected_formats)
+            if parsed:
+                return self._complete_fragment_for_requested_formats(parsed, expected_formats), "success", errors
+            self._log_export_parse_forensics(
+                task_id=task_id,
+                export_type=export_type,
+                provider=provider,
+                model=model,
+                attempt_number=2,
+                phase="api_response_parse",
+                forensics=parse_meta.get("forensics") or [],
+            )
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=export_type,
+                provider=provider,
+                model=model,
+                attempt_number=2,
+                phase="api_response_parse",
+                category=parse_meta.get("failure_category") or "response_parse_failed",
+                message="Export retry response could not be parsed into a valid package.",
+                parse_strategy_attempted=parse_meta.get("strategies"),
+                fenced_json_detected=parse_meta.get("fenced_json_detected"),
+                object_extraction_attempted=parse_meta.get("object_extraction_attempted"),
+                object_candidate_count=parse_meta.get("object_candidate_count"),
+                response_preview=self._safe_preview(text),
+            )
+        except ExportProviderError as exc:
+            errors.append(str(exc))
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=export_type,
+                provider=exc.provider,
+                model=exc.model,
+                attempt_number=2,
+                phase="api_request",
+                category=exc.category,
+                message=exc.provider_message,
+                request_id=exc.request_id,
+                status_code=exc.status_code,
+                retryable=exc.retryable,
+            )
+            return None, "request_failed", errors
+        except Exception as exc:
+            self._log_export_failure(
+                task_id=task_id,
+                export_type=export_type,
+                provider=provider,
+                model=model,
+                attempt_number=2,
+                phase="api_request",
+                category="unexpected_retry_failure",
+                message=str(exc),
+            )
+            logger.exception("Aurora export retry failed", extra={"task_id": task_id, "project_id": project_id, "error": str(exc)})
+            return None, "request_failed", errors
+        return None, "response_invalid", errors
 
     def _parse_chat_response(self, text: str, location: str) -> AuroraResponse:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -234,23 +1199,315 @@ class AIService:
                     break
         return AuroraResponse(location=location, summary=summary, highlights=highlights, message=text)
 
-    def _parse_export_json(self, text: str) -> dict | None:
-        fence_match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
-        json_str = fence_match.group(1) if fence_match else text.strip()
-        brace_match = re.search(r"\{[\s\S]+\}", json_str)
-        if brace_match:
-            json_str = brace_match.group(0)
+    def _parse_export_json(self, text: str, *, expected_formats: list[str] | None = None) -> tuple[dict | None, dict[str, Any]]:
+        parsed, meta = self._parse_json_object(text)
+        if parsed is None:
+            return None, meta
+        normalized = self._normalize_export_payload_fragment(parsed, expected_formats or [])
+        if normalized is not None:
+            return normalized, meta
+        meta["forensics"].append(
+            {
+                "parse_strategy": "shape_validation",
+                "candidate_length": len(json.dumps(parsed)),
+                "candidate_startswith_brace": True,
+                "candidate_endswith_brace": True,
+                "fenced_json_detected": meta.get("fenced_json_detected"),
+                "object_candidate_count": None,
+                "decode_error_type": "UnrecognizedExportShape",
+                "decode_error_message": "JSON decoded successfully but did not match the expected export package shape.",
+                "decode_error_line": None,
+                "decode_error_column": None,
+                "decode_error_pos": None,
+                "failure_preview": self._safe_error_preview(json.dumps(parsed), None),
+                "failure_class": "unknown_parse_failure",
+            }
+        )
+        meta["failure_category"] = "response_parse_failed"
+        return None, meta
+
+    def _parse_json_object(self, text: str) -> tuple[dict | None, dict[str, Any]]:
+        raw_text = text or ""
+        stripped = raw_text.strip()
+        truncation_signals = self._detect_truncation_signals(raw_text)
+        meta = {
+            "strategies": [],
+            "fenced_json_detected": False,
+            "object_extraction_attempted": False,
+            "object_candidate_count": 0,
+            "failure_category": "response_parse_failed",
+            "forensics": [],
+            "truncation_signals": truncation_signals,
+        }
+        direct, forensic = self._decode_json_object_candidate(stripped, strategy="direct_json", fenced_json_detected=False, truncation_signals=truncation_signals)
+        meta["strategies"].append("direct_json")
+        if forensic:
+            meta["forensics"].append(forensic)
+            meta["failure_category"] = self._response_parse_category(forensic)
+        if direct is not None:
+            return direct, meta
+        if "```" in raw_text:
+            meta["fenced_json_detected"] = True
+        fenced_blocks = self._extract_fenced_code_blocks(raw_text)
+        if fenced_blocks:
+            meta["strategies"].append("fenced_json")
+            if len(fenced_blocks) == 1:
+                fenced, forensic = self._decode_json_object_candidate(
+                    fenced_blocks[0],
+                    strategy="fenced_json",
+                    fenced_json_detected=meta["fenced_json_detected"],
+                    truncation_signals=truncation_signals,
+                )
+                if forensic:
+                    meta["forensics"].append(forensic)
+                    meta["failure_category"] = self._response_parse_category(forensic)
+                if fenced is not None:
+                    return fenced, meta
+        wrapper_stripped = self._strip_markdown_json_wrappers(raw_text)
+        if wrapper_stripped is not None:
+            meta["strategies"].append("wrapper_stripped_json")
+            stripped_result, forensic = self._decode_json_object_candidate(
+                wrapper_stripped,
+                strategy="wrapper_stripped_json",
+                fenced_json_detected=meta["fenced_json_detected"],
+                truncation_signals=truncation_signals,
+            )
+            if forensic:
+                meta["forensics"].append(forensic)
+                meta["failure_category"] = self._response_parse_category(forensic)
+            if stripped_result is not None:
+                return stripped_result, meta
+        meta["object_extraction_attempted"] = True
+        meta["strategies"].append("object_extraction")
+        candidates = self._extract_json_object_candidates(raw_text)
+        meta["object_candidate_count"] = len(candidates)
+        if len(candidates) != 1:
+            forensic = {
+                "parse_strategy": "object_extraction",
+                "candidate_length": 0,
+                "candidate_startswith_brace": False,
+                "candidate_endswith_brace": False,
+                "fenced_json_detected": meta["fenced_json_detected"],
+                "object_candidate_count": len(candidates),
+                "decode_error_type": "object_extraction_ambiguity",
+                "decode_error_message": (
+                    "Multiple top-level JSON objects detected."
+                    if len(candidates) > 1
+                    else "No recoverable top-level JSON object detected."
+                ),
+                "decode_error_line": None,
+                "decode_error_column": None,
+                "decode_error_pos": None,
+                "failure_preview": "",
+                "failure_class": "ambiguous_multiple_objects" if len(candidates) > 1 else "unknown_parse_failure",
+            }
+            meta["forensics"].append(forensic)
+            if len(candidates) > 1:
+                meta["failure_category"] = "response_parse_ambiguous"
+            return None, meta
+        decoded, forensic = self._decode_json_object_candidate(
+            candidates[0],
+            strategy="object_extraction",
+            fenced_json_detected=meta["fenced_json_detected"],
+            object_candidate_count=len(candidates),
+            truncation_signals=truncation_signals,
+        )
+        if forensic:
+            meta["forensics"].append(forensic)
+            meta["failure_category"] = self._response_parse_category(forensic)
+        return decoded, meta
+
+    def _decode_json_object_candidate(
+        self,
+        candidate: str | None,
+        *,
+        strategy: str,
+        fenced_json_detected: bool,
+        object_candidate_count: int | None = None,
+        truncation_signals: dict[str, Any] | None = None,
+    ) -> tuple[dict | None, dict[str, Any] | None]:
+        if not candidate:
+            return None, None
+        stripped_candidate = candidate.strip()
         try:
-            data = json.loads(json_str)
-        except Exception:
-            return None
+            data = json.loads(stripped_candidate)
+        except json.JSONDecodeError as exc:
+            forensic = {
+                "parse_strategy": strategy,
+                "candidate_length": len(stripped_candidate),
+                "candidate_startswith_brace": stripped_candidate.startswith("{"),
+                "candidate_endswith_brace": stripped_candidate.endswith("}"),
+                "fenced_json_detected": fenced_json_detected,
+                "object_candidate_count": object_candidate_count,
+                "decode_error_type": exc.__class__.__name__,
+                "decode_error_message": exc.msg,
+                "decode_error_line": exc.lineno,
+                "decode_error_column": exc.colno,
+                "decode_error_pos": exc.pos,
+                "failure_preview": self._safe_error_preview(stripped_candidate, exc.pos),
+                "failure_class": self._classify_json_decode_error(exc, stripped_candidate, truncation_signals=truncation_signals),
+            }
+            return None, forensic
+        except Exception as exc:
+            forensic = {
+                "parse_strategy": strategy,
+                "candidate_length": len(stripped_candidate),
+                "candidate_startswith_brace": stripped_candidate.startswith("{"),
+                "candidate_endswith_brace": stripped_candidate.endswith("}"),
+                "fenced_json_detected": fenced_json_detected,
+                "object_candidate_count": object_candidate_count,
+                "decode_error_type": exc.__class__.__name__,
+                "decode_error_message": str(exc),
+                "decode_error_line": None,
+                "decode_error_column": None,
+                "decode_error_pos": None,
+                "failure_preview": self._safe_error_preview(stripped_candidate, None),
+                "failure_class": "unknown_parse_failure",
+            }
+            return None, forensic
         if not isinstance(data, dict):
-            return None
-        if {"docx", "pdf", "pptx"}.issubset(set(data.keys())):
-            return self._validate_export_package(data)
+            return None, {
+                "parse_strategy": strategy,
+                "candidate_length": len(stripped_candidate),
+                "candidate_startswith_brace": stripped_candidate.startswith("{"),
+                "candidate_endswith_brace": stripped_candidate.endswith("}"),
+                "fenced_json_detected": fenced_json_detected,
+                "object_candidate_count": object_candidate_count,
+                "decode_error_type": "UnexpectedTopLevelType",
+                "decode_error_message": f"Top-level JSON value was {type(data).__name__}, not object.",
+                "decode_error_line": None,
+                "decode_error_column": None,
+                "decode_error_pos": None,
+                "failure_preview": self._safe_error_preview(stripped_candidate, None),
+                "failure_class": "unknown_parse_failure",
+            }
+        return data, None
+
+    def _decode_export_json_candidate(
+        self,
+        candidate: str | None,
+        *,
+        strategy: str,
+        fenced_json_detected: bool,
+        object_candidate_count: int | None = None,
+        expected_formats: list[str] | None = None,
+        truncation_signals: dict[str, Any] | None = None,
+    ) -> tuple[dict | None, dict[str, Any] | None]:
+        data, forensic = self._decode_json_object_candidate(
+            candidate,
+            strategy=strategy,
+            fenced_json_detected=fenced_json_detected,
+            object_candidate_count=object_candidate_count,
+            truncation_signals=truncation_signals,
+        )
+        if forensic:
+            return None, forensic
+        if data is None:
+            return None, None
+        normalized = self._normalize_export_payload_fragment(data, expected_formats or [])
+        if normalized is not None:
+            return normalized, None
         if "report" in data or "executive_summary" in data:
-            return self._convert_legacy_export_report(data)
+            return self._convert_legacy_export_report(data), None
+        return None, {
+            "parse_strategy": strategy,
+            "candidate_length": len(stripped_candidate),
+            "candidate_startswith_brace": stripped_candidate.startswith("{"),
+            "candidate_endswith_brace": stripped_candidate.endswith("}"),
+            "fenced_json_detected": fenced_json_detected,
+            "object_candidate_count": object_candidate_count,
+            "decode_error_type": "UnrecognizedExportShape",
+            "decode_error_message": "JSON decoded successfully but did not match the expected export package shape.",
+            "decode_error_line": None,
+            "decode_error_column": None,
+            "decode_error_pos": None,
+            "failure_preview": self._safe_error_preview(stripped_candidate, None),
+            "failure_class": "unknown_parse_failure",
+        }
+
+    def _detect_truncation_signals(self, text: str) -> dict[str, Any]:
+        candidate = (text or "").strip()
+        quote_count = 0
+        escaped = False
+        for char in candidate:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+            elif char == '"':
+                quote_count += 1
+        return {
+            "missing_closing_brace": bool(candidate) and "{" in candidate and not candidate.endswith("}"),
+            "unmatched_quotes": quote_count % 2 == 1,
+            "unmatched_code_fence": candidate.count("```") % 2 == 1,
+        }
+
+    def _normalize_export_payload_fragment(self, data: dict[str, Any], expected_formats: list[str]) -> dict[str, Any] | None:
+        required_formats = [fmt for fmt in expected_formats if fmt in {"pdf", "docx", "pptx"}]
+        if not required_formats and "report" in data:
+            required_formats = ["pdf"]
+        normalized: dict[str, Any] = {"summary": str(data.get("summary") or "").strip()}
+        report_payload = data.get("report")
+        if isinstance(report_payload, dict):
+            report_payload = self._validate_export_package({"report": report_payload}, required_formats=["report"])
+            if report_payload:
+                normalized["report"] = report_payload["report"]
+        for key in ("docx", "pdf", "pptx"):
+            payload = data.get(key)
+            if not isinstance(payload, dict):
+                continue
+            validated = self._validate_export_package({key: payload}, required_formats=[key])
+            if validated:
+                normalized[key] = validated[key]
+        if "report" in normalized or any(key in normalized for key in ("docx", "pdf", "pptx")):
+            return normalized
         return None
+
+    def _extract_fenced_code_blocks(self, text: str) -> list[str]:
+        matches = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", text or "", flags=re.IGNORECASE)
+        return [match.strip() for match in matches if match and match.strip()]
+
+    def _strip_markdown_json_wrappers(self, text: str) -> str | None:
+        candidate = (text or "").strip()
+        if not candidate.startswith("```"):
+            return None
+        candidate = re.sub(r"^```(?:json)?\s*", "", candidate, count=1, flags=re.IGNORECASE)
+        candidate = re.sub(r"\s*```$", "", candidate, count=1, flags=re.IGNORECASE)
+        return candidate.strip() or None
+
+    def _extract_json_object_candidates(self, text: str) -> list[str]:
+        candidates: list[str] = []
+        start_index: int | None = None
+        depth = 0
+        in_string = False
+        escaped = False
+        for index, char in enumerate(text or ""):
+            if start_index is None:
+                if char == "{":
+                    start_index = index
+                    depth = 1
+                    in_string = False
+                    escaped = False
+                continue
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    candidates.append(text[start_index : index + 1])
+                    start_index = None
+        return [candidate.strip() for candidate in candidates if candidate.strip()]
 
     def _build_chat_system_prompt(
         self,
@@ -375,23 +1632,60 @@ class AIService:
         stats: dict,
         upload_context: str | None,
         export_context: dict | None,
+        *,
+        expected_formats: list[str] | None = None,
+        retry_mode: str = "initial",
     ) -> str:
-        data = self._build_export_context_data(project, task, config, full_results, stats, upload_context, export_context or {})
+        expected_formats = [str(item).lower() for item in (expected_formats or []) if str(item).strip()]
+        data = self._build_export_context_data(
+            project,
+            task,
+            config,
+            full_results,
+            stats,
+            upload_context,
+            export_context or {},
+            expected_formats=expected_formats,
+            retry_mode=retry_mode,
+        )
         export_spec_excerpt = self._load_export_agent_excerpt(data, export_context or {})
+        prompt_limits = self._build_export_prompt_limits(expected_formats, retry_mode)
+        schema_lines = [
+            "Task: build one compact JSON export package.",
+            f"Requested formats: {', '.join(expected_formats) or 'report'}",
+            "Return compact JSON only.",
+            "Schema:",
+        ]
+        if any(fmt in {"pdf", "docx"} for fmt in expected_formats):
+            schema_lines.append("- top keys: summary, report")
+            schema_lines.append("- report keys: title, subtitle, executive_summary, sections, visuals, recommendations, quality_checks")
+        if "pptx" in expected_formats:
+            schema_lines.append("- top keys may also include: pptx")
+            schema_lines.append("- pptx keys: title, subtitle, executive_summary, sections, visuals, recommendations, quality_checks")
+        schema_lines.append("- section keys: type, title, include, bullets")
+        schema_lines.append("- optional section keys only when needed: visual_refs, caption, interpretation, implication, speaker_notes, layout, callouts")
         return (
-            "Task: build one JSON export package.\n"
-            "Schema:\n"
-            "- top keys: docx, pdf, pptx, summary\n"
-            "- docx/pdf/pptx keys: title, subtitle, executive_summary, sections, visuals, recommendations, file_manifest, quality_checks\n"
-            "- section keys: type, title, include, bullets, body, visual_refs, figure_title, caption, interpretation, implication, layout, callouts, table_rows, speaker_notes\n\n"
-            "Constraints:\n"
-            "- use only allowed_export_sections, selected_layers, selected_visual_refs, qa_summary, processing_path, diagnostics_summary, and findings_summary\n"
-            "- omit unsupported sections and absent layers\n"
-            "- no raw dumps, placeholders, duplicate paragraphs, filler, or invented geology\n"
-            "- keep QA/fallback honesty in workflow, reliability, conclusions, and recommendations\n"
-            "- PPTX: <=5 bullets per slide, no long paragraphs, one idea per slide\n"
-            "- recommendations must be limitation-driven\n"
-            "- use exact visual_refs only\n\n"
+            "\n".join(schema_lines)
+            + "\n\nConstraints:\n"
+            + f"- retry mode: {retry_mode}\n"
+            + f"- max sections: {prompt_limits['max_sections']}\n"
+            + f"- max bullets per section: {prompt_limits['max_bullets']}\n"
+            + f"- max bullet chars: {prompt_limits['max_bullet_chars']}\n"
+            + f"- max executive summary chars: {prompt_limits['max_summary_chars']}\n"
+            + f"- max interpretation chars: {prompt_limits['max_interpretation_chars']}\n"
+            + f"- max caption chars: {prompt_limits['max_caption_chars']}\n"
+            + f"- max speaker notes chars: {prompt_limits['max_speaker_notes_chars']}\n"
+            + "- use only allowed_export_sections, selected_layers, selected_visual_refs, qa_summary, processing_path, diagnostics_summary, and findings_summary\n"
+            + "- omit unsupported sections, absent layers, empty optional fields, and duplicate statements\n"
+            + "- no raw dumps, placeholders, filler, repeated paragraphs, or invented geology\n"
+            + "- keep QA/fallback honesty in workflow, reliability, conclusions, and recommendations\n"
+            + "- return compact completed JSON only; do not emit prose, markdown fences, or comments\n"
+            + "- if space is tight, shorten strings and drop optional fields before dropping required sections\n"
+            + "- do not begin a string field that cannot be completed within the token limit\n"
+            + "- recommendations must be limitation-driven\n"
+            + "- use exact visual_refs only\n"
+            + ("- PPTX: <=5 bullets per slide, no long paragraphs, one idea per slide\n" if "pptx" in expected_formats else "")
+            + "\n"
             + (f"Relevant export rules:\n{export_spec_excerpt}\n\n" if export_spec_excerpt else "")
             + "Context JSON:\n"
             + json.dumps(data, separators=(",", ":"), ensure_ascii=True)
@@ -428,6 +1722,38 @@ class AIService:
         except Exception:
             return ""
 
+    def _build_export_prompt_limits(self, expected_formats: list[str], retry_mode: str) -> dict[str, int]:
+        is_pptx_only = expected_formats == ["pptx"]
+        if retry_mode == "compact_schema_retry":
+            return {
+                "max_sections": 7 if is_pptx_only else 8,
+                "max_bullets": 3 if is_pptx_only else 4,
+                "max_bullet_chars": 90,
+                "max_summary_chars": 320,
+                "max_interpretation_chars": 150,
+                "max_caption_chars": 90,
+                "max_speaker_notes_chars": 160,
+            }
+        if retry_mode == "reduced_scope_retry":
+            return {
+                "max_sections": 7,
+                "max_bullets": 4,
+                "max_bullet_chars": 110,
+                "max_summary_chars": 420,
+                "max_interpretation_chars": 170,
+                "max_caption_chars": 100,
+                "max_speaker_notes_chars": 180,
+            }
+        return {
+            "max_sections": 8 if is_pptx_only else 10,
+            "max_bullets": 5 if is_pptx_only else 4,
+            "max_bullet_chars": 110 if is_pptx_only else 120,
+            "max_summary_chars": 420 if is_pptx_only else 520,
+            "max_interpretation_chars": 180,
+            "max_caption_chars": 110,
+            "max_speaker_notes_chars": 220,
+        }
+
     def _build_export_context_data(
         self,
         project: dict,
@@ -437,6 +1763,9 @@ class AIService:
         stats: dict,
         upload_context: str | None,
         export_context: dict,
+        *,
+        expected_formats: list[str] | None = None,
+        retry_mode: str = "initial",
     ) -> dict[str, Any]:
         corrections = config.get("corrections") or []
         add_ons = config.get("add_ons") or []
@@ -452,6 +1781,7 @@ class AIService:
         acquisition_summary = self._build_export_acquisition_summary(task, full_results, stats, validation)
         derived_findings = self._build_export_findings(task, config, full_results, stats)
         selected_layer_labels = self._selected_export_layer_labels(full_results, export_options)
+        prompt_limits = self._build_export_prompt_limits(expected_formats or [], retry_mode)
         qa_summary = self._build_compact_qa_summary(full_results)
         diagnostics_summary = self._build_compact_diagnostics_summary(full_results, stats, model_meta)
         processing_path = self._build_compact_processing_path(task, full_results, corrections, add_ons)
@@ -467,15 +1797,16 @@ class AIService:
             },
             "actual_results": {
                 "selected_layers": selected_layer_labels,
-                "selected_visual_refs": [item["visual_ref"] for item in available_visual_assets],
+                "selected_visual_refs": [item["visual_ref"] for item in available_visual_assets[: prompt_limits["max_sections"]]],
                 "actual_emag2_reference": bool(full_results.get("emag2_reference") or full_results.get("emag2_reference_data")),
                 "rtp_label": self._rtp_label(full_results),
             },
             "allowed_export_sections": self._selected_export_section_titles(full_results, export_context),
             "export_request": {
-                "formats": export_context.get("formats") or [],
+                "formats": expected_formats or export_context.get("formats") or [],
                 "selected_sections": selected_sections,
                 "toggles": {key: value for key, value in export_options.items() if value},
+                "retry_mode": retry_mode,
             },
             "processing_path": processing_path,
             "qa_summary": qa_summary,
@@ -487,7 +1818,8 @@ class AIService:
                 "definition": self._compact_text(full_results.get("residual_definition"), 160),
                 "regional_vs_residual": self._compact_text(full_results.get("regional_vs_residual_summary"), 180),
             },
-            "uploaded_files_summary": self._compact_text(upload_context[: self._MAX_UPLOAD_SNIPPET_CHARS] if upload_context else "", 600),
+            "uploaded_files_summary": self._compact_text(upload_context[: self._MAX_UPLOAD_SNIPPET_CHARS] if upload_context else "", 280 if retry_mode != "initial" else 600),
+            "prompt_limits": prompt_limits,
             "token_budget": {"optimize_for": "low_input_tokens_high_quality"},
         }
         return self._sanitize_export_context_payload(data)
@@ -750,18 +2082,176 @@ class AIService:
     def _log_export_token_estimate(self, task_id: str, project_id: str, system_prompt: str, user_prompt: str) -> None:
         system_tokens = self._estimate_tokens(system_prompt)
         user_tokens = self._estimate_tokens(user_prompt)
-        logger.info(
+        log_event(
+            "INFO",
             "Export prompt token estimate",
-            extra={
-                "task_id": task_id,
-                "project_id": project_id,
-                "system_tokens_est": system_tokens,
-                "user_tokens_est": user_tokens,
-                "total_tokens_est": system_tokens + user_tokens,
-            },
+            action="export.prompt.token_estimate",
+            task_id=task_id,
+            project_id=project_id,
+            system_tokens_est=system_tokens,
+            user_tokens_est=user_tokens,
+            total_tokens_est=system_tokens + user_tokens,
         )
 
+    def _log_export_failure(
+        self,
+        *,
+        task_id: str,
+        export_type: str,
+        provider: str,
+        model: str,
+        attempt_number: int,
+        phase: str,
+        category: str,
+        message: str,
+        request_id: str | None = None,
+        status_code: int | None = None,
+        retryable: bool | None = None,
+        validation_reasons: list[str] | None = None,
+        response_preview: str | None = None,
+        parse_strategy_attempted: list[str] | None = None,
+        fenced_json_detected: bool | None = None,
+        object_extraction_attempted: bool | None = None,
+        object_candidate_count: int | None = None,
+        block_name: str | None = None,
+    ) -> None:
+        log_event(
+            "WARNING",
+            "Export path failure",
+            action="export.path.failure",
+            task_id=task_id,
+            export_type=export_type,
+            provider=provider,
+            model=model,
+            attempt_number=attempt_number,
+            request_id=request_id,
+            status_code=status_code,
+            provider_error_category=category,
+            provider_error_message=self._compact_text(message, 300),
+            phase=phase,
+            retryable=retryable,
+            validation_reasons=validation_reasons or [],
+            response_preview=response_preview or "",
+            parse_strategy_attempted=parse_strategy_attempted or [],
+            fenced_json_detected=fenced_json_detected,
+            object_extraction_attempted=object_extraction_attempted,
+            object_candidate_count=object_candidate_count,
+            block_name=block_name,
+        )
+
+    def _log_export_parse_forensics(
+        self,
+        *,
+        task_id: str,
+        export_type: str,
+        provider: str,
+        model: str,
+        attempt_number: int,
+        phase: str,
+        forensics: list[dict[str, Any]],
+        block_name: str | None = None,
+    ) -> None:
+        for forensic in forensics:
+            log_event(
+                "WARNING",
+                "Export parse forensics",
+                action="export.path.parse_forensics",
+                task_id=task_id,
+                export_type=export_type,
+                provider=provider,
+                model=model,
+                attempt_number=attempt_number,
+                phase=phase,
+                parse_strategy=forensic.get("parse_strategy"),
+                failure_class=forensic.get("failure_class"),
+                candidate_length=forensic.get("candidate_length"),
+                candidate_startswith_brace=forensic.get("candidate_startswith_brace"),
+                candidate_endswith_brace=forensic.get("candidate_endswith_brace"),
+                fenced_json_detected=forensic.get("fenced_json_detected"),
+                object_candidate_count=forensic.get("object_candidate_count"),
+                decode_error_type=forensic.get("decode_error_type"),
+                decode_error_message=forensic.get("decode_error_message"),
+                decode_error_line=forensic.get("decode_error_line"),
+                decode_error_column=forensic.get("decode_error_column"),
+                decode_error_pos=forensic.get("decode_error_pos"),
+                failure_preview=forensic.get("failure_preview"),
+                block_name=block_name,
+            )
+
+    def _log_export_outcome(
+        self,
+        *,
+        task_id: str,
+        export_type: str,
+        provider: str,
+        model: str,
+        outcome: str,
+    ) -> None:
+        log_event(
+            "INFO",
+            "Export path outcome",
+            action="export.path.outcome",
+            task_id=task_id,
+            export_type=export_type,
+            provider=provider,
+            model=model,
+            outcome=outcome,
+        )
+
+    def _safe_preview(self, text: str | None) -> str:
+        value = self._compact_text(text or "", 240)
+        return re.sub(r"\s+", " ", value).strip()
+
+    def _safe_error_preview(self, text: str, position: int | None, radius: int = 40) -> str:
+        if not text:
+            return ""
+        if position is None:
+            snippet = text[: radius * 2]
+        else:
+            start = max(0, position - radius)
+            end = min(len(text), position + radius)
+            snippet = text[start:end]
+        snippet = snippet.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+        return self._compact_text(snippet, radius * 2 + 20)
+
+    def _classify_json_decode_error(self, exc: json.JSONDecodeError, candidate: str, *, truncation_signals: dict[str, Any] | None = None) -> str:
+        message = (exc.msg or "").lower()
+        stripped = (candidate or "").rstrip()
+        tail_distance = max(0, len(stripped) - exc.pos)
+        truncation_signals = truncation_signals or {}
+        if "invalid \\escape" in message or "invalid control character" in message:
+            return "invalid_string_escaping"
+        if "extra data" in message:
+            return "trailing_non_json_content"
+        if "unterminated" in message:
+            return "truncated_json"
+        if ("expecting value" in message or "expecting ',' delimiter" in message or "expecting property name enclosed in double quotes" in message) and tail_distance <= 3:
+            return "truncated_json"
+        if truncation_signals.get("missing_closing_brace") or truncation_signals.get("unmatched_quotes") or truncation_signals.get("unmatched_code_fence"):
+            return "truncated_json"
+        if stripped and not stripped.endswith("}") and tail_distance <= 8:
+            return "truncated_json"
+        return "malformed_json"
+
+    def _response_parse_category(self, forensic: dict[str, Any]) -> str:
+        failure_class = forensic.get("failure_class")
+        if failure_class == "ambiguous_multiple_objects":
+            return "response_parse_ambiguous"
+        if failure_class in {
+            "malformed_json",
+            "truncated_json",
+            "invalid_string_escaping",
+            "trailing_non_json_content",
+            "unknown_parse_failure",
+        }:
+            return "response_parse_failed"
+        return "response_parse_failed"
+
     def _selected_export_layer_labels(self, full_results: dict, export_options: dict[str, Any]) -> list[str]:
+        explicit_labels = [str(item).strip() for item in (export_options.get("selected_output_labels") or []) if str(item).strip()]
+        if explicit_labels:
+            available = set(self._list_available_layers(full_results))
+            return [label for label in explicit_labels if label in available]
         allowed = []
         for label in self._list_available_layers(full_results):
             lowered = label.lower()
@@ -775,7 +2265,8 @@ class AIService:
         return allowed
 
     def _selected_export_section_titles(self, full_results: dict, export_context: dict[str, Any]) -> list[str]:
-        selected = set(export_context.get("aurora_sections") or [])
+        export_options = dict(export_context.get("export_options") or {})
+        selected = set(export_options.get("selected_narrative_sections") or export_context.get("aurora_sections") or [])
         base_sections = [
             "Cover",
             "Executive Summary",
@@ -812,16 +2303,60 @@ class AIService:
             return "Low-latitude fallback transform"
         return "Reduction to Pole (RTP)" if full_results.get("rtp_surface") is not None else ""
 
-    def _prepare_export_package(self, data: dict | None, full_results: dict, export_context: dict | None) -> dict | None:
+    def _requested_export_document_keys(self, export_context: dict[str, Any]) -> list[str]:
+        formats = {str(item).lower() for item in (export_context.get("formats") or [])}
+        if not formats:
+            return ["docx", "pdf", "pptx"]
+        keys: list[str] = []
+        if "word" in formats or "docx" in formats:
+            keys.append("docx")
+        if "pdf" in formats:
+            keys.append("pdf")
+        if "pptx" in formats:
+            keys.append("pptx")
+        return keys or ["docx", "pdf", "pptx"]
+
+    def _prepare_export_package(
+        self,
+        data: dict | None,
+        full_results: dict,
+        export_context: dict | None,
+        *,
+        task_id: str | None = None,
+        export_type: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        attempt_number: int | None = None,
+    ) -> dict | None:
         if not data:
             return None
         prepared = self._validate_export_package(data)
         if not prepared:
+            self._log_export_failure(
+                task_id=task_id or "",
+                export_type=export_type or "unspecified",
+                provider=provider or "unknown",
+                model=model or "unknown",
+                attempt_number=attempt_number or 0,
+                phase="export_package_normalization",
+                category="malformed_schema",
+                message="Export package could not be normalized into the required schema.",
+            )
             return None
         prepared = self._filter_export_package_to_context(prepared, full_results, export_context or {})
         issues = self._collect_export_package_issues(prepared, full_results, export_context or {})
         if issues:
-            logger.warning("Rejected export package during validation", extra={"issues": issues[:12]})
+            self._log_export_failure(
+                task_id=task_id or "",
+                export_type=export_type or "unspecified",
+                provider=provider or "unknown",
+                model=model or "unknown",
+                attempt_number=attempt_number or 0,
+                phase="export_package_validation",
+                category="validation_rejected",
+                message="Export package was rejected during validation.",
+                validation_reasons=issues[:20],
+            )
             return None
         return prepared
 
@@ -829,6 +2364,7 @@ class AIService:
         available_visuals = {item.get("visual_ref") for item in self._build_export_visual_refs(full_results)}
         allowed_layers = set(self._selected_export_layer_labels(full_results, dict(export_context.get("export_options") or {})))
         allowed_sections = set(self._selected_export_section_titles(full_results, export_context))
+        doc_keys = self._requested_export_document_keys(export_context)
         universal_types = {
             "cover",
             "executive_summary",
@@ -840,7 +2376,7 @@ class AIService:
             "conclusions",
             "quality_check",
         }
-        for key in ("docx", "pdf", "pptx"):
+        for key in doc_keys:
             payload = data.get(key) or {}
             cleaned_sections = []
             for section in payload.get("sections") or []:
@@ -861,6 +2397,7 @@ class AIService:
         actual_emag2 = bool(full_results.get("emag2_reference") or full_results.get("emag2_reference_data"))
         allowed_titles = set(self._selected_export_section_titles(full_results, export_context))
         allowed_layers = set(self._selected_export_layer_labels(full_results, dict(export_context.get("export_options") or {})))
+        doc_keys = self._requested_export_document_keys(export_context)
         blocked_fragments = (
             "[insert",
             "todo",
@@ -875,16 +2412,19 @@ class AIService:
             "null",
             "none",
         )
-        repeated_passages: dict[str, str] = {}
-        for key in ("docx", "pdf", "pptx"):
+        repeated_passages: dict[str, dict[str, str]] = {}
+        for key in doc_keys:
             payload = data.get(key) or {}
+            executive_summary = re.sub(r"\s+", " ", str(payload.get("executive_summary") or "").strip()).lower()
+            if executive_summary:
+                repeated_passages.setdefault(key, {})[executive_summary] = f"{key}:executive_summary"
             for section in payload.get("sections") or []:
                 title = str(section.get("title") or "").strip()
                 section_type = str(section.get("type") or "").strip().lower()
                 if section_type not in {"cover", "executive_summary", "project_overview", "data_summary", "processing_workflow", "key_findings", "data_quality", "conclusions", "quality_check"}:
                     if title and title not in allowed_titles and title not in allowed_layers:
                         issues.append(f"{key}:{title}:unsupported_section")
-                text_parts = [payload.get("executive_summary") or "", title, section.get("body") or "", section.get("interpretation") or "", section.get("implication") or "", section.get("speaker_notes") or ""] + [str(item) for item in (section.get("bullets") or [])]
+                text_parts = [title, section.get("body") or "", section.get("interpretation") or "", section.get("implication") or "", section.get("speaker_notes") or ""] + [str(item) for item in (section.get("bullets") or [])]
                 for part in text_parts:
                     normalized = re.sub(r"\s+", " ", str(part).strip())
                     lower = normalized.lower()
@@ -897,11 +2437,11 @@ class AIService:
                     if normalized.startswith("{") or normalized.startswith("["):
                         issues.append(f"{key}:{title}:raw_dump_content")
                     if len(normalized) > 80:
-                        seen_title = repeated_passages.get(lower)
+                        seen_title = (repeated_passages.get(key) or {}).get(lower)
                         if seen_title and seen_title != f"{key}:{title}":
                             issues.append(f"{key}:{title}:repeated_passage")
                         else:
-                            repeated_passages[lower] = f"{key}:{title}"
+                            repeated_passages.setdefault(key, {})[lower] = f"{key}:{title}"
                     if not actual_emag2 and "emag2" in lower:
                         issues.append(f"{key}:{title}:emag2_mislabel")
                     if "reduction to pole" in lower or re.search(r"\brtp\b", lower):
@@ -926,8 +2466,11 @@ class AIService:
                     issues.append(f"{key}:missing_qa_reflection")
         return sorted(set(issues))
 
-    def _validate_export_package(self, data: dict) -> dict | None:
-        for key in ("docx", "pdf", "pptx"):
+    def _validate_export_package(self, data: dict, *, required_formats: list[str] | None = None) -> dict | None:
+        keys = [key for key in (required_formats or ["docx", "pdf", "pptx"]) if key in {"docx", "pdf", "pptx", "report"}]
+        if not keys:
+            keys = ["docx", "pdf", "pptx"]
+        for key in keys:
             payload = data.get(key)
             if not isinstance(payload, dict):
                 return None
@@ -943,13 +2486,11 @@ class AIService:
                 section.setdefault("bullets", [])
                 section.setdefault("body", "")
                 section.setdefault("visual_refs", [])
-                section.setdefault("figure_title", "")
                 section.setdefault("caption", "")
                 section.setdefault("interpretation", "")
                 section.setdefault("implication", "")
                 section.setdefault("layout", "narrative")
                 section.setdefault("callouts", [])
-                section.setdefault("table_rows", [])
                 section.setdefault("speaker_notes", "")
                 section["title"] = str(section.get("title") or "").strip()
                 section["type"] = str(section.get("type") or "section").strip()
@@ -957,21 +2498,19 @@ class AIService:
                 section["interpretation"] = str(section.get("interpretation") or "").strip()
                 section["implication"] = str(section.get("implication") or "").strip()
                 section["caption"] = str(section.get("caption") or "").strip()
-                section["figure_title"] = str(section.get("figure_title") or "").strip()
                 section["speaker_notes"] = str(section.get("speaker_notes") or "").strip()
                 section["bullets"] = [str(item).strip() for item in (section.get("bullets") or []) if str(item).strip()]
                 section["visual_refs"] = [str(item).strip() for item in (section.get("visual_refs") or []) if str(item).strip()]
                 section["callouts"] = [str(item).strip() for item in (section.get("callouts") or []) if str(item).strip()]
-                section["table_rows"] = [row for row in (section.get("table_rows") or []) if isinstance(row, dict)]
                 cleaned_sections.append(section)
             payload["sections"] = cleaned_sections
             payload.setdefault("visuals", [])
             payload["visuals"] = [item for item in (payload.get("visuals") or []) if isinstance(item, dict)]
             payload["recommendations"] = [str(item).strip() for item in (payload.get("recommendations") or []) if str(item).strip()]
+            payload["quality_checks"] = [str(item).strip() for item in (payload.get("quality_checks") or []) if str(item).strip()]
             payload.setdefault("file_manifest", [])
             payload["file_manifest"] = [str(item).strip() for item in (payload.get("file_manifest") or []) if str(item).strip()]
-            payload["quality_checks"] = [str(item).strip() for item in (payload.get("quality_checks") or []) if str(item).strip()]
-        data.setdefault("summary", (data.get("pdf") or {}).get("executive_summary") or "")
+        data.setdefault("summary", (data.get("pdf") or {}).get("executive_summary") or (data.get("report") or {}).get("executive_summary") or "")
         return data
 
     def _convert_legacy_export_report(self, data: dict) -> dict:

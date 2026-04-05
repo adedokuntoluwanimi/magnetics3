@@ -3,15 +3,30 @@ from __future__ import annotations
 from typing import Any
 
 from backend.config import Settings
+from backend.logging_utils import log_event
 
 
 class ExportProviderError(RuntimeError):
-    def __init__(self, message: str, *, category: str, provider: str, model: str, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str,
+        provider: str,
+        model: str,
+        retryable: bool = False,
+        request_id: str | None = None,
+        status_code: int | None = None,
+        provider_message: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.category = category
         self.provider = provider
         self.model = model
         self.retryable = retryable
+        self.request_id = request_id
+        self.status_code = status_code
+        self.provider_message = provider_message or message
 
 
 class VertexGeminiClient:
@@ -115,6 +130,10 @@ class AnthropicClaudeClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
+    @property
+    def configured_model_name(self) -> str:
+        return self._normalize_model_name(self._settings.aurora_export_model)
+
     def generate(
         self,
         *,
@@ -130,12 +149,12 @@ class AnthropicClaudeClient:
                 "ANTHROPIC_API_KEY is not configured for direct Claude export usage.",
                 category="configuration",
                 provider="anthropic",
-                model=self._normalize_model_name(self._settings.aurora_export_model),
+                model=self.configured_model_name,
                 retryable=False,
             )
 
         client = Anthropic(api_key=self._settings.anthropic_api_key)
-        model_name = self._normalize_model_name(self._settings.aurora_export_model)
+        model_name = self.configured_model_name
         if messages is None:
             messages = [{"role": "user", "content": user_prompt or ""}]
         try:
@@ -150,17 +169,77 @@ class AnthropicClaudeClient:
         return "".join(block.text for block in response.content if getattr(block, "text", None))
 
     def _normalize_model_name(self, model_name: str) -> str:
-        normalized = (model_name or "").strip()
-        aliases = {
-            "claude-sonnet-4@20250514": "claude-sonnet-4-6-20250514",
-            "claude-sonnet-4": "claude-sonnet-4-6-20250514",
-            "claude-sonnet-4-6": "claude-sonnet-4-6-20250514",
-            "claude-sonnet-4.6": "claude-sonnet-4-6-20250514",
-            "claude-sonnet-4-5": "claude-sonnet-4-6-20250514",
-            "claude-sonnet-4.5": "claude-sonnet-4-6-20250514",
-            "claude-sonnet-latest": "claude-sonnet-4-6-20250514",
-        }
-        return aliases.get(normalized, normalized)
+        return (model_name or "").strip()
+
+    def preflight_model_availability(self) -> bool:
+        model_name = self.configured_model_name
+        if not self._settings.anthropic_api_key:
+            log_event(
+                "ERROR",
+                "Anthropic export preflight failed",
+                action="export.provider.preflight",
+                provider="anthropic",
+                model=model_name,
+                status="error",
+                provider_error_category="configuration",
+                provider_error_message="ANTHROPIC_API_KEY is not configured for direct Claude export usage.",
+            )
+            return False
+        try:
+            from anthropic import Anthropic
+
+            client = Anthropic(api_key=self._settings.anthropic_api_key)
+            model_ids = self._list_model_ids(client)
+        except Exception as exc:
+            classified = self._classify_error(exc, model_name)
+            log_event(
+                "ERROR",
+                "Anthropic export preflight failed",
+                action="export.provider.preflight",
+                provider="anthropic",
+                model=model_name,
+                status="error",
+                provider_error_category=classified.category,
+                provider_error_message=classified.provider_message,
+                status_code=classified.status_code,
+                request_id=classified.request_id,
+            )
+            return False
+        if model_ids and model_name not in model_ids:
+            log_event(
+                "ERROR",
+                "Anthropic export preflight failed",
+                action="export.provider.preflight",
+                provider="anthropic",
+                model=model_name,
+                status="error",
+                provider_error_category="model_unavailable",
+                provider_error_message="Configured export model is not available from the Anthropic models API.",
+                available_models_preview=sorted(model_ids)[:10],
+            )
+            return False
+        log_event(
+            "INFO",
+            "Anthropic export preflight passed",
+            action="export.provider.preflight",
+            provider="anthropic",
+            model=model_name,
+            status="ok",
+        )
+        return True
+
+    def _list_model_ids(self, client: Any) -> set[str]:
+        models = getattr(client, "models", None)
+        if models is None or not hasattr(models, "list"):
+            return set()
+        response = models.list(limit=100)
+        data = getattr(response, "data", response)
+        model_ids: set[str] = set()
+        for item in data or []:
+            identifier = getattr(item, "id", None)
+            if identifier:
+                model_ids.add(str(identifier))
+        return model_ids
 
     def _classify_error(self, exc: Exception, model_name: str) -> ExportProviderError:
         error_name = exc.__class__.__name__
@@ -184,6 +263,9 @@ class AnthropicClaudeClient:
             provider="anthropic",
             model=model_name,
             retryable=retryable,
+            request_id=getattr(exc, "request_id", None),
+            status_code=getattr(exc, "status_code", None),
+            provider_message=str(exc),
         )
 
 

@@ -110,6 +110,12 @@ class ExportService:
             defaults.update({k: bool(v) for k, v in (request.export_options or {}).items() if k in defaults})
         return defaults
 
+    def _selected_output_slugs(self, request: ExportRequest | None) -> set[str]:
+        if not request:
+            return set()
+        values = (request.export_options or {}).get("selected_output_slugs") or []
+        return {str(value).strip() for value in values if str(value).strip()}
+
     def _layer_specs(self, data: dict) -> list[dict[str, str]]:
         specs = [
             {"key": "surface", "slug": "corrected_field", "label": "Corrected Magnetic Field"},
@@ -139,8 +145,11 @@ class ExportService:
 
     def _selected_layers(self, data: dict, request: ExportRequest | None = None) -> list[dict[str, str]]:
         flags = self._flags(request)
+        explicit_slugs = self._selected_output_slugs(request)
         selected = []
         for spec in self._layer_specs(data):
+            if explicit_slugs and spec["slug"] not in explicit_slugs:
+                continue
             if spec["slug"] == "corrected_field" and not flags["include_corrected_field"]:
                 continue
             if spec["slug"] == "regional_field" and not flags["include_regional_field"]:
@@ -311,28 +320,31 @@ class ExportService:
 
     def _image_specs(self, data: dict, request: ExportRequest | None = None) -> list[dict[str, str]]:
         specs = [
-            ("corrected_heatmap_b64", "corrected_heatmap.png"),
-            ("corrected_contour_b64", "corrected_contour.png"),
-            ("regional_heatmap_b64", "regional_heatmap.png"),
-            ("regional_contour_b64", "regional_contour.png"),
-            ("residual_heatmap_b64", "residual_heatmap.png"),
-            ("residual_contour_b64", "residual_contour.png"),
-            ("rtp_b64", "rtp.png"),
-            ("analytic_signal_b64", "analytic.png"),
-            ("tilt_derivative_b64", "tilt.png"),
-            ("total_gradient_b64", "total_gradient.png"),
-            ("first_vertical_derivative_b64", "fvd.png"),
-            ("horizontal_derivative_b64", "hd.png"),
-            ("uncertainty_b64", "uncertainty.png"),
-            ("upward_continuation_b64", "upward_continuation.png"),
-            ("downward_continuation_b64", "downward_continuation.png"),
-            ("emag2_comparison_b64", "regional_residual_product.png"),
-            ("line_profile_b64", "line_profile.png"),
-            ("anomaly_catalogue_b64", "anomaly_catalogue.png"),
+            ("corrected_heatmap_b64", "corrected_heatmap.png", "corrected_field"),
+            ("corrected_contour_b64", "corrected_contour.png", "corrected_field"),
+            ("regional_heatmap_b64", "regional_heatmap.png", "regional_field"),
+            ("regional_contour_b64", "regional_contour.png", "regional_field"),
+            ("residual_heatmap_b64", "residual_heatmap.png", "residual_field"),
+            ("residual_contour_b64", "residual_contour.png", "residual_field"),
+            ("rtp_b64", "rtp.png", "rtp"),
+            ("analytic_signal_b64", "analytic.png", "analytic_signal"),
+            ("tilt_derivative_b64", "tilt.png", "tilt_derivative"),
+            ("total_gradient_b64", "total_gradient.png", "total_gradient"),
+            ("first_vertical_derivative_b64", "fvd.png", "fvd"),
+            ("horizontal_derivative_b64", "hd.png", "hd"),
+            ("uncertainty_b64", "uncertainty.png", "uncertainty"),
+            ("upward_continuation_b64", "upward_continuation.png", "upward_continuation"),
+            ("downward_continuation_b64", "downward_continuation.png", "downward_continuation"),
+            ("emag2_comparison_b64", "regional_residual_product.png", "regional_residual_product"),
+            ("line_profile_b64", "line_profile.png", "line_profiles"),
+            ("anomaly_catalogue_b64", "anomaly_catalogue.png", "anomaly_catalogue"),
         ]
         flags = self._flags(request)
+        explicit_slugs = self._selected_output_slugs(request)
         out = []
-        for key, name in specs:
+        for key, name, slug in specs:
+            if explicit_slugs and slug not in explicit_slugs and slug != "anomaly_catalogue":
+                continue
             if name.startswith("regional_") and not flags["include_regional_field"]:
                 continue
             if name.startswith("residual_") and not flags["include_residual_field"]:

@@ -23,7 +23,7 @@ This file captures the current working context for `gaia-magnetics`.
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00097-thc`
+  `gaia-magnetics-00106-jmm`
 - Region:
   `us-central1`
 - Infra project:
@@ -110,37 +110,59 @@ Detection happens in two places:
 - Line profiles show `point.magnetic`, not `raw_magnetic`.
 - Base station points are excluded from line profiles and map overlay.
 - Traverse x-axis uses first non-base-station point as origin, with survey-only distance accumulation so base-station revisits do not create fake gaps.
-- Point-based views (`Map`, `Line Profiles`) use displayed point values for stats/scale.
-- Grid-based views use grid-surface values for stats/scale.
+- Point-based views (`Map`, `Line Profiles`) use displayed point values for stats and scale.
+- Grid-based views use grid-surface values for stats and scale.
 - Layers are grouped as `Main processed field`, `Regional field`, `Residual field`, and `Derived products`.
 - Aurora chat on Visualisation receives active layer, visual mode, traverse selection, approximate line endpoints, displayed stats, displayed-value provenance, and key processing metadata.
 
 ### Export
 
 - Export jobs complete and bundle outputs are being generated.
-- Corrected/regional/residual report content can be selected independently.
-- Export AI generation now uses direct Anthropic for `DOCX`, `PDF`, and `PPTX` whenever `ANTHROPIC_API_KEY` is present.
-- Cloud Run now gets `ANTHROPIC_API_KEY` from Secret Manager secret `gaia-anthropic-api-key`.
-- Chat remains on the existing chat path; the Anthropic switch was made for exports.
-- DOCX, PDF, and PPTX exports consume structured `{docx, pdf, pptx}` AI output packages.
-- Export prompts now send a compressed, filtered run context instead of a large verbose payload.
-- Export AI output is now validated more aggressively for placeholder text, raw dumps, unsupported sections, repeated passages, and misleading scientific labels before rendering.
-- DOCX/PDF/PPTX builders now enforce cleaner ordering, tighter PPTX density, and more explicit QA/fallback callouts.
+- The export page now lists actual processed output layers and lets the user choose which outputs may appear in report-style exports before `DOCX`, `PDF`, or `PPTX` generation runs.
+- Corrected, regional, and residual report content can be selected independently.
+- Export AI generation uses direct Anthropic for `DOCX`, `PDF`, and `PPTX` whenever `ANTHROPIC_API_KEY` is present.
+- Cloud Run gets `ANTHROPIC_API_KEY` from Secret Manager secret `gaia-anthropic-api-key`.
+- The configured export model is `claude-sonnet-4-6`.
+- Startup preflight logs whether the configured Anthropic model is available.
+- Export prompts use block-scoped compact contexts instead of one large verbose payload.
+- Export generation is now block-based:
+  - report blocks:
+    `executive_summary`, `project_setup`, `task_summary`, `processing_qa`, `key_findings`, `result_layers`, `limitations`, `recommendations`
+  - PPTX blocks:
+    `pptx_group_1`, `pptx_group_2`, `pptx_group_3`, `pptx_group_4`
+- Blocks are merged server-side into normalized `report_data` for the builders.
+- Export AI output is validated for placeholder text, raw dumps, unsupported sections, repeated passages, and misleading scientific labels before rendering.
+- DOCX/PDF/PPTX builders enforce ordering, PPTX density checks, and QA/fallback callouts.
 - CSV, GeoJSON, KMZ/KML, GDB-style, and map-image bundles include `metadata.json`.
 - Native FileGDB output is still not implemented; the current `gdb_bundle` is a geospatial delivery bundle with feature-class-style GeoJSON members.
 
 ## Live Export Failure Context
 
-- The export provider/key routing is now correct in Cloud Run.
-- Revision `00097-thc` hardened the Anthropic export path with clearer provider-error classification and stronger output validation.
-- Cloud Run logs on 2026-04-04 showed `anthropic.RateLimitError` with HTTP `429 RESOURCE_EXHAUSTED`.
-- When that happens, `backend/services/ai_service.py` still falls back, but the fallback package is now held to stricter truthfulness and formatting rules than before.
-- Fresh live export artifacts still need to be inspected to confirm the improved report quality on the deployed service.
+- The export provider/key routing is correct in Cloud Run.
+- The export model ID issue is fixed; live exports now reach Anthropic with `claude-sonnet-4-6`.
+- Structured export-path logging is live and now exposes provider failures, parse failures, retry modes, per-block outcomes, and validation rejection causes.
+- The dominant current failure is no longer provider routing. It is block-level parse and validation failure before a clean merged package can pass final validation.
+- On revision `00106-jmm`, the latest checked export for task `5f3ed2605e3144a19edc43f5c9af1ffa` still ended with:
+  `export.path.outcome = anthropic_response_invalid_fallback_used`
+- Live block results for that export were:
+  - `executive_summary`: success
+  - `pptx_group_3`: success
+  - `pptx_group_4`: success
+  - `project_setup`: parse failure, `failure_class = truncated_json`
+  - `pptx_group_1`: parse failure, `failure_class = truncated_json`
+  - `pptx_group_2`: validation failure, `missing_expected_section`
+- Final package validation also failed with:
+  - `pptx:Data and Survey Summary:slide_density`
+- The current export files are therefore still fallback-backed and should not be treated as trustworthy final-quality exports until the live outcome becomes:
+  `anthropic_success`
 
 ## Known Follow-Up Areas
 
-1. **Fix bold detection in `_xlsx_to_csv_bytes`** - add text-based fallback so `BS`/`base` in any cell also flags the row.
-2. **Fresh live export verification** - generate a new `DOCX/PDF/PPTX` set after revision `00097-thc` and inspect the real artifacts.
-3. **Anthropic 429 mitigation** - keep improving provider resilience because recent exports hit `RESOURCE_EXHAUSTED` even though fallback honesty and output quality gates are now stronger.
-4. **Browser-QA Aurora** - confirm Preview and Visualisation answers match the exact active screen context.
-5. **Re-process the known dataset** - rerun on the current revision to verify saved outputs and Aurora responses against current code.
+1. **Fix bold detection in `_xlsx_to_csv_bytes`** - add text-based fallback so `BS` or `base` in any cell also flags the row.
+2. **Split the still-failing export blocks further** - `project_setup` and `pptx_group_1` are still too large or too dense for reliable live success.
+3. **Resolve PPTX block/package validation tension** - `pptx_group_2` can fail `missing_expected_section`, and package validation can still fail `slide_density`.
+4. **Reach a true live Anthropic export success** - do not treat generated files as success unless Cloud Logging shows:
+   `export.path.outcome = anthropic_success`
+5. **Fresh live export verification after success** - once live Anthropic success is reached, inspect the actual `DOCX/PDF/PPTX` artifacts from the frontend.
+6. **Browser-QA Aurora** - confirm Preview and Visualisation answers match the exact active screen context.
+7. **Re-process the known dataset** - rerun on the current revision after the export path stabilizes.

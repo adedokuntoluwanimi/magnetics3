@@ -31,6 +31,13 @@ class _FakeAurora:
         self.highlights = ["Highlight one", "Highlight two"]
 
 
+class _FakeRequest:
+    def __init__(self, formats=None, aurora_sections=None, export_options=None):
+        self.formats = formats or []
+        self.aurora_sections = aurora_sections or []
+        self.export_options = export_options or {}
+
+
 class ExportServiceTests(unittest.TestCase):
     def setUp(self):
         self.storage = _FakeStorage()
@@ -100,6 +107,23 @@ class ExportServiceTests(unittest.TestCase):
     def test_rtp_export_label_reflects_fallback(self):
         label = self.service._rtp_export_label({"qa_report": {"fallback_events": [{"requested": "rtp", "actual": "low_latitude_fallback"}]}})
         self.assertEqual(label, "Low-latitude fallback transform")
+
+    def test_selected_layers_respect_explicit_output_slugs(self):
+        request = _FakeRequest(export_options={"selected_output_slugs": ["corrected_field", "analytic_signal"]})
+
+        specs = self.service._selected_layers(self.data, request)
+
+        self.assertEqual([spec["slug"] for spec in specs], ["corrected_field", "analytic_signal"])
+
+    def test_csv_bundle_respects_explicit_output_slugs(self):
+        request = _FakeRequest(export_options={"selected_output_slugs": ["corrected_field"]})
+
+        payload = self.service._build_csv_bundle(self.project, self.task, self.data, request)
+
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            names = set(archive.namelist())
+            self.assertIn("csv_bundle/corrected_field.csv", names)
+            self.assertNotIn("csv_bundle/analytic_signal.csv", names)
 
     def test_document_payload_orders_core_sections(self):
         aurora = _FakeAurora()
