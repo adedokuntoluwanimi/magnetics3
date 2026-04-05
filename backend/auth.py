@@ -17,7 +17,7 @@ def _firebase_app() -> firebase_admin.App:
     try:
         return firebase_admin.get_app()
     except ValueError:
-        return firebase_admin.initialize_app()
+        return firebase_admin.initialize_app(options={"projectId": "app-01-488817"})
 
 
 def _get_firebase_app() -> firebase_admin.App:

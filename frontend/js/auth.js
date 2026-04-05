@@ -24,34 +24,21 @@ const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
 const googleProvider = new GoogleAuthProvider();
 
-let _currentUser = null;
-let _idToken = null;
-let _tokenExpiry = 0;
+// Always read directly from Firebase's own state — no manual caching that can go stale.
 
 export function getCurrentUser() {
-  return _currentUser;
+  return auth.currentUser;
 }
 
 export async function getIdToken() {
-  if (!_currentUser) return null;
-  // Refresh if within 5 minutes of expiry
-  if (Date.now() > _tokenExpiry - 300000) {
-    _idToken = await _currentUser.getIdToken(true);
-    _tokenExpiry = Date.now() + 3600000;
-  }
-  return _idToken;
-}
-
-export async function authFetch(url, options = {}) {
-  const token = await getIdToken();
-  const headers = {...(options.headers || {})};
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  return fetch(url, {...options, headers});
+  const user = auth.currentUser;
+  if (!user) return null;
+  // Firebase caches the token internally and refreshes it automatically when needed.
+  return user.getIdToken();
 }
 
 export async function signInWithGoogle() {
-  // Use redirect — popup is unreliable on custom domains not hosted on Firebase Hosting.
-  // The page will navigate away; getGoogleRedirectResult() must be called on return.
+  // Full-page redirect — more reliable than popup on custom domains.
   await signInWithRedirect(auth, googleProvider);
 }
 
@@ -69,32 +56,16 @@ export async function signUpWithEmail(email, password, displayName) {
 }
 
 export async function signOutUser() {
-  _currentUser = null;
-  _idToken = null;
   await signOut(auth);
 }
 
 export function waitForAuth() {
+  // Resolves once Firebase has determined the auth state (user or null).
+  // Firebase guarantees onAuthStateChanged fires exactly once on init with the persisted state.
   return new Promise((resolve) => {
-    const unsub = onAuthStateChanged(auth, async (user) => {
+    const unsub = onAuthStateChanged(auth, (user) => {
       unsub();
-      _currentUser = user;
-      if (user) {
-        _idToken = await user.getIdToken();
-        _tokenExpiry = Date.now() + 3600000;
-      }
       resolve(user);
     });
   });
 }
-
-// Keep token fresh automatically
-onAuthStateChanged(auth, async (user) => {
-  _currentUser = user;
-  if (user) {
-    _idToken = await user.getIdToken();
-    _tokenExpiry = Date.now() + 3600000;
-  } else {
-    _idToken = null;
-  }
-});
