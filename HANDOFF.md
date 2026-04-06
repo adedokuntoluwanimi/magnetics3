@@ -23,7 +23,7 @@ Read these first:
 - AI project:
   `app-01-488817-ai`
 - Latest live revision:
-  `gaia-magnetics-00118-mkt`
+  `gaia-magnetics-00120-jpb`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
@@ -125,10 +125,7 @@ Added to `processing_service.py` after line ~451 (before `_RTP_LOW_INC_THRESHOLD
 
 ## Immediate Next Steps
 
-### 1. Deploy the analysis page reconstruction
-The changes are committed but not yet live. Run the deploy command to push to Cloud Run.
-
-### 2. QA the analysis page
+### 1. QA the analysis page
 After deploy:
 - Enable IGRF and try saving without a date — should block with a notice.
 - Enable IGRF with a date, save, re-open the task — date should be restored.
@@ -161,7 +158,7 @@ Run a fresh export on any processed task. Confirm:
 
 ## Remaining Gaps
 
-1. **Analysis page not yet deployed** — committed, needs a deploy run.
+1. **QA the analysis page** — live at `00120-jpb`; verify IGRF date, SVD/THG/Tilt, filter cutoff, run a processing job.
 2. **SVD and THG not in export layer list** — `export_service.py` needs updating before these appear in DOCX/PDF/PPTX.
 3. **Export download unverified** — kebab-case chip fix deployed but not end-to-end confirmed.
 4. **`anthropic_success` not yet confirmed** — raised token budgets deployed; needs a fresh export run + log check.

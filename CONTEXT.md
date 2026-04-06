@@ -25,7 +25,7 @@ This file captures the current working context for `gaia-magnetics`.
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00118-mkt`
+  `gaia-magnetics-00120-jpb`
 - Region:
   `us-central1`
 - Infra project:

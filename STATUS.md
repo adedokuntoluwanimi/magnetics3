@@ -10,8 +10,7 @@ Last updated: `2026-04-07`
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00118-mkt` (popup auth fix + password eye + dark mode default, deployed 2026-04-06)
-- **Pending deploy:** Analysis page reconstruction + multi-line processing parity (not yet deployed)
+  `gaia-magnetics-00120-jpb` (Analysis page A+C reconstruction + geometry-aware add-ons, deployed 2026-04-07)
 - Region:
   `us-central1`
 - Infra project:
@@ -34,7 +33,7 @@ Last updated: `2026-04-07`
 | `00114-rdc` | Login page redesigned: blurred app UI ghost background, floating login card, proper Google logo, live password requirements indicator |
 | `00117-blh` | `waitForAuth` switched to `auth.authStateReady()`; dark mode set as default theme |
 | `00118-mkt` | Google sign-in switched from redirect to popup (fixes post-auth loop); password reveal eye toggle on both password fields |
-| *(pending)* | Analysis page A+C reconstruction; multi-line processing parity (FFT/heading/lag per-line); profile-based add-on helpers; geometry-aware `_apply_add_ons` |
+| `00120-jpb` | Analysis page A+C reconstruction; profile-based add-on helpers (FVD/SVD/HD/THG/tilt/analytic signal); geometry-aware `_apply_add_ons`; filter cutoff control; IGRF date input; SVD/THG/Tilt checkboxes; `PROCESSING_METHODS.txt` |
 
 ## Current Product State
 
@@ -126,7 +125,7 @@ Last updated: `2026-04-07`
 
 ## Active Investigation (Current)
 
-- Analysis page reconstruction committed but not yet deployed — needs a deploy before QA.
+- Analysis page reconstruction deployed as `00120-jpb` — needs QA.
 - Export `anthropic_success` has not yet been confirmed in Cloud Logging — the camelCase download fix and token budget increases were deployed but a fresh export run hasn't been verified against logs yet.
 - Firebase authorized domain: `magnetics.terracode-analytics.live` should still be added to Firebase Console → Authentication → Settings → Authorized domains as a best practice, even though popup sign-in is now working without it.
 
@@ -140,7 +139,7 @@ Last updated: `2026-04-07`
 
 ## Important Open Items
 
-1. **Deploy analysis page reconstruction** — changes are committed; run the deploy command to push to Cloud Run.
+1. **QA the new analysis page** — now live at `00120-jpb`; verify IGRF date, SVD/THG/Tilt toggles, filter cutoff, and run a processing job to confirm add-on outputs.
 2. **QA new analysis page** — confirm IGRF date input saves and is used correctly; confirm SVD/THG/Tilt checkboxes save and trigger correct backend add-ons.
 3. **Add SVD and THG to export layer list** — `export_service.py` does not yet render `second_vertical_derivative` or `thg` in DOCX/PDF/PPTX; they are stored in `results.json` but not exported.
 4. **Verify export download end-to-end** — test that a real export job produces a downloadable file without "Choose at least one processed output" error.
