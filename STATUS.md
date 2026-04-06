@@ -1,6 +1,6 @@
 # GAIA Magnetics Status
 
-Last updated: `2026-04-05`
+Last updated: `2026-04-06`
 
 ## Live Snapshot
 
@@ -10,7 +10,7 @@ Last updated: `2026-04-05`
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00114-rdc` (login redesign + auth, deployed 2026-04-05)
+  `gaia-magnetics-00118-mkt` (popup auth fix + password eye + dark mode default, deployed 2026-04-06)
 - Region:
   `us-central1`
 - Infra project:
@@ -31,6 +31,8 @@ Last updated: `2026-04-05`
 | `00112+` | Custom domain `magnetics.terracode-analytics.live` live; browser tab title V2 removed |
 | `00113+` | Firebase Authentication added (Google OAuth + email/password); `backend/auth.py`, `frontend/js/auth.js`, all API routes protected |
 | `00114-rdc` | Login page redesigned: blurred app UI ghost background, floating login card, proper Google logo, live password requirements indicator |
+| `00117-blh` | `waitForAuth` switched to `auth.authStateReady()`; dark mode set as default theme |
+| `00118-mkt` | Google sign-in switched from redirect to popup (fixes post-auth loop); password reveal eye toggle on both password fields |
 
 ## Current Product State
 
@@ -47,6 +49,13 @@ Last updated: `2026-04-05`
 - Aurora AI branding retained throughout.
 
 ## Most Recent Completed Work
+
+### Auth Fix + Login UX (2026-04-06)
+- `frontend/js/auth.js` — `waitForAuth` now uses `auth.authStateReady()` instead of `onAuthStateChanged`. Eliminates the race where the first callback fired with `null` before Firebase finished reading IndexedDB, causing `app.js` to redirect to `/login` immediately after a successful sign-in.
+- `frontend/js/auth.js` — Google sign-in switched from `signInWithRedirect` to `signInWithPopup`. The redirect flow had a cross-page IndexedDB race (write on `/login` could complete after the read on `/`); popup completes in the same page context before navigation so auth state is guaranteed to be persisted.
+- `frontend/login.html` — Removed the `getGoogleRedirectResult()` IIFE; on-load check is now just `waitForAuth()` → redirect if already signed in.
+- `frontend/login.html` — Password reveal (eye) toggle added to both Sign in and Create account password fields. Crossed-out eye shown by default; swaps to open eye when password is visible.
+- `frontend/index.html` — Default theme changed from `light` to `dark`.
 
 ### Firebase Authentication (2026-04-05)
 - `frontend/js/auth.js` — Firebase JS SDK v11.6.0 from CDN; exports `waitForAuth`, `getIdToken`, `signInWithGoogle`, `signInWithEmail`, `signUpWithEmail`, `signOutUser`.
@@ -82,23 +91,24 @@ Last updated: `2026-04-05`
 ## Active Investigation (Current)
 
 - Export `anthropic_success` has not yet been confirmed in Cloud Logging — the camelCase download fix and token budget increases were deployed but a fresh export run hasn't been verified against logs yet.
-- Firebase authorized domain: `magnetics.terracode-analytics.live` must be added to Firebase Console → Authentication → Settings → Authorized domains for Google OAuth to work on the custom domain.
+- Firebase authorized domain: `magnetics.terracode-analytics.live` should still be added to Firebase Console → Authentication → Settings → Authorized domains as a best practice, even though popup sign-in is now working without it.
 
 ## Verification Status
 
-- Auth gate confirmed working in browser.
-- Login page redesign confirmed live at `https://magnetics.terracode-analytics.live/login`.
-- All modified frontend files pass browser load (no console errors on main screens).
+- Google sign-in confirmed working end-to-end (popup flow, no redirect loop).
+- Dark mode confirmed as default on app load.
+- Password eye toggle confirmed on both sign-in and create account forms.
+- Login page confirmed live at `https://magnetics.terracode-analytics.live/login`.
 - Export download fix (kebab-case chip attributes) deployed but not yet end-to-end verified.
 
 ## Important Open Items
 
-1. **Add custom domain to Firebase authorized domains** — `magnetics.terracode-analytics.live` must be added in Firebase Console → Authentication → Settings → Authorized domains. Google OAuth will fail on the custom domain without this.
-2. **Verify export download end-to-end** — test that a real export job produces a downloadable file without "Choose at least one processed output" error.
-3. **Confirm `anthropic_success` in Cloud Logging** — run a fresh export and check logs for `export.path.outcome = anthropic_success`.
-4. **Fix `_xlsx_to_csv_bytes` bold detection** — add text-based fallback for partially-bold BS rows.
-5. **Browser QA on Aurora** — verify Preview and Visualisation chat answers against active screen state.
-6. **Re-process known dataset** — rerun after export stabilises.
+1. **Verify export download end-to-end** — test that a real export job produces a downloadable file without "Choose at least one processed output" error.
+2. **Confirm `anthropic_success` in Cloud Logging** — run a fresh export and check logs for `export.path.outcome = anthropic_success`.
+3. **Fix `_xlsx_to_csv_bytes` bold detection** — add text-based fallback for partially-bold BS rows.
+4. **Browser QA on Aurora** — verify Preview and Visualisation chat answers against active screen state.
+5. **Re-process known dataset** — rerun after export stabilises.
+6. **Add custom domain to Firebase authorized domains** — `magnetics.terracode-analytics.live` in Firebase Console → Authentication → Settings → Authorized domains (good hygiene; popup works without it but redirect-based flows would need it).
 7. Native FileGDB output not yet implemented; `gdb_bundle` uses feature-class-style GeoJSON.
 
 ## Main Files Most Relevant Right Now

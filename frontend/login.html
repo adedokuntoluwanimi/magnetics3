@@ -236,6 +236,17 @@ html,body{height:100%;overflow:hidden;font-family:'Inter',sans-serif;-webkit-fon
 }
 .field input::placeholder{color:var(--text4);}
 
+/* Password reveal toggle */
+.field-pw{position:relative;}
+.field-pw input{padding-right:40px;}
+.pw-eye{
+  position:absolute;right:11px;top:50%;transform:translateY(-50%);
+  background:none;border:none;padding:4px;cursor:pointer;
+  color:var(--text4);line-height:0;transition:color 0.15s;
+}
+.pw-eye:hover{color:var(--text2);}
+.pw-eye svg{display:block;}
+
 /* Password requirements */
 .pw-reqs{
   display:none;margin-top:9px;
@@ -432,7 +443,13 @@ html,body{height:100%;overflow:hidden;font-family:'Inter',sans-serif;-webkit-fon
       </div>
       <div class="field">
         <label class="field-label">Password</label>
-        <input type="password" id="siPassword" placeholder="Enter your password" autocomplete="current-password">
+        <div class="field-pw">
+          <input type="password" id="siPassword" placeholder="Enter your password" autocomplete="current-password">
+          <button type="button" class="pw-eye" onclick="togglePw('siPassword',this)" tabindex="-1" aria-label="Show password">
+            <svg id="siPassword-eye-off" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            <svg id="siPassword-eye-on" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
       </div>
       <button class="btn-primary" id="btnSignin" onclick="doSignin()">Sign in</button>
       <div class="or-row">or</div>
@@ -459,8 +476,14 @@ html,body{height:100%;overflow:hidden;font-family:'Inter',sans-serif;-webkit-fon
       </div>
       <div class="field">
         <label class="field-label">Password</label>
-        <input type="password" id="suPassword" placeholder="Create a strong password" autocomplete="new-password"
-          oninput="checkPwStrength(this.value)" onfocus="showPwReqs()" onblur="hidePwReqs()">
+        <div class="field-pw">
+          <input type="password" id="suPassword" placeholder="Create a strong password" autocomplete="new-password"
+            oninput="checkPwStrength(this.value)" onfocus="showPwReqs()" onblur="hidePwReqs()">
+          <button type="button" class="pw-eye" onclick="togglePw('suPassword',this)" tabindex="-1" aria-label="Show password">
+            <svg id="suPassword-eye-off" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            <svg id="suPassword-eye-on" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
         <div class="pw-reqs" id="pwReqs">
           <div class="pw-reqs-label">Password must include</div>
           <div class="pw-grid">
@@ -501,20 +524,22 @@ html,body{height:100%;overflow:hidden;font-family:'Inter',sans-serif;-webkit-fon
 </div>
 
 <script type="module">
-import {signInWithGoogle, getGoogleRedirectResult, signInWithEmail, signUpWithEmail, waitForAuth} from "/frontend/js/auth.js";
+import {signInWithGoogle, signInWithEmail, signUpWithEmail, waitForAuth} from "/frontend/js/auth.js";
 
-// On load: check if returning from a Google redirect
+// On load: if already signed in, go straight to the app.
 (async () => {
-  try {
-    const result = await getGoogleRedirectResult();
-    if (result?.user) { window.location.replace("/"); return; }
-  } catch (err) {
-    showError(friendlyError(err.code));
-  }
-  // Not a redirect return — check if already signed in
   const user = await waitForAuth();
   if (user) window.location.replace("/");
 })();
+
+window.togglePw = (id, btn) => {
+  const input = document.getElementById(id);
+  const show = input.type === "password";
+  input.type = show ? "text" : "password";
+  document.getElementById(id + "-eye-off").style.display = show ? "none" : "";
+  document.getElementById(id + "-eye-on").style.display  = show ? ""     : "none";
+  btn.setAttribute("aria-label", show ? "Hide password" : "Show password");
+};
 
 window.switchTab = (tab) => {
   const signin = tab === "signin";
@@ -583,11 +608,13 @@ window.doSignup = async () => {
   catch (err) { showError(friendlyError(err.code)); setLoading("btnSignup", false); }
 };
 
-// Redirect-based Google sign-in — page navigates away, no popup
+// Popup-based Google sign-in — completes in the same page context, no redirect race.
 window.doGoogle = async () => {
   hideError();
-  try { await signInWithGoogle(); }
-  catch (err) { showError(friendlyError(err.code)); }
+  try {
+    await signInWithGoogle();
+    window.location.replace("/");
+  } catch (err) { showError(friendlyError(err.code)); }
 };
 
 document.addEventListener("keydown", (e) => {

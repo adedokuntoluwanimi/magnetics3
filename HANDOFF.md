@@ -23,7 +23,7 @@ Read these first:
 - AI project:
   `app-01-488817-ai`
 - Latest live revision:
-  `gaia-magnetics-00114-rdc`
+  `gaia-magnetics-00118-mkt`
 - Service account:
   `vet-dev-backend@app-01-488817.iam.gserviceaccount.com`
 
@@ -36,6 +36,19 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 > On Windows, `gcloud` resolves to a Python Store alias and fails. Use the explicit `gcloud.cmd` path via `powershell -Command`.
 
 ## What Changed Most Recently
+
+### Session 2026-04-06 — Auth loop fix, dark mode default, password eye toggle
+
+**Auth loop fix**
+- `frontend/js/auth.js`: `waitForAuth` now uses `auth.authStateReady()` → `auth.currentUser` instead of `onAuthStateChanged`. The old implementation unsubscribed after the first callback, which could fire with `null` before Firebase finished loading its persisted session from IndexedDB — causing `app.js` to redirect to `/login` right after sign-in.
+- `frontend/js/auth.js`: `signInWithGoogle` switched from `signInWithRedirect` to `signInWithPopup`. The redirect flow had a cross-page IndexedDB race (write on `/login` → navigate → read on `/` before write completes). Popup completes in the same page context so auth state is persisted before we navigate. Removed `signInWithRedirect`, `getRedirectResult`, and `getGoogleRedirectResult` exports.
+- `frontend/login.html`: Removed the `getGoogleRedirectResult()` IIFE. On-load check is now just `waitForAuth()` → redirect if already signed in. `doGoogle` now awaits `signInWithGoogle()` and then does `window.location.replace("/")`.
+
+**Dark mode default**
+- `frontend/index.html`: `data-theme` attribute changed from `"light"` to `"dark"`. The theme toggle in `navigation.js` still works — it reads and flips the attribute.
+
+**Password eye toggle**
+- `frontend/login.html`: Eye button added to both Sign in and Create account password fields. Uses inline SVG (crossed-out eye / open eye). `togglePw(id, btn)` swaps `input.type` between `"password"` and `"text"` and swaps the icon. `tabindex="-1"` keeps it out of the tab order.
 
 ### Session 2026-04-05 — Auth, Login, Export UX, Navigation
 
@@ -74,17 +87,13 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 
 ## Immediate Next Steps
 
-### 1. Add Firebase authorized domain (user action required)
-Firebase Console → project `app-01-488817` → Authentication → Settings → Authorized domains → Add `magnetics.terracode-analytics.live`.
-Without this, Google OAuth popup throws `auth/unauthorized-domain` on the custom domain.
-
-### 2. Verify export download end-to-end
+### 1. Verify export download end-to-end
 Run a fresh export on any processed task. Confirm:
 - No "Choose at least one processed output" error in console.
 - Download button produces a file.
 - Check Cloud Logging for `export.path.outcome = anthropic_success`.
 
-### 3. If export still failing
+### 2. If export still failing
 Check Cloud Logging for per-block outcomes. The dominant failure modes as of the last check were:
 - `project_setup` truncating (token budget too small) → split further or reduce prompt context.
 - `pptx_group_1` truncating → same fix.
@@ -107,12 +116,12 @@ Check Cloud Logging for per-block outcomes. The dominant failure modes as of the
 
 ## Remaining Gaps
 
-1. **Firebase authorized domain** — `magnetics.terracode-analytics.live` not yet added to Firebase Console.
-2. **Export download unverified** — kebab-case chip fix deployed but not end-to-end confirmed.
-3. **`anthropic_success` not yet confirmed** — raised token budgets deployed; needs a fresh export run + log check.
-4. **`_xlsx_to_csv_bytes` text fallback** — bold-only BS detection still misses partially-bold rows.
-5. **Browser QA on Aurora** — Preview and Visualisation chat not yet verified against real processed task.
-6. **Re-process known dataset** — after export stabilises.
+1. **Export download unverified** — kebab-case chip fix deployed but not end-to-end confirmed.
+2. **`anthropic_success` not yet confirmed** — raised token budgets deployed; needs a fresh export run + log check.
+3. **`_xlsx_to_csv_bytes` text fallback** — bold-only BS detection still misses partially-bold rows.
+4. **Browser QA on Aurora** — Preview and Visualisation chat not yet verified against real processed task.
+5. **Re-process known dataset** — after export stabilises.
+6. **Firebase authorized domain** — `magnetics.terracode-analytics.live` not yet added to Firebase Console (good hygiene; popup sign-in works without it).
 7. **Native FileGDB** — still not implemented; `gdb_bundle` uses feature-class-style GeoJSON.
 
 ## Working Style

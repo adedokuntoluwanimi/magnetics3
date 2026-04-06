@@ -1,6 +1,6 @@
 # GAIA Magnetics Context
 
-Last updated: `2026-04-05`
+Last updated: `2026-04-06`
 
 ## Purpose
 
@@ -25,7 +25,7 @@ This file captures the current working context for `gaia-magnetics`.
 - Cloud Run service:
   `gaia-magnetics`
 - Latest live revision:
-  `gaia-magnetics-00114-rdc`
+  `gaia-magnetics-00118-mkt`
 - Region:
   `us-central1`
 - Infra project:
@@ -60,9 +60,11 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 ### Frontend
 - Firebase JS SDK v11.6.0 loaded from `https://www.gstatic.com/firebasejs/11.6.0/`.
 - `frontend/js/auth.js` exports: `waitForAuth`, `getIdToken`, `signInWithGoogle`, `signInWithEmail`, `signUpWithEmail`, `signOutUser`.
+  - `waitForAuth` uses `auth.authStateReady()` — waits for Firebase to finish reading IndexedDB before returning `auth.currentUser`.
+  - `signInWithGoogle` uses `signInWithPopup` — completes in the same page context, no redirect race condition.
 - `frontend/js/api.js` — every `request()` call attaches `Authorization: Bearer <token>`. 401 → sign-out + redirect to `/login`.
 - `frontend/js/app.js` — on boot, `waitForAuth()` gate. Unauthenticated users redirect to `/login`.
-- `frontend/login.html` — standalone login page served at `/login`. No shell dependencies.
+- `frontend/login.html` — standalone login page served at `/login`. On load checks `waitForAuth()` and redirects if already signed in. Password fields have eye toggle for reveal.
 
 ### Backend
 - `backend/auth.py` — `verify_token` FastAPI dependency. Extracts Bearer token, calls `firebase_auth.verify_id_token()`. Returns decoded claims on success, raises HTTP 401 on failure.
@@ -70,7 +72,7 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 - All routes except `/health/*` and `/login` are protected with `dependencies=[Depends(verify_token)]`.
 
 ### Pending
-- `magnetics.terracode-analytics.live` must be added to Firebase Console → Authentication → Settings → Authorized domains for Google OAuth popup to work on the custom domain.
+- `magnetics.terracode-analytics.live` should be added to Firebase Console → Authentication → Settings → Authorized domains as good hygiene (not currently blocking popup sign-in).
 
 ## Scientific Conventions
 
@@ -139,14 +141,15 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 - `frontend/login.html` — served at `/login` by FastAPI, independent of the main shell.
 - Design: full-viewport blurred app UI ghost (CSS-rendered sidebar, top bar, magnetic anomaly map, data cards) as background; white floating login card in foreground.
 - No icons. No decorative logos.
-- Supports: email/password sign-in, email/password account creation, Google OAuth.
-- Password requirements: uppercase, lowercase, number, special character, 8+ chars — validated live with a checklist panel.
+- Supports: email/password sign-in, email/password account creation, Google OAuth (popup).
+- Password fields have an eye toggle button to reveal/hide the typed password.
+- Password requirements on sign-up: uppercase, lowercase, number, special character, 8+ chars — validated live with a checklist panel.
 
 ## Known Follow-Up Areas
 
-1. **Firebase authorized domain** — add `magnetics.terracode-analytics.live` to Firebase Console → Authentication → Settings → Authorized domains.
-2. **Verify export download** — end-to-end test: run export, download file, confirm no "Choose at least one processed output" error.
-3. **Confirm `anthropic_success`** — check Cloud Logging after a fresh export run for `export.path.outcome = anthropic_success`.
-4. **Fix `_xlsx_to_csv_bytes` bold detection** — add text-based BS row fallback.
-5. **Browser QA on Aurora** — Preview and Visualisation chat against real processed task.
-6. **Re-process known dataset** — after export stabilises.
+1. **Verify export download** — end-to-end test: run export, download file, confirm no "Choose at least one processed output" error.
+2. **Confirm `anthropic_success`** — check Cloud Logging after a fresh export run for `export.path.outcome = anthropic_success`.
+3. **Fix `_xlsx_to_csv_bytes` bold detection** — add text-based BS row fallback.
+4. **Browser QA on Aurora** — Preview and Visualisation chat against real processed task.
+5. **Re-process known dataset** — after export stabilises.
+6. **Firebase authorized domain** — add `magnetics.terracode-analytics.live` to Firebase Console → Authentication → Settings → Authorized domains (good hygiene).

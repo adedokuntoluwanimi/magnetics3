@@ -1,9 +1,7 @@
 import {initializeApp} from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
 import {
   getAuth,
-  onAuthStateChanged,
-  signInWithRedirect,
-  getRedirectResult,
+  signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   GoogleAuthProvider,
@@ -38,12 +36,10 @@ export async function getIdToken() {
 }
 
 export async function signInWithGoogle() {
-  // Full-page redirect — more reliable than popup on custom domains.
-  await signInWithRedirect(auth, googleProvider);
-}
-
-export async function getGoogleRedirectResult() {
-  return getRedirectResult(auth);
+  // Popup-based sign-in: completes in the same page context so there is no
+  // cross-page IndexedDB race condition that could lose the auth state.
+  const result = await signInWithPopup(auth, googleProvider);
+  return result.user;
 }
 
 export async function signInWithEmail(email, password) {
@@ -59,13 +55,9 @@ export async function signOutUser() {
   await signOut(auth);
 }
 
-export function waitForAuth() {
-  // Resolves once Firebase has determined the auth state (user or null).
-  // Firebase guarantees onAuthStateChanged fires exactly once on init with the persisted state.
-  return new Promise((resolve) => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      unsub();
-      resolve(user);
-    });
-  });
+export async function waitForAuth() {
+  // authStateReady() resolves only after Firebase has finished reading persisted auth
+  // state from IndexedDB, giving a reliable one-shot auth state check.
+  await auth.authStateReady();
+  return auth.currentUser;
 }
