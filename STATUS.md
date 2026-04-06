@@ -1,6 +1,6 @@
 # GAIA Magnetics Status
 
-Last updated: `2026-04-06`
+Last updated: `2026-04-07`
 
 ## Live Snapshot
 
@@ -11,6 +11,7 @@ Last updated: `2026-04-06`
   `gaia-magnetics`
 - Latest live revision:
   `gaia-magnetics-00118-mkt` (popup auth fix + password eye + dark mode default, deployed 2026-04-06)
+- **Pending deploy:** Analysis page reconstruction + multi-line processing parity (not yet deployed)
 - Region:
   `us-central1`
 - Infra project:
@@ -33,6 +34,7 @@ Last updated: `2026-04-06`
 | `00114-rdc` | Login page redesigned: blurred app UI ghost background, floating login card, proper Google logo, live password requirements indicator |
 | `00117-blh` | `waitForAuth` switched to `auth.authStateReady()`; dark mode set as default theme |
 | `00118-mkt` | Google sign-in switched from redirect to popup (fixes post-auth loop); password reveal eye toggle on both password fields |
+| *(pending)* | Analysis page A+C reconstruction; multi-line processing parity (FFT/heading/lag per-line); profile-based add-on helpers; geometry-aware `_apply_add_ons` |
 
 ## Current Product State
 
@@ -49,6 +51,40 @@ Last updated: `2026-04-06`
 - Aurora AI branding retained throughout.
 
 ## Most Recent Completed Work
+
+### Analysis Page Reconstruction + Multi-line Processing Parity (2026-04-07)
+
+**Analysis page — A. Corrections**
+- IGRF: added survey date picker to the UI; `collectAnalysisConfig` now sends `survey_date` as ISO datetime; `saveAndPreview` blocks if IGRF is enabled without a date.
+- Filtering: added cutoff half-wavelength control (stations); backend converts to spatial frequency `cutoff_freq = 1 / n_stations`; per-line for multi-line; high-pass warning shown in UI.
+
+**Analysis page — C. Add-ons**
+- Added: Second Vertical Derivative (SVD) with pre-smooth toggle; Total Horizontal Gradient (THG); Tilt Derivative — all selectable from the analysis page.
+- Renamed analytic signal description to be explicit about profile vs surface basis.
+- Updated all add-on descriptions to be geometry-aware and scientifically explicit.
+- Regional residual method descriptions updated.
+
+**Backend — profile-based add-on helpers (new functions)**
+- `_second_vertical_derivative_grid`: FFT wavenumber-domain −K² operator for multi-line grids.
+- `_spacing_from_along_line`: derives per-station spacing from `along_line_m`.
+- `_fvd_profile`, `_svd_profile`, `_hd_profile`, `_thg_profile`, `_tilt_profile`, `_analytic_signal_profile`: spacing-aware finite-difference profile implementations.
+- `_compute_profile_add_ons`: orchestrates all profile add-ons for a single line segment.
+
+**Backend — `_apply_add_ons` rebuilt**
+- Detects single-line vs multi-line from `results["points"]` line_id count.
+- Single-line: profile-based computation on points data; values back-projected to grid for display.
+- Multi-line: FFT wavenumber-domain methods on the 2D surface.
+- SVD, THG, tilt derivative, analytic signal all now selectively computed when requested.
+- `addon_provenance` metadata block stored per add-on: source_field, method, profile_based, smoothing_applied, description, warning.
+- `profile_add_ons` flat array added to results for profile chart consumers.
+
+**Backend — `_apply_corrections` filter cutoff**
+- `filter_cutoff_stations` config key accepted; converted to `cutoff_freq = 1 / n_stations`.
+- Applied with `sample_spacing=1.0` (station-count domain) when spatial cutoff is used.
+- Per-line filter for multi-line; single-line treated as one segment.
+
+**Documentation**
+- `PROCESSING_METHODS.txt` created: exact algorithm description for every correction and add-on, tied to the source code.
 
 ### Auth Fix + Login UX (2026-04-06)
 - `frontend/js/auth.js` — `waitForAuth` now uses `auth.authStateReady()` instead of `onAuthStateChanged`. Eliminates the race where the first callback fired with `null` before Firebase finished reading IndexedDB, causing `app.js` to redirect to `/login` immediately after a successful sign-in.
@@ -90,6 +126,7 @@ Last updated: `2026-04-06`
 
 ## Active Investigation (Current)
 
+- Analysis page reconstruction committed but not yet deployed — needs a deploy before QA.
 - Export `anthropic_success` has not yet been confirmed in Cloud Logging — the camelCase download fix and token budget increases were deployed but a fresh export run hasn't been verified against logs yet.
 - Firebase authorized domain: `magnetics.terracode-analytics.live` should still be added to Firebase Console → Authentication → Settings → Authorized domains as a best practice, even though popup sign-in is now working without it.
 
@@ -103,26 +140,30 @@ Last updated: `2026-04-06`
 
 ## Important Open Items
 
-1. **Verify export download end-to-end** — test that a real export job produces a downloadable file without "Choose at least one processed output" error.
-2. **Confirm `anthropic_success` in Cloud Logging** — run a fresh export and check logs for `export.path.outcome = anthropic_success`.
-3. **Fix `_xlsx_to_csv_bytes` bold detection** — add text-based fallback for partially-bold BS rows.
-4. **Browser QA on Aurora** — verify Preview and Visualisation chat answers against active screen state.
-5. **Re-process known dataset** — rerun after export stabilises.
-6. **Add custom domain to Firebase authorized domains** — `magnetics.terracode-analytics.live` in Firebase Console → Authentication → Settings → Authorized domains (good hygiene; popup works without it but redirect-based flows would need it).
-7. Native FileGDB output not yet implemented; `gdb_bundle` uses feature-class-style GeoJSON.
+1. **Deploy analysis page reconstruction** — changes are committed; run the deploy command to push to Cloud Run.
+2. **QA new analysis page** — confirm IGRF date input saves and is used correctly; confirm SVD/THG/Tilt checkboxes save and trigger correct backend add-ons.
+3. **Add SVD and THG to export layer list** — `export_service.py` does not yet render `second_vertical_derivative` or `thg` in DOCX/PDF/PPTX; they are stored in `results.json` but not exported.
+4. **Verify export download end-to-end** — test that a real export job produces a downloadable file without "Choose at least one processed output" error.
+5. **Confirm `anthropic_success` in Cloud Logging** — run a fresh export and check logs for `export.path.outcome = anthropic_success`.
+6. **Fix `_xlsx_to_csv_bytes` bold detection** — add text-based fallback for partially-bold BS rows.
+7. **Browser QA on Aurora** — verify Preview and Visualisation chat answers against active screen state.
+8. **Re-process known dataset** — rerun after export and analysis page stabilise.
+9. **Add custom domain to Firebase authorized domains** — `magnetics.terracode-analytics.live` in Firebase Console (good hygiene; popup works without it).
+10. Native FileGDB output not yet implemented; `gdb_bundle` uses feature-class-style GeoJSON.
 
 ## Main Files Most Relevant Right Now
 
 ### Backend
-- `backend/auth.py` — Firebase token verification (new)
+- `backend/services/processing_service.py` — Profile add-on helpers, geometry-aware `_apply_add_ons`, filter cutoff
+- `backend/services/export_service.py` — DOCX/PDF/PPTX builders (SVD/THG not yet added here)
+- `backend/auth.py` — Firebase token verification
 - `backend/main.py` — Route registration + auth dependencies
-- `backend/services/ai_service.py` — Block-based export generation, Aurora chat
-- `backend/services/export_service.py` — DOCX/PDF/PPTX builders
 
 ### Frontend
-- `frontend/login.html` — Login page (new)
-- `frontend/js/auth.js` — Firebase auth helpers (new)
-- `frontend/js/api.js` — Auth-aware request wrapper
-- `frontend/js/app.js` — App boot + auth gate
+- `frontend/index.html` — Analysis section A+C rebuilt
+- `frontend/js/sections/analysis.js` — ADD_ON_MAP, collectAnalysisConfig, loadAnalysis, initAnalysis
 - `frontend/js/sections/export.js` — Export selection and download
 - `frontend/js/sections/navigation.js` — Screen routing + persistence
+
+### Documentation
+- `PROCESSING_METHODS.txt` — Exact algorithm reference for all corrections and add-ons

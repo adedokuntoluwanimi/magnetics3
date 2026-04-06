@@ -1,0 +1,708 @@
+GAIA Magnetics — Processing Methods Reference
+==============================================
+Last updated: 2026-04-06
+Source: backend/services/processing_service.py
+
+This document explains exactly how each correction and add-on is computed
+by the system. It is tied directly to the code implementation and describes
+the actual algorithm, not a generalised description.
+
+All corrections operate on point-level data (one row per station reading).
+All add-ons operate on either the per-point profile data or the interpolated
+2D grid surface, depending on survey geometry (single-line vs multi-line).
+
+The working field throughout is named "magnetic" in the dataframe.
+Its starting value is the raw observed magnetic reading from the upload.
+Each correction stage updates this field in place.
+
+
+===============================================================================
+PRELIMINARY STAGE — SPIKE REMOVAL
+===============================================================================
+
+Runs automatically before any user-selected correction. Cannot be disabled.
+
+WHAT IT DOES:
+Identifies and replaces instrument spikes by combining three independent
+checks. A point is only removed if it fails all three, which prevents
+genuine anomalies from being discarded.
+
+STEP 1 — Global statistical screen
+  - Compute mean and standard deviation across all valid magnetic readings.
+  - Flag any point where |magnetic - mean| / std > 3.5 as a candidate spike.
+
+STEP 2 — Spatial neighbourhood check (applied to each candidate)
+  - Build a KD-Tree from all valid station coordinates.
+  - For each candidate, find the 8 nearest neighbours.
+  - Compute local median and local std from those neighbours' magnetic values.
+  - If |candidate_value - local_median| / local_std < 2.0, the point is
+    spatially consistent and is cleared (not a spike).
+
+STEP 3 — Temporal neighbourhood check (applied to each remaining candidate)
+  - Sort all readings by time_s.
+  - For each candidate, examine the 2 preceding and 2 following readings in
+    time order.
+  - Compute temporal median and std.
+  - If |candidate_value - temporal_median| / temporal_std < 2.0, the point
+    is temporally consistent and is cleared.
+
+REMOVAL RULE:
+A point is replaced with the global nanmedian only if it was flagged in Step 1
+AND failed both the spatial check AND the temporal check.
+
+OUTPUT:
+Points that passed all checks are left completely untouched.
+The spike report records: candidate count, removed count, preserved anomalies.
+
+
+===============================================================================
+A — CORRECTIONS
+===============================================================================
+
+Applied in this fixed physical order:
+  1. Spike removal (always, see above)
+  2. IGRF removal
+  3. Diurnal correction
+  4. Lag correction
+  5. Heading correction
+  6. Filtering (FFT)
+
+Each correction updates the "magnetic" column before the next one runs.
+
+
+───────────────────────────────────────────────────────────────────────────────
+A1 — IGRF REMOVAL
+───────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+Remove the Earth's main geomagnetic field from the observed magnetic data,
+leaving only the local anomaly component.
+
+REQUIRED INPUTS FROM THE DATASET:
+  - latitude  (decimal degrees, WGS84)
+  - longitude (decimal degrees, WGS84)
+  - elevation_m, elevation, altitude_m, or altitude (optional; defaults to 0 m
+    above ellipsoid if not present — this is flagged in the QA report)
+
+REQUIRED USER INPUT:
+  - Survey date  (entered in the analysis page date picker)
+  - Without a survey date, the task creation timestamp is used as a fallback.
+    The fallback is flagged in QA output.
+
+HOW THE IGRF FIELD IS EVALUATED:
+The survey date is converted to a decimal year, e.g. 2024-03-15 = 2024.205.
+
+The IGRF total field is evaluated at each station individually:
+
+  Primary backend — ppigrf (IGRF-14):
+    For each station i:
+      east, north, up = ppigrf.igrf(lon[i], lat[i], elevation_km[i], date)
+      igrf_values[i] = sqrt(east² + north² + up²)
+
+  Fallback backend — pyIGRF (IGRF-13):
+    For each station i:
+      result = pyIGRF.igrf_value(lat[i], lon[i], elevation_km[i], decimal_yr)
+      igrf_values[i] = result[6]   (index 6 is the total field F in nT)
+
+  If neither library is available, IGRF is not applied and the run is flagged
+  as critically degraded in QA.
+
+FORMULA:
+  corrected_magnetic[i] = magnetic[i] - igrf_values[i]
+
+VALIDATION:
+  - If any computed IGRF value falls outside 20,000–70,000 nT a range warning
+    is raised (expected range for near-surface Earth surveys).
+  - The model epoch, backend name, and mean IGRF field value are recorded in
+    the correction report for every run.
+
+SINGLE-LINE:
+  Evaluated station by station along the one traverse. No special handling
+  needed; spatial variation within a single short line is small but still
+  computed per-point.
+
+MULTI-LINE:
+  Evaluated station by station across all lines. Spatial variation in the
+  IGRF across the survey area is captured naturally.
+
+
+───────────────────────────────────────────────────────────────────────────────
+A2 — DIURNAL CORRECTION
+───────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+Remove temporal drift in the Earth's magnetic field that occurs across the
+survey day, typically caused by solar-induced magnetospheric variation.
+
+REQUIRED INPUTS:
+  - __is_base_station__ column (0/1, derived at upload time or inferred during
+    cleaning from bold formatting, repeated coordinates, or text markers)
+  - time_s column (seconds since midnight, built from hour/minute/second
+    columns in the upload; falls back to row index if time columns absent)
+
+PATH 1 — INTERVAL-BASED (preferred, when base station data is present)
+
+  1. Separate the dataset into base station rows and survey rows.
+  2. Sort base station rows by time_s.
+  3. Group base readings at the same timestamp by taking their median (handles
+     multiple sensors at one base point).
+  4. Compute the reference value:
+       reference_value = nanmedian of all base station readings
+     (nanmedian is used because it is more robust to outlier base readings
+     than the first reading or arithmetic mean.)
+  5. For each survey reading, linearly interpolate the base station field
+     at that reading's time:
+       interpolated_base[t] = linear interp over (t_bs[], m_bs[]) evaluated at t
+  6. Apply the correction:
+       corrected_magnetic[i] = magnetic[i] - (interpolated_base[i] - reference_value)
+  7. For survey readings before the first base station reading or after the
+     last, the nearest base station value is used (hold at boundary) rather
+     than extrapolating.
+  8. The interval coverage percentage is recorded: what fraction of survey
+     readings fell within the temporal span of the base station time series.
+
+PATH 2 — FFT FALLBACK (when no base station data is usable)
+
+  If no valid base station readings exist, the system estimates a low-frequency
+  diurnal trend from the survey data itself using a low-pass FFT filter:
+    - Cutoff frequency = 1 / 3600 Hz  (one cycle per hour)
+    - The low-frequency component is treated as the diurnal trend
+    - corrected_magnetic = magnetic - estimated_trend
+
+  This fallback is flagged in QA as a degraded path. It does not distinguish
+  true diurnal variation from broad geological anomalies.
+
+SINGLE-LINE vs MULTI-LINE:
+  Diurnal correction operates identically on both. The correction is purely
+  temporal — it uses time_s, not spatial position. If multiple files were
+  uploaded, base station readings from all files are pooled into a single
+  temporal reference.
+
+
+───────────────────────────────────────────────────────────────────────────────
+A3 — LAG CORRECTION
+───────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+Compensate for a systematic timing offset between the GPS position sensor and
+the magnetometer. Common in vehicle-mounted or UAS-mounted systems where the
+two instruments log independently at slightly different moments.
+
+REQUIRED INPUTS:
+  - time_s
+  - _line_id
+  - Minimum 2 lines with valid magnetic data
+
+HOW IT WORKS:
+
+STEP 1 — Select the reference and secondary lines
+  For each line, compute a quality score:
+    score = n_valid_readings × (n_valid / n_total)
+  The line with the highest score is the reference. The next-best line is the
+  secondary.
+
+STEP 2 — Estimate the lag by cross-correlation
+  Both lines are truncated to the shorter of their lengths or 500 points.
+  Each is normalised (subtract mean, divide by std) and tapered with a
+  Hann window to suppress edge effects.
+  Full cross-correlation is computed:
+    corr = correlate(normalised_reference, normalised_secondary, mode="full")
+  The lag in samples is the offset at the peak absolute correlation value.
+  Confidence = peak_correlation_value / n_samples.
+
+STEP 3 — Reject unreliable lags
+  - If |lag| > 15 samples, the lag is considered unrealistic and correction
+    is skipped (flagged as a warning in QA).
+  - If confidence < 0.2, the estimate is too uncertain and correction is
+    skipped.
+
+STEP 4 — Apply the lag shift (per-line)
+  The lag magnitude (in sample counts) is an instrument property shared by
+  all lines, but the interpolated shift is applied per-line so that each
+  line's correction uses its own time axis (avoids extrapolation across
+  line boundaries).
+
+  For each line separately:
+    - Compute median sample interval: dt = median of time differences
+    - Build a shifted time axis: t_shifted = t + (lag × dt)
+    - Interpolate the magnetic values at the shifted times using linear
+      interpolation with boundary-hold fill values
+    - Replace the magnetic values with the interpolated result
+
+SINGLE-LINE:
+  Cannot estimate a lag from one line. Correction is skipped with a warning.
+
+MULTI-LINE:
+  Lag estimated from the two best lines, then applied to all lines
+  independently.
+
+
+───────────────────────────────────────────────────────────────────────────────
+A4 — HEADING CORRECTION
+───────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+Remove systematic bias in the magnetic reading that depends on the direction
+the sensor was travelling. This bias arises from imperfect sensor orientation
+compensation, vehicle magnetic signature, and boom flexing.
+
+REQUIRED INPUTS:
+  - latitude, longitude (for heading computation)
+  - magnetic values (after previous corrections)
+
+HOW IT WORKS:
+
+For each segment (one line for multi-line, all points for single-line):
+
+STEP 1 — Compute instantaneous heading
+  dx = diff(longitude), dy = diff(latitude)
+  heading[i] = arctan2(dy[i], dx[i] + 1e-12)   (in radians)
+  headings are then smoothed with a size-3 median filter to suppress
+  single-point heading noise from GPS jitter.
+
+STEP 2 — Build adaptive equal-count heading bins
+  Number of bins = max(4, min(16, sqrt(n_points)))
+  Bin edges are set from percentiles of the heading distribution so each bin
+  contains approximately the same number of points (equal-count, not
+  equal-width). This adapts to whatever headings actually appear in the data.
+
+STEP 3 — Compute and remove bias per bin
+  For each bin:
+    bin_median = nanmedian of magnetic values for points in this bin
+    overall_median = nanmedian of all magnetic values in this segment
+    corrected[in bin] = magnetic[in bin] - (bin_median - overall_median)
+  If a bin contains fewer than 4 points, it is left uncorrected (warning
+  raised in QA).
+
+SINGLE-LINE:
+  All points are treated as one segment. The single heading distribution
+  of the traverse sets its own reference median.
+
+MULTI-LINE:
+  Applied independently per line. Each line's heading distribution sets
+  its own reference median. This prevents a dominant heading direction in
+  one line from skewing corrections applied to lines that traverse in
+  minority directions.
+
+
+───────────────────────────────────────────────────────────────────────────────
+A5 — FILTERING (HIGH-PASS / LOW-PASS)
+───────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+Condition the corrected magnetic signal by retaining or suppressing selected
+frequency content along the traverse.
+  - Low-pass: removes short-wavelength variation, retains broad anomalies
+  - High-pass: removes broad regional trend, retains shallow short-wavelength
+    anomalies
+
+REQUIRED INPUTS:
+  - Corrected magnetic values
+  - Station order (time_s or row index if time columns absent)
+
+CUTOFF PARAMETER:
+The user sets a "cutoff half-wavelength" in number of stations (default 20).
+This is converted internally to a spatial frequency:
+  cutoff_freq = 1.0 / cutoff_stations   (cycles per station)
+
+The filter is applied in a domain where the sample spacing is 1.0 (station
+count), so the frequency axis is in cycles/station. This is robust to
+irregular temporal spacing between stations.
+
+HOW THE FFT FILTER WORKS:
+  1. Extract the magnetic array for the current segment.
+  2. Fill NaN values with the segment mean (to avoid FFT contamination).
+  3. Subtract the segment mean (demeaning).
+  4. Apply a Hann window taper to suppress spectral leakage at the edges.
+  5. Compute the real FFT (rfft) of the tapered signal.
+  6. Compute the frequency axis (rfftfreq with sample spacing = 1.0).
+  7. Apply the frequency mask:
+       Low-pass:  retain spectrum components where freq <= cutoff_freq
+       High-pass: retain spectrum components where freq >= cutoff_freq
+  8. Inverse FFT (irfft) back to the time domain.
+  9. Undo the Hann taper effect by dividing by the taper (guarded to avoid
+     division by very small values near the edges).
+  10. Add the segment mean back.
+  11. Restore NaN values to their original positions.
+
+ENERGY REPORTING:
+  energy_before = sum(tapered_signal²)
+  energy_after  = sum(filtered_signal[valid]²)
+  energy_ratio  = energy_after / energy_before
+If energy_ratio < 15%, a warning is raised that the filter removed most of
+the signal, which may indicate an inappropriate cutoff setting.
+
+SINGLE-LINE:
+  The filter is applied to the entire line as one segment.
+
+MULTI-LINE:
+  The filter is applied per line independently. This avoids the artefact
+  that would occur if all lines were concatenated — at each line boundary
+  the magnetic field resets to a different absolute level, creating a
+  discontinuity that the FFT would treat as broadband signal and suppress
+  or amplify in ways that corrupt both lines.
+
+WARNINGS:
+  - High-pass filtering can amplify short-wavelength noise. A warning is
+    always raised when high-pass is selected.
+  - The energy retention ratio is reported in the processing log.
+
+
+===============================================================================
+C — ADD-ONS / DERIVED OUTPUTS
+===============================================================================
+
+Add-ons are computed from the corrected magnetic field (after all selected
+corrections have been applied). They are interpretive products — they do not
+modify the corrected field itself.
+
+The system detects whether the upload is single-line or multi-line:
+  - Single-line: unique _line_id values = 1
+  - Multi-line:  unique _line_id values > 1
+
+For single-line data, profile-based methods are used (1D, along-traverse).
+For multi-line data, grid-based methods are used on the 2D interpolated surface.
+
+When the dataset is single-line, profile add-on values are computed from the
+point data and then back-projected onto the 2D display grid using nearest-
+neighbour scatter for map visualisation. This is a display aid — the
+underlying computation is profile-based.
+
+Station spacing for profile methods is derived from the "along_line_m" field,
+which is the cumulative traverse distance in metres (computed during cleaning).
+
+
+───────────────────────────────────────────────────────────────────────────────
+C1 — FIRST VERTICAL DERIVATIVE (FVD)
+───────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+Approximate the rate of change of the magnetic field in the vertical direction.
+Emphasises shallow sources and sharpens anomaly edges.
+
+PROFILE METHOD (single-line):
+  For each station i along the traverse:
+
+  Interior points (i = 1 to n-2):
+    fvd[i] = (magnetic[i+1] - magnetic[i-1]) / (spacing[i-1] + spacing[i])
+    where spacing[i] = along_line_m[i+1] - along_line_m[i]
+    (central finite difference, spacing-aware)
+
+  First point (i = 0):
+    fvd[0] = (magnetic[1] - magnetic[0]) / spacing[0]
+    (forward difference)
+
+  Last point (i = n-1):
+    fvd[n-1] = (magnetic[n-1] - magnetic[n-2]) / spacing[n-2]
+    (backward difference)
+
+  This is a proxy for the vertical derivative because a single traverse does
+  not provide measurements in the vertical direction. The along-line gradient
+  is the closest available approximation and is labeled accordingly in metadata.
+
+GRID METHOD (multi-line):
+  The 2D interpolated surface T(x, y) is transformed to the wavenumber domain
+  using the 2D FFT. The first vertical derivative operator in the frequency
+  domain is multiplication by the radial wavenumber K:
+
+    K = sqrt(kx² + ky²)
+    where kx = 2π × fftfreq(nx, d=dx),  ky = 2π × fftfreq(ny, d=dy)
+
+  FVD_surface = Re(IFFT2(FFT2(surface) × K))
+
+  This is the exact Fourier-domain vertical derivative operator for potential
+  fields (upward derivative = multiply by K, downward = divide by K).
+
+LABEL IN METADATA:
+  profile_based = True  for single-line
+  profile_based = False for multi-line
+  method        = "profile finite-differences" or "FFT wavenumber-domain"
+
+
+───────────────────────────────────────────────────────────────────────────────
+C2 — SECOND VERTICAL DERIVATIVE (SVD)
+───────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+Approximate the second-order rate of change of the magnetic field in the
+vertical direction. Further sharpens near-surface anomalies. Highly noise-
+sensitive; pre-smoothing is applied by default.
+
+PROFILE METHOD (single-line):
+  Optional pre-smoothing (on by default):
+    smooth_sigma = max(1.0, median_spacing × 0.5)
+    magnetic_smoothed = Gaussian1D(magnetic, sigma=smooth_sigma)
+
+  Central second difference for each interior point:
+    svd[i] = (magnetic[i+1] - 2×magnetic[i] + magnetic[i-1]) / spacing[i]²
+    where spacing[i] is the station spacing at position i.
+
+  End points are set equal to their nearest interior neighbour value (edge
+  propagation rather than extrapolation).
+
+  Minimum 5 points required; returns zeros for shorter segments.
+
+GRID METHOD (multi-line):
+  In the Fourier domain, the second vertical derivative operator is −K²:
+
+    K² = kx² + ky²
+    SVD_surface = Re(IFFT2(FFT2(surface) × (−K²)))
+
+  This follows from the Laplace equation for potential fields:
+    d²T/dz² = −(d²T/dx² + d²T/dy²)
+  so the vertical second derivative is computed from the horizontal second
+  derivatives via Poisson's identity.
+
+PRE-SMOOTH TOGGLE:
+  User can disable pre-smoothing from the analysis page. When disabled, a
+  warning is raised: "SVD was requested without pre-smoothing. Noise
+  amplification is likely on raw survey data."
+
+LABEL IN METADATA:
+  smoothing_applied = True/False
+  profile_based     = True/False
+  warning           = always present, describes noise sensitivity
+
+
+───────────────────────────────────────────────────────────────────────────────
+C3 — HORIZONTAL DERIVATIVE
+───────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+Measure the lateral rate of change of the magnetic field along the survey
+path. Highlights contacts, edges, dykes, and fault traces.
+
+PROFILE METHOD (single-line):
+  Identical computation to FVD using central finite differences along
+  along_line_m. The physical interpretation is different:
+    - FVD is read as a proxy for the vertical change direction
+    - HD is read as the actual along-line horizontal change
+  Both are computed the same way; the distinction is semantic and recorded
+  in metadata.
+
+  hd[i] = (magnetic[i+1] - magnetic[i-1]) / (spacing[i-1] + spacing[i])
+
+GRID METHOD (multi-line):
+  Computed from the 2D gradient of the surface using numpy.gradient, which
+  uses central differences on interior cells and forward/backward at edges:
+
+    gx, gy = gradient(surface, dy, dx)
+    horizontal_derivative = sqrt(gx² + gy²)
+
+  This gives the magnitude of the horizontal gradient vector in 2D plan view.
+
+LABEL IN METADATA:
+  For single-line: "along-profile dT/dx"
+  For multi-line:  "2D gradient magnitude (surface)"
+  Warning for single-line: "Profile only: single along-line direction. Not full 2D HD."
+
+
+───────────────────────────────────────────────────────────────────────────────
+C4 — TOTAL HORIZONTAL GRADIENT (THG)
+───────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+Produce an edge-enhancement product that is more robust to noise than a single
+directional derivative. Locates geological contacts as maxima.
+
+PROFILE METHOD (single-line):
+  Since only one horizontal direction is available along a single traverse,
+  THG is computed as:
+
+    thg[i] = sqrt(fvd[i]² + hd[i]²)
+
+  where fvd is the FVD proxy (vertical-direction approximation) and hd is the
+  horizontal derivative. This combines both derivative components available on
+  a 1D profile.
+
+  This is a 1D-profile THG approximation. It is not equivalent to the full
+  2D plan-view THG that would require derivatives in two independent
+  horizontal directions across the survey area.
+
+GRID METHOD (multi-line):
+  Computed from the 2D grid gradients:
+
+    gx, gy = gradient(surface, dy, dx)
+    THG_surface = sqrt(gx² + gy²)
+
+  Same formula as the 2D horizontal derivative magnitude. On a full 2D surface,
+  THG and the horizontal derivative magnitude are the same quantity.
+
+LABEL IN METADATA:
+  For single-line: "abs(dT/dx) profile proxy" — labeled as 1D THG approximation
+  For multi-line:  "sqrt((dT/dx)² + (dT/dy)²)"
+  Warning for single-line: "1D profile THG: only along-line component available. Not true 2D THG."
+
+
+───────────────────────────────────────────────────────────────────────────────
+C5 — TILT DERIVATIVE
+───────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+Normalise the anomaly amplitude response so that weak and strong magnetic
+sources produce comparable edge signatures. The zero-crossing of the tilt
+derivative marks the lateral boundary of a magnetic body.
+
+PROFILE METHOD (single-line):
+  Uses the profile FVD proxy as the numerator and the absolute horizontal
+  derivative as the denominator:
+
+    thg_stable[i] = max(|hd[i]|, epsilon)   where epsilon = 1e-6
+    tilt[i] = arctan2(fvd[i], thg_stable[i])
+
+  Result is in radians, range [-π/2, π/2].
+
+  The denominator floor (epsilon = 1e-6) prevents division by zero where the
+  horizontal gradient is very small. When the stabilisation is used, it is
+  flagged in the metadata.
+
+GRID METHOD (multi-line):
+  Uses the Fourier-domain FVD (K-multiplied surface) as the numerator and
+  the 2D gradient magnitude as the denominator:
+
+    vdr   = FVD_surface  (from FFT, operator K)
+    gx, gy = gradient(surface, dy, dx)
+    thd   = sqrt(gx² + gy²)
+    tilt  = arctan2(vdr, thd + 1e-10)
+
+  The denominator addition of 1e-10 prevents divide-by-zero on the grid.
+
+LABEL IN METADATA:
+  method  = "arctan(FVD / THG) with ε-stabilised denominator"
+  warning = "Denominator stabilised with ε=1e-6 to prevent division by zero."
+
+
+───────────────────────────────────────────────────────────────────────────────
+C6 — ANALYTIC SIGNAL
+───────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+Amplitude-only edge detection that is independent of the inclination of the
+geomagnetic field. Maxima of the analytic signal are centred over source bodies
+regardless of magnetic latitude.
+
+PROFILE METHOD (single-line):
+  Combines the profile horizontal derivative and the FVD proxy:
+
+    analytic_signal[i] = sqrt(hd[i]² + fvd[i]²)
+
+  This is a 1D profile approximation. The full 3D analytic signal requires
+  derivatives in two orthogonal horizontal directions and the true vertical
+  derivative, none of which are individually available from a single profile.
+
+  The output is labeled "profile-based analytic signal" in metadata to
+  distinguish it from the surface-based version.
+
+GRID METHOD (multi-line):
+  Computes the 3D analytic signal from the gridded surface using all three
+  gradient components:
+
+    gx, gy = gradient(surface, dy, dx)       (horizontal gradients, 2D)
+    gz     = FVD_surface                     (vertical gradient, FFT K-operator)
+    analytic_signal = sqrt(gx² + gy² + gz²)
+
+  This is the standard 3D analytic signal of Nabighian (1972) extended to 2D
+  plan-view data.
+
+LABEL IN METADATA:
+  For single-line: "sqrt(HD² + FVD_proxy²) profile"
+  For multi-line:  "sqrt(gx² + gy² + gz²) 3D Fourier (surface)"
+  Warning for single-line: "Profile-based analytic signal: only 1D derivative components. Not full 3D analytic signal."
+
+
+───────────────────────────────────────────────────────────────────────────────
+C7 — REGIONAL AND RESIDUAL SEPARATION
+───────────────────────────────────────────────────────────────────────────────
+
+PURPOSE:
+Separate the corrected magnetic field into a broad regional component (long-
+wavelength background trend) and a residual component (local anomaly content).
+
+  regional_field  = broad background trend estimated from the corrected data
+  residual_field  = corrected_field - regional_field
+
+The method used to estimate the regional field is selected by the user.
+All methods below are valid for both single-line and multi-line data; the
+grid-based versions apply only when a 2D surface exists (multi-line).
+
+METHOD: Polynomial trend (polynomial)
+  Fits a polynomial of the user-specified degree (1, 2, or 3) to the
+  corrected magnetic field against the 2D station coordinates or 1D station
+  distance. The fitted polynomial surface is the regional field.
+  Default degree = 1 (a tilted plane or linear profile).
+  The polynomial is fitted by least squares over all stations.
+
+METHOD: Trend surface (trend)
+  Similar to polynomial but uses spatial coordinates (latitude, longitude)
+  explicitly in a 2D regression. For single-line data this reduces to a
+  1D linear or polynomial fit along the traverse.
+
+METHOD: Low-pass regional (lowpass, default)
+  Applies a low-pass Gaussian smoothing to the corrected field surface
+  (multi-line grid) or to the profile (single-line) with a sigma set by the
+  "smoothing scale" parameter. The smoothed output is the regional field.
+  The smoothing scale is in units of grid cells or station multiples.
+  This is a Gaussian convolution, not an FFT filter.
+
+METHOD: IGRF context (igrf_context)
+  Uses the IGRF-corrected field (if IGRF correction was applied) or a
+  long-wavelength reference field as the regional component. This is a
+  background reference interpretation, not a local trend fit. It is most
+  useful for comparing corrected data against the global reference model
+  context, not for producing a locally-fitted regional surface.
+
+RESIDUAL DEFINITION:
+  residual = corrected_field_surface - regional_field_surface
+
+Both regional and residual surfaces are stored and can be visualised
+and exported independently.
+
+The method used, the polynomial degree or smoothing scale, and a textual
+description of the output are all stored in the QA metadata and the
+processing report.
+
+
+===============================================================================
+GEOMETRY DETECTION AND OUTPUT LABELING
+===============================================================================
+
+The system determines geometry at the start of the add-on computation by
+counting unique _line_id values in the results point set:
+
+  is_multi_line = (count of unique line_id values) > 1
+  is_surface_valid = is_multi_line AND surface has shape > 2×2
+
+For single-line data, all surface-domain derivative outputs are labeled
+as profile projections in the addon_provenance metadata block. This block
+is stored in the processing results and is available for QA inspection.
+
+addon_provenance fields for each add-on:
+  source_field      : always "corrected_magnetic"
+  method            : exact algorithm name
+  profile_based     : True if computed from profile data, False if from surface
+  smoothing_applied : whether pre-smoothing was used (relevant for SVD)
+  description       : one-line scientific description
+  warning           : populated whenever an approximation was made
+
+
+===============================================================================
+ORDER OF ALL STAGES IN THE FULL PIPELINE
+===============================================================================
+
+  Stage 0 : Load and validate uploaded survey files
+  Stage 1 : Clean — deduplication, line ID assignment, along_line_m computation
+  Stage 2 : Spike removal (automatic, before user corrections)
+  Stage 3 : User-selected corrections in order:
+              IGRF → diurnal → lag → heading → FFT filter
+  Stage 4 : Leveling and crossover checks
+  Stage 5 : Prediction target preparation (train/predict split)
+  Stage 6 : Modelling and interpolation (kriging / ML / hybrid)
+  Stage 7 : Grid-domain add-ons
+  Stage 8 : Uncertainty surface synthesis
+  Stage 9 : QA report assembly
+  Stage 10: Save results and artifacts to Cloud Storage
+
+
+===============================================================================
+END OF DOCUMENT
+===============================================================================

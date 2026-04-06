@@ -1,6 +1,6 @@
 # GAIA Magnetics Context
 
-Last updated: `2026-04-06`
+Last updated: `2026-04-07`
 
 ## Purpose
 
@@ -125,6 +125,36 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 - Point-based views use displayed point values for stats/scale; grid-based views use grid-surface values.
 - Aurora chat receives active layer, view mode, traverse selection, approximate line endpoints, displayed stats, provenance, and processing metadata.
 
+### Analysis Page (A and C)
+
+**A. Corrections (UI + backend)**
+- IGRF: survey date picker in UI; `collectAnalysisConfig` sends `survey_date` ISO datetime; backend `_resolve_survey_datetime` picks it up. Blocks on save if IGRF is enabled without a date.
+- Filtering: cutoff half-wavelength in stations exposed in UI; config key `filter_cutoff_stations`; backend converts to `cutoff_freq = 1 / n_stations`; per-line for multi-line surveys.
+
+**C. Add-ons (UI + backend)**
+- Selectable from analysis page: FVD, SVD (with pre-smooth toggle), Horizontal Derivative, THG, Tilt Derivative, Analytic Signal, Regional/Residual.
+- `ADD_ON_MAP` keys: `first_vertical_derivative`, `second_vertical_derivative`, `horizontal_derivative`, `thg`, `tilt_derivative`, `analytic_signal`, `emag2` (regional residual), `rtp`.
+
+**Geometry detection in `_apply_add_ons`**
+- `is_multi_line`: count of unique `line_id` values in `results["points"]` > 1.
+- Single-line → profile-based methods (spacing-aware finite differences on `along_line_m`).
+- Multi-line → FFT wavenumber-domain methods on the 2D interpolated surface.
+- Profile values back-projected to grid for single-line map display using `griddata(nearest)`.
+
+**Profile-based helper functions (module-level)**
+- `_spacing_from_along_line`, `_fvd_profile`, `_svd_profile`, `_hd_profile`, `_thg_profile`, `_tilt_profile`, `_analytic_signal_profile`, `_compute_profile_add_ons`.
+
+**Grid-based helper functions**
+- `_second_vertical_derivative_grid`: FFT multiply by −K².
+- Existing: `_first_vertical_derivative_fft` (K), `_analytic_signal_3d`, `_tilt_derivative`, `_total_gradient`.
+
+**Traceability**
+- `addon_provenance` dict stored in processing metadata: source_field, method, profile_based, smoothing_applied, description, warning.
+- `profile_add_ons` flat array (one value per point) stored in results for profile chart consumers.
+
+**Reference document**
+- `PROCESSING_METHODS.txt` — exact algorithm description for every correction and add-on.
+
 ### Export
 - Export page lists actual processed output layers; user chooses which outputs appear in reports before generation.
 - Dynamic chip generation: only outputs matching the user's applied corrections are shown (not all possible outputs).
@@ -147,9 +177,12 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 
 ## Known Follow-Up Areas
 
-1. **Verify export download** — end-to-end test: run export, download file, confirm no "Choose at least one processed output" error.
-2. **Confirm `anthropic_success`** — check Cloud Logging after a fresh export run for `export.path.outcome = anthropic_success`.
-3. **Fix `_xlsx_to_csv_bytes` bold detection** — add text-based BS row fallback.
-4. **Browser QA on Aurora** — Preview and Visualisation chat against real processed task.
-5. **Re-process known dataset** — after export stabilises.
-6. **Firebase authorized domain** — add `magnetics.terracode-analytics.live` to Firebase Console → Authentication → Settings → Authorized domains (good hygiene).
+1. **Deploy analysis page reconstruction** — changes committed, not yet live; run the deploy command.
+2. **QA new analysis page** — IGRF date input, SVD/THG/Tilt checkbox save+restore, filter cutoff parameter.
+3. **Add SVD and THG to export layer list** — `export_service.py` needs `second_vertical_derivative` and `thg` added to its layer registry before they can appear in DOCX/PDF/PPTX exports.
+4. **Verify export download** — end-to-end test: run export, download file, confirm no "Choose at least one processed output" error.
+5. **Confirm `anthropic_success`** — check Cloud Logging after a fresh export run for `export.path.outcome = anthropic_success`.
+6. **Fix `_xlsx_to_csv_bytes` bold detection** — add text-based BS row fallback.
+7. **Browser QA on Aurora** — Preview and Visualisation chat against real processed task.
+8. **Re-process known dataset** — after export and analysis page stabilise.
+9. **Firebase authorized domain** — add `magnetics.terracode-analytics.live` to Firebase Console → Authentication → Settings → Authorized domains (good hygiene).

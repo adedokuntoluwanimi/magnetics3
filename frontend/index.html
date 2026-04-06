@@ -849,43 +849,69 @@ select option{background:var(--bg);color:var(--text)}
       <div class="screen" id="screen-analysis">
         <div class="shdr">
           <div class="stitle">Analysis Configuration</div>
-          <div class="ssub">Three independent panels - configure what applies, skip what doesn't</div>
+          <div class="ssub">Configure corrections and add-ons — prediction modelling is a separate panel</div>
         </div>
         <div class="scroll">
-          <div class="sep first">A - Corrections</div>
-          <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">Diurnal correction</div><div class="chk-d">Remove daily geomagnetic variation using base station reference data</div></div></div>
+
+          <!-- ══ A — CORRECTIONS ══════════════════════════════════════════════ -->
+          <div class="sep first">A — Corrections</div>
+
+          <!-- Diurnal (unchanged — upstream input, do not modify) -->
+          <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">Diurnal correction</div><div class="chk-d">Removes daily geomagnetic variation using base station reference data. Applied before all other corrections.</div></div></div>
           <div id="diurnalInfoCard" class="card card-sm" style="margin:-2px 0 10px 0;padding:10px 12px">
             <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px" id="diurnalInfoBadges"></div>
             <div style="font-size:11px;color:var(--text2);line-height:1.7">When valid base station readings are present, station readings are corrected using linear interpolation between consecutive base station readings. This preserves local drift direction and magnitude.</div>
             <div style="font-size:10.5px;color:var(--text3);line-height:1.7;margin-top:6px">If valid base station readings are unavailable, a fallback low-frequency trend correction is used.</div>
             <div id="diurnalInfoNote" style="font-size:10.5px;color:var(--amber);line-height:1.6;margin-top:6px;display:none"></div>
           </div>
-          <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">IGRF removal</div><div class="chk-d">Subtract International Geomagnetic Reference Field at survey date and location</div></div></div>
+
+          <!-- IGRF removal -->
+          <div class="chk on" id="chk-igrf" onclick="toggleIGRF(this)">
+            <div class="chk-box on">✓</div>
+            <div style="flex:1">
+              <div class="chk-t">IGRF removal</div>
+              <div class="chk-d">Subtract International Geomagnetic Reference Field station-by-station from coordinates and survey date. Requires survey date.</div>
+              <div id="igrf-opts" style="margin-top:10px">
+                <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:6px">Survey date</div>
+                <input id="igrf-survey-date" class="fi" type="date" style="width:100%;max-width:200px" onclick="event.stopPropagation()">
+                <div style="font-size:10px;color:var(--text3);margin-top:5px;line-height:1.6">Required to evaluate IGRF total field at each station location. If omitted, the task creation date is used as a fallback.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Filtering -->
           <div class="chk" id="chk-filtering" onclick="toggleFiltering(this)">
             <div class="chk-box"></div>
             <div style="flex:1">
               <div class="chk-t">Filtering</div>
-              <div class="chk-d">Spectral filtering - remove regional field or high-frequency noise</div>
+              <div class="chk-d">1D profile-safe spectral filtering applied per line. Low-pass retains broad anomalies; high-pass retains shallow targets.</div>
               <div id="filter-opts" style="display:none;margin-top:10px">
                 <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:8px">Filter type</div>
-                <div style="display:flex;gap:8px">
+                <div style="display:flex;gap:8px;margin-bottom:12px">
                   <div class="radio-opt" id="filt-low" onclick="event.stopPropagation();setFilter('low')">
                     <div class="radio-circle"></div>
-                    <div><div style="font-size:12px;font-weight:700">Low-pass</div><div style="font-size:10.5px;color:var(--text3);font-weight:500">Remove high-frequency noise, preserve long-wavelength signal</div></div>
+                    <div><div style="font-size:12px;font-weight:700">Low-pass</div><div style="font-size:10.5px;color:var(--text3);font-weight:500">Preserve long-wavelength regional content, suppress noise</div></div>
                   </div>
                   <div class="radio-opt" id="filt-high" onclick="event.stopPropagation();setFilter('high')">
                     <div class="radio-circle"></div>
-                    <div><div style="font-size:12px;font-weight:700">High-pass</div><div style="font-size:10.5px;color:var(--text3);font-weight:500">Remove regional field, isolate shallow residual anomalies</div></div>
+                    <div><div style="font-size:12px;font-weight:700">High-pass</div><div style="font-size:10.5px;color:var(--text3);font-weight:500">Suppress regional trend, isolate shallow short-wavelength anomalies</div></div>
                   </div>
                 </div>
+                <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:6px">Cutoff half-wavelength (stations)</div>
+                <input id="filter-cutoff" class="fi" type="number" min="2" step="1" value="20" style="width:100%;max-width:160px" onclick="event.stopPropagation()">
+                <div style="font-size:10px;color:var(--text3);margin-top:5px;line-height:1.6">Anomalies wider than this number of stations are treated as regional (low-pass) or suppressed (high-pass). Applied per line for multi-line surveys.</div>
+                <div id="filter-highpass-warn" style="display:none;font-size:10px;color:var(--amber);margin-top:5px">High-pass filtering can amplify short-wavelength noise. Inspect output carefully.</div>
               </div>
             </div>
           </div>
-          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Lag correction</div><div class="chk-d">Sensor/GPS timing offset compensation - critical for vehicle-mounted sensors</div></div></div>
+
+          <!-- Lag and heading (unchanged) -->
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Lag correction</div><div class="chk-d">Sensor/GPS timing offset compensation — critical for vehicle-mounted sensors</div></div></div>
           <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Heading correction</div><div class="chk-d">Remove directional bias between opposing survey line traverses</div></div></div>
 
+          <!-- ══ B — PREDICTION MODELLING (untouched) ═════════════════════════ -->
           <div class="sep" style="display:flex;align-items:center;justify-content:space-between">
-            <span>B - Prediction modelling</span>
+            <span>B — Prediction modelling</span>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;font-weight:700;color:var(--text3)">
               <input type="checkbox" id="predModelToggle" checked style="width:14px;height:14px;accent-color:var(--g500)">
               Enabled
@@ -899,15 +925,50 @@ select option{background:var(--bg);color:var(--text)}
           </div>
           </div>
 
-          <div class="sep">C — Processing add-ons</div>
-          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Reduction to Pole (RTP)</div><div class="chk-d">Uses supplied inclination and declination when available; QA will flag stabilized or fallback behaviour</div></div></div>
-          <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">Analytic signal</div><div class="chk-d">Source body edge detection — maxima delineate geological contacts independent of inclination</div></div></div>
-          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Regional residual</div><div class="chk-d">Separate the processed surface into regional and residual components using Gaussian smoothing</div></div></div>
+          <!-- ══ C — ADD-ONS / DERIVED OUTPUTS ════════════════════════════════ -->
+          <div class="sep">C — Add-ons / Derived outputs</div>
+
+          <!-- RTP (existing, not in scope — kept for backward compat) -->
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Reduction to Pole (RTP)</div><div class="chk-d">Transforms anomaly pattern as if the survey were conducted at the magnetic pole. Requires inclination and declination. ε-damped for low inclinations.</div></div></div>
+
+          <!-- Analytic signal -->
+          <div class="chk on" onclick="toggleChk(this)"><div class="chk-box on">✓</div><div><div class="chk-t">Analytic signal</div><div class="chk-d">sqrt(dT/dx² + dT/dy² + dT/dz²). Delineates source body edges independent of inclination. Surface-based for multi-line; profile proxy for single-line.</div></div></div>
+
+          <!-- First Vertical Derivative -->
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">First Vertical Derivative</div><div class="chk-d">dT/dz approximation. Enhances shallow sources and sharpens anomaly boundaries. Profile finite-differences for single-line; FFT wavenumber-domain for multi-line grid.</div></div></div>
+
+          <!-- Second Vertical Derivative -->
+          <div class="chk" id="chk-svd" onclick="toggleSVD(this)">
+            <div class="chk-box"></div>
+            <div style="flex:1">
+              <div class="chk-t">Second Vertical Derivative</div>
+              <div class="chk-d">d²T/dz² approximation. Further sharpens near-surface anomalies. Noise-sensitive — pre-smoothing is applied by default.</div>
+              <div id="svd-opts" style="display:none;margin-top:8px">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;color:var(--text2)" onclick="event.stopPropagation()">
+                  <input type="checkbox" id="svd-smooth-toggle" checked style="width:13px;height:13px;accent-color:var(--g500)">
+                  <span>Apply Gaussian pre-smoothing (recommended)</span>
+                </label>
+                <div style="font-size:10px;color:var(--amber);margin-top:5px;line-height:1.6">SVD amplifies noise. Pre-smoothing is strongly recommended on raw survey data.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Horizontal Derivative -->
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Horizontal Derivative</div><div class="chk-d">dT/dx along traverse (single-line) or sqrt(dT/dx² + dT/dy²) on grid (multi-line). Highlights lateral rate of change, contacts, and fault traces.</div></div></div>
+
+          <!-- Total Horizontal Gradient -->
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Total Horizontal Gradient</div><div class="chk-d">sqrt(dT/dx² + dT/dy²) gradient magnitude. Edge-sensitive. Full 2D for multi-line grid; 1D profile proxy for single-line — labeled accordingly.</div></div></div>
+
+          <!-- Tilt Derivative -->
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Tilt Derivative</div><div class="chk-d">arctan(dT/dz / THG). Normalises anomaly amplitude — weak and strong sources produce comparable edge responses. Denominator ε-stabilised to prevent division by zero.</div></div></div>
+
+          <!-- Regional / Residual -->
+          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Regional residual</div><div class="chk-d">Separate the corrected field into broad regional trend and local residual anomaly content. Method and parameters shown below.</div></div></div>
           <div id="regionalSettingsCard" class="card card-sm" style="margin:-2px 0 12px 0;padding:12px 14px;display:none">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
               <div>
                 <div style="font-size:12px;font-weight:700;color:var(--text)">Generate regional and residual fields</div>
-                <div style="font-size:10.5px;color:var(--text3);line-height:1.6;margin-top:2px">Regional Magnetic Field and Residual Magnetic Field are shown and exported as separate interpretive products.</div>
+                <div style="font-size:10.5px;color:var(--text3);line-height:1.6;margin-top:2px">Regional = broad background trend. Residual = corrected field − regional. Both shown and exported as separate interpretive products.</div>
               </div>
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;font-weight:700;color:var(--text3)">
                 <input type="checkbox" id="regionalResidualToggle" style="width:14px;height:14px;accent-color:var(--g500)">
@@ -917,25 +978,23 @@ select option{background:var(--bg);color:var(--text)}
             <div style="margin-bottom:10px">
               <label style="display:block;font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:6px">Regional field method</label>
               <select id="regionalMethodSelect" class="fsel" style="width:100%">
-                <option value="polynomial">Polynomial trend</option>
-                <option value="trend">Trend surface</option>
-                <option value="lowpass">Low-pass regional</option>
-                <option value="igrf_context">IGRF context</option>
+                <option value="polynomial">Polynomial trend fit (low-order, profile or surface)</option>
+                <option value="trend">Trend surface (spatial regression)</option>
+                <option value="lowpass" selected>Low-pass smoothing regional (profile or grid)</option>
+                <option value="igrf_context">IGRF context (long-wavelength reference)</option>
               </select>
             </div>
             <div id="regionalDegreeRow" style="display:none;margin-bottom:10px">
-              <label style="display:block;font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:6px">Polynomial degree</label>
+              <label style="display:block;font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:6px">Polynomial degree (1–3)</label>
               <input id="regionalDegreeInput" class="fi" type="number" min="1" max="3" step="1" value="1" style="width:100%">
             </div>
             <div id="regionalScaleRow" style="display:none;margin-bottom:10px">
-              <label style="display:block;font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:6px">Filter / smoothing scale</label>
+              <label style="display:block;font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-bottom:6px">Smoothing scale (grid cells or station multiples)</label>
               <input id="regionalScaleInput" class="fi" type="number" min="0.1" step="0.1" value="2.5" style="width:100%">
             </div>
             <div id="regionalMethodHelp" style="font-size:10.5px;color:var(--text2);line-height:1.7"></div>
             <div id="regionalMethodNote" style="font-size:10.5px;color:var(--blue);line-height:1.7;margin-top:6px;display:none"></div>
           </div>
-          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">First Vertical Derivative</div><div class="chk-d">Sharpen shallow anomalies and suppress broad regional trends for near-surface structure mapping</div></div></div>
-          <div class="chk" onclick="toggleChk(this)"><div class="chk-box"></div><div><div class="chk-t">Horizontal Derivative</div><div class="chk-d">Highlight lateral gradients and edges along contacts, dykes, and fault traces</div></div></div>
 
           <div class="nfoot">
             <button class="btn btn-out" onclick="go('setup')">← Back</button>

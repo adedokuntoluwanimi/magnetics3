@@ -37,6 +37,44 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 
 ## What Changed Most Recently
 
+### Session 2026-04-07 — Analysis page reconstruction (A+C) + processing methods document
+
+**Analysis page — A. Corrections**
+- IGRF: survey date picker added to UI. `collectAnalysisConfig` sends `survey_date`. `saveAndPreview` blocks if IGRF is enabled without a date. Backend already read `survey_date` from `analysis_config` — it just needed the UI to supply it.
+- Filtering: cutoff half-wavelength (stations) input added. Config key `filter_cutoff_stations`. Backend converts: `cutoff_freq = 1 / n_stations`, applied in station-count domain (`sample_spacing=1.0`). Per-line for multi-line.
+
+**Analysis page — C. Add-ons**
+- Added: Second Vertical Derivative (SVD) checkbox with pre-smooth toggle; Total Horizontal Gradient (THG) checkbox; Tilt Derivative checkbox.
+- All add-on descriptions updated to be scientifically explicit and geometry-aware.
+- `ADD_ON_MAP` updated: `second_vertical_derivative`, `thg`, `tilt_derivative` now map to backend keys.
+- `collectAnalysisConfig` collects: `survey_date`, `filter_cutoff_stations`, `svd_pre_smooth`.
+- `loadAnalysis` restores all new fields.
+- `window.toggleIGRF`, `window.toggleSVD` added as toggle helpers.
+
+**Backend — new profile helper functions**
+Added to `processing_service.py` after line ~451 (before `_RTP_LOW_INC_THRESHOLD`):
+- `_second_vertical_derivative_grid`: FFT −K² operator for 2D grids.
+- `_spacing_from_along_line`: derives per-station spacing from `along_line_m`.
+- `_fvd_profile`, `_svd_profile`, `_hd_profile`, `_thg_profile`, `_tilt_profile`, `_analytic_signal_profile`: spacing-aware finite-difference profile implementations (1D, along-traverse).
+- `_compute_profile_add_ons`: orchestrates all profile add-ons for one line, returns dict of arrays.
+
+**Backend — `_apply_add_ons` rebuilt**
+- Detects geometry from `results["points"]` line_id count.
+- Single-line: profile methods → back-project to grid via `griddata(nearest)` for display.
+- Multi-line: existing FFT/gradient surface methods.
+- SVD, THG, tilt now selectively computed and returned.
+- `profile_add_ons` flat dict added to results (one value per point, for profile chart consumers).
+- `addon_provenance` metadata block: source_field, method, profile_based, smoothing_applied, description, warning.
+- `total_gradient` backward-compat alias kept for export service.
+
+**Backend — `_apply_corrections` filter**
+- `filter_cutoff_stations` from config → `cutoff_freq = 1 / n_stations`, `sample_spacing=1.0`.
+- Per-line energy ratios and warnings reported per line.
+- High-pass always raises a noise-amplification warning.
+
+**Documentation**
+- `PROCESSING_METHODS.txt` created at repo root — exact algorithm reference for all corrections and add-ons, tied to source code.
+
 ### Session 2026-04-06 — Auth loop fix, dark mode default, password eye toggle
 
 **Auth loop fix**
@@ -87,42 +125,51 @@ powershell -Command "& 'C:\Users\Tolu\AppData\Local\Google\Cloud SDK\google-clou
 
 ## Immediate Next Steps
 
-### 1. Verify export download end-to-end
+### 1. Deploy the analysis page reconstruction
+The changes are committed but not yet live. Run the deploy command to push to Cloud Run.
+
+### 2. QA the analysis page
+After deploy:
+- Enable IGRF and try saving without a date — should block with a notice.
+- Enable IGRF with a date, save, re-open the task — date should be restored.
+- Enable SVD — pre-smooth toggle should appear; save and reopen — state restored.
+- Enable THG and Tilt Derivative — both should save and restore correctly.
+- Run processing on a single-line task — check that `addon_provenance` in results metadata shows `profile_based: true` for derivative add-ons.
+- Run processing on a multi-line task — check `profile_based: false`.
+
+### 3. Add SVD and THG to export service
+`export_service.py` does not yet list `second_vertical_derivative` or `thg` in its layer registry. Add them alongside the existing FVD and horizontal derivative entries if export of these outputs is needed.
+
+### 4. Verify export download end-to-end
 Run a fresh export on any processed task. Confirm:
 - No "Choose at least one processed output" error in console.
 - Download button produces a file.
 - Check Cloud Logging for `export.path.outcome = anthropic_success`.
 
-### 2. If export still failing
-Check Cloud Logging for per-block outcomes. The dominant failure modes as of the last check were:
-- `project_setup` truncating (token budget too small) → split further or reduce prompt context.
-- `pptx_group_1` truncating → same fix.
-- `pptx_group_2` missing section → check block prompt covers all required sections.
-
 ## Most Important Files Right Now
 
 | File | Why |
 |---|---|
-| `backend/auth.py` | New Firebase auth dependency |
-| `backend/main.py` | Route auth wiring + `/login` route |
-| `frontend/login.html` | New standalone login page |
-| `frontend/js/auth.js` | New Firebase auth helpers |
-| `frontend/js/api.js` | Auth-aware request wrapper |
-| `frontend/js/app.js` | App boot + auth gate |
-| `frontend/js/sections/export.js` | Export selection, chip fix, download |
+| `backend/services/processing_service.py` | Profile add-on helpers, geometry-aware `_apply_add_ons`, filter cutoff |
+| `frontend/index.html` | Analysis section A+C rebuilt — IGRF date, filter cutoff, SVD/THG/Tilt |
+| `frontend/js/sections/analysis.js` | ADD_ON_MAP, collectAnalysisConfig, loadAnalysis, toggleIGRF/toggleSVD |
+| `PROCESSING_METHODS.txt` | Exact algorithm reference for all corrections and add-ons |
+| `backend/services/export_service.py` | SVD and THG not yet in layer registry — next addition needed here |
+| `backend/auth.py` | Firebase token verification |
+| `frontend/js/sections/export.js` | Export selection and download |
 | `frontend/js/sections/navigation.js` | Screen routing, persistence, transitions |
-| `backend/services/ai_service.py` | Block export + Aurora chat |
-| `backend/services/export_service.py` | DOCX/PDF/PPTX builders |
 
 ## Remaining Gaps
 
-1. **Export download unverified** — kebab-case chip fix deployed but not end-to-end confirmed.
-2. **`anthropic_success` not yet confirmed** — raised token budgets deployed; needs a fresh export run + log check.
-3. **`_xlsx_to_csv_bytes` text fallback** — bold-only BS detection still misses partially-bold rows.
-4. **Browser QA on Aurora** — Preview and Visualisation chat not yet verified against real processed task.
-5. **Re-process known dataset** — after export stabilises.
-6. **Firebase authorized domain** — `magnetics.terracode-analytics.live` not yet added to Firebase Console (good hygiene; popup sign-in works without it).
-7. **Native FileGDB** — still not implemented; `gdb_bundle` uses feature-class-style GeoJSON.
+1. **Analysis page not yet deployed** — committed, needs a deploy run.
+2. **SVD and THG not in export layer list** — `export_service.py` needs updating before these appear in DOCX/PDF/PPTX.
+3. **Export download unverified** — kebab-case chip fix deployed but not end-to-end confirmed.
+4. **`anthropic_success` not yet confirmed** — raised token budgets deployed; needs a fresh export run + log check.
+5. **`_xlsx_to_csv_bytes` text fallback** — bold-only BS detection still misses partially-bold rows.
+6. **Browser QA on Aurora** — Preview and Visualisation chat not yet verified against real processed task.
+7. **Re-process known dataset** — after export stabilises.
+8. **Firebase authorized domain** — `magnetics.terracode-analytics.live` not yet added to Firebase Console (good hygiene; popup sign-in works without it).
+9. **Native FileGDB** — still not implemented; `gdb_bundle` uses feature-class-style GeoJSON.
 
 ## Working Style
 

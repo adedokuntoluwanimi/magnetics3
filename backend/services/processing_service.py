@@ -451,6 +451,178 @@ def _total_gradient(
     return _analytic_signal_3d(surface, dx, dy)
 
 
+def _second_vertical_derivative_grid(
+    surface: np.ndarray, dx: float = 1.0, dy: float = 1.0
+) -> np.ndarray:
+    """
+    Grid-based SVD via wavenumber domain: multiply FFT by -(kx² + ky²).
+    This is the second vertical derivative of the potential field.
+    """
+    s = surface.astype(np.float64)
+    ny, nx = s.shape
+    kx = np.fft.fftfreq(nx, d=dx) * 2 * np.pi
+    ky = np.fft.fftfreq(ny, d=dy) * 2 * np.pi
+    KX, KY = np.meshgrid(kx, ky)
+    K2 = KX ** 2 + KY ** 2
+    # SVD = -d²T/dz² ≈ (d²T/dx² + d²T/dy²) for potential fields (Laplace)
+    return np.real(np.fft.ifft2(np.fft.fft2(s) * (-K2))).astype(np.float64)
+
+
+# ── Profile-domain add-on helpers ────────────────────────────────────────────
+
+def _spacing_from_along_line(along_m: np.ndarray) -> np.ndarray:
+    """
+    Compute local station spacing (metres) from cumulative distance array.
+    Returns spacing[i] = distance to the next station (forward difference),
+    with the last element equal to the previous spacing.
+    """
+    n = len(along_m)
+    if n < 2:
+        return np.ones(n, dtype=np.float64)
+    spacing = np.empty(n, dtype=np.float64)
+    spacing[:-1] = np.diff(along_m.astype(np.float64))
+    spacing[-1] = spacing[-2]
+    # Replace zero or negative spacing with median positive spacing
+    pos = spacing[spacing > 0]
+    if pos.size == 0:
+        return np.ones(n, dtype=np.float64)
+    median_sp = float(np.median(pos))
+    spacing = np.where(spacing > 0, spacing, median_sp)
+    return spacing
+
+
+def _fvd_profile(mag: np.ndarray, spacing: np.ndarray, smooth_sigma: float = 0.0) -> np.ndarray:
+    """
+    Profile-based First Vertical Derivative proxy.
+    Uses central finite differences with explicit station spacing.
+    Optionally applies Gaussian pre-smoothing.
+
+    For a magnetic profile T(x), this approximates dT/dx (along-line gradient),
+    which acts as a proxy for the vertical derivative in the profile direction.
+
+    Single-line: applied directly to the profile.
+    Multi-line: call per-line and assemble.
+    """
+    m = np.asarray(mag, dtype=np.float64)
+    sp = np.asarray(spacing, dtype=np.float64)
+    n = len(m)
+    if n < 3:
+        return np.zeros(n, dtype=np.float64)
+
+    if smooth_sigma > 0:
+        from scipy.ndimage import gaussian_filter1d
+        m = gaussian_filter1d(m, sigma=smooth_sigma)
+
+    result = np.zeros(n, dtype=np.float64)
+    # Central differences for interior points (spacing-aware)
+    result[1:-1] = (m[2:] - m[:-2]) / (sp[:-2] + sp[1:-1])
+    # Forward/backward for endpoints
+    result[0] = (m[1] - m[0]) / sp[0]
+    result[-1] = (m[-1] - m[-2]) / sp[-2]
+    return result
+
+
+def _svd_profile(mag: np.ndarray, spacing: np.ndarray, pre_smooth: bool = True) -> np.ndarray:
+    """
+    Profile-based Second Vertical Derivative proxy.
+    Applies spacing-aware second-order finite differences after pre-smoothing.
+    SVD is highly noise-sensitive; pre-smoothing is on by default and strongly recommended.
+
+    Single-line: applied to the profile.
+    Multi-line: call per-line.
+    """
+    m = np.asarray(mag, dtype=np.float64)
+    sp = np.asarray(spacing, dtype=np.float64)
+    n = len(m)
+    if n < 5:
+        return np.zeros(n, dtype=np.float64)
+
+    if pre_smooth:
+        from scipy.ndimage import gaussian_filter1d
+        smooth_sigma = max(1.0, float(np.median(sp)) * 0.5)
+        m = gaussian_filter1d(m, sigma=smooth_sigma)
+
+    result = np.zeros(n, dtype=np.float64)
+    # Central second difference: (T[i+1] - 2T[i] + T[i-1]) / h²
+    h = sp[1:-1]
+    result[1:-1] = (m[2:] - 2.0 * m[1:-1] + m[:-2]) / (h ** 2)
+    result[0] = result[1]
+    result[-1] = result[-2]
+    return result
+
+
+def _hd_profile(mag: np.ndarray, spacing: np.ndarray) -> np.ndarray:
+    """
+    Profile horizontal derivative: rate of change of magnetic field along
+    traverse distance. Same as FVD proxy but semantically distinct — this
+    is the along-line horizontal gradient, not a vertical derivative approximation.
+    """
+    return _fvd_profile(mag, spacing, smooth_sigma=0.0)
+
+
+def _thg_profile(fvd: np.ndarray, hd: np.ndarray) -> np.ndarray:
+    """
+    Profile-compatible Total Horizontal Gradient.
+    For a single profile only one horizontal direction is available (along-line).
+    THG = sqrt(FVD_proxy² + HD²).
+    Must be labeled as 1D-profile THG, not full 2D surface THG.
+    """
+    return np.sqrt(np.asarray(fvd, dtype=np.float64) ** 2 + np.asarray(hd, dtype=np.float64) ** 2)
+
+
+def _tilt_profile(fvd: np.ndarray, hd: np.ndarray, epsilon: float = 1e-6) -> np.ndarray:
+    """
+    Profile tilt derivative: arctan(FVD_proxy / max(|HD|, epsilon)).
+    Denominator is stabilised to prevent division by zero.
+    Result in radians, range [-π/2, π/2].
+    """
+    thg = np.abs(np.asarray(hd, dtype=np.float64))
+    thg_stable = np.where(thg < epsilon, epsilon, thg)
+    return np.arctan2(np.asarray(fvd, dtype=np.float64), thg_stable).astype(np.float64)
+
+
+def _analytic_signal_profile(fvd: np.ndarray, hd: np.ndarray) -> np.ndarray:
+    """
+    Profile-based analytic signal: sqrt(HD² + FVD_proxy²).
+    This is a 1D profile approximation, not the full 3D surface analytic signal
+    (which requires both horizontal gradient components and a true vertical derivative).
+    Must be labeled as profile-based.
+    """
+    return np.sqrt(np.asarray(hd, dtype=np.float64) ** 2 + np.asarray(fvd, dtype=np.float64) ** 2)
+
+
+def _compute_profile_add_ons(
+    mag: np.ndarray,
+    along_m: np.ndarray,
+    svd_pre_smooth: bool = True,
+) -> dict:
+    """
+    Compute all profile-based add-on values for a single line segment.
+    Returns a dict of arrays, all same length as mag.
+
+    Inputs:
+      mag      – corrected magnetic values along the line
+      along_m  – cumulative traverse distance in metres
+      svd_pre_smooth – apply Gaussian pre-smoothing before SVD
+
+    Outputs (dict keys):
+      fvd    – first vertical derivative proxy (along-line dT/dx)
+      svd    – second vertical derivative proxy (along-line d²T/dx²)
+      hd     – horizontal derivative (same as fvd, different semantic role)
+      thg    – total horizontal gradient proxy (sqrt(fvd² + hd²))
+      tilt   – tilt derivative (arctan(fvd / thg), stabilised)
+      analytic_signal – profile analytic signal (sqrt(hd² + fvd²))
+    """
+    sp = _spacing_from_along_line(along_m)
+    fvd = _fvd_profile(mag, sp)
+    svd = _svd_profile(mag, sp, pre_smooth=svd_pre_smooth)
+    hd = _hd_profile(mag, sp)
+    thg = _thg_profile(fvd, hd)
+    tilt = _tilt_profile(fvd, hd)
+    asig = _analytic_signal_profile(fvd, hd)
+    return {"fvd": fvd, "svd": svd, "hd": hd, "thg": thg, "tilt": tilt, "analytic_signal": asig}
+
+
 _RTP_LOW_INC_THRESHOLD = 15.0
 
 
@@ -1430,20 +1602,71 @@ class ProcessingService:
             fft_type_map = {"low-pass": "lowpass", "high-pass": "highpass", "band-pass": "bandpass"}
             fft_type = fft_type_map.get(filter_type, filter_type)
             if fft_type in ("lowpass", "highpass", "bandpass"):
-                mag_arr = out["magnetic"].to_numpy(dtype=np.float64)
-                t_arr = out["time_s"].to_numpy(dtype=np.float64) if "time_s" in out.columns else np.arange(len(out), dtype=np.float64)
-                dt = _compute_dt_median(t_arr)
-                filtered, energy_rep = _apply_fft_filter(
-                    mag_arr, fft_type,
-                    config.get("fft_cutoff_low"),
-                    config.get("fft_cutoff_high"),
-                    sample_spacing=dt,
-                )
-                out["magnetic"] = filtered
-                energy_ratio = energy_rep.get("energy_ratio", 1.0)
-                notes.append(f"{filter_type} FFT filter (energy retained: {energy_ratio:.1%})")
+                # Resolve cutoff frequency.
+                # Priority: explicit fft_cutoff_* → spatial cutoff from filter_cutoff_stations.
+                # filter_cutoff_stations: half-wavelength in stations.
+                #   cutoff_freq = 1.0 / filter_cutoff_stations (cycles/station)
+                # sample_spacing=1.0 when using station-count domain.
+                cutoff_low = config.get("fft_cutoff_low")
+                cutoff_high = config.get("fft_cutoff_high")
+                use_spatial = False
+                spatial_cutoff_stations = config.get("filter_cutoff_stations")
+                if (cutoff_low is None and cutoff_high is None) and spatial_cutoff_stations:
+                    n_stations = float(spatial_cutoff_stations)
+                    if n_stations >= 2:
+                        freq = 1.0 / n_stations  # cycles per station
+                        cutoff_low = freq   # used for lowpass upper bound
+                        cutoff_high = freq  # used for highpass lower bound
+                        use_spatial = True
+
+                _multi_line = "_line_id" in out.columns and out["_line_id"].nunique() > 1
+                if _multi_line:
+                    # Apply per-line to avoid discontinuity artefacts at line boundaries.
+                    # Concatenating all lines into one time series would introduce
+                    # jumps between lines that the FFT treats as signal.
+                    _energy_ratios: list[float] = []
+                    for _fft_lid, _fft_idx in out.groupby("_line_id").groups.items():
+                        _lmag = out.loc[_fft_idx, "magnetic"].to_numpy(dtype=np.float64)
+                        if use_spatial:
+                            _sample_sp = 1.0
+                        else:
+                            _lt = out.loc[_fft_idx, "time_s"].to_numpy(dtype=np.float64) if "time_s" in out.columns else np.arange(len(_fft_idx), dtype=np.float64)
+                            _sample_sp = _compute_dt_median(_lt)
+                        _lfilt, _lrep = _apply_fft_filter(
+                            _lmag, fft_type,
+                            cutoff_low,
+                            cutoff_high,
+                            sample_spacing=_sample_sp,
+                        )
+                        out.loc[_fft_idx, "magnetic"] = _lfilt
+                        _energy_ratios.append(_lrep.get("energy_ratio", 1.0))
+                        if _lrep.get("warning"):
+                            warnings.append(f"Line {_fft_lid} filter: {_lrep['warning']}")
+                    energy_ratio = float(np.mean(_energy_ratios)) if _energy_ratios else 1.0
+                else:
+                    mag_arr = out["magnetic"].to_numpy(dtype=np.float64)
+                    if use_spatial:
+                        _sample_sp = 1.0
+                    else:
+                        t_arr = out["time_s"].to_numpy(dtype=np.float64) if "time_s" in out.columns else np.arange(len(out), dtype=np.float64)
+                        _sample_sp = _compute_dt_median(t_arr)
+                    filtered, energy_rep = _apply_fft_filter(
+                        mag_arr, fft_type,
+                        cutoff_low,
+                        cutoff_high,
+                        sample_spacing=_sample_sp,
+                    )
+                    out["magnetic"] = filtered
+                    energy_ratio = energy_rep.get("energy_ratio", 1.0)
+                    if energy_rep.get("warning"):
+                        warnings.append(f"Filter: {energy_rep['warning']}")
+
+                cutoff_desc = f"{spatial_cutoff_stations} stations" if use_spatial else "configured cutoff"
+                notes.append(f"{filter_type} FFT filter (cutoff: {cutoff_desc}, energy retained: {energy_ratio:.1%})")
                 if energy_ratio < 0.15:
                     warnings.append("FFT filter retained less than 15% of the original signal energy.")
+                if fft_type == "highpass":
+                    warnings.append("High-pass filtering can amplify short-wavelength noise. Inspect output carefully.")
                 _proc_log(f"3.5.fft_{fft_type}", out["magnetic"].to_numpy(dtype=np.float64))
 
         mag_after = out["magnetic"].to_numpy(dtype=np.float64)
@@ -1896,31 +2119,60 @@ class ProcessingService:
                 out.attrs["lag_report"] = report
                 return out, f"lag correction skipped (low confidence {confidence:.3f})"
 
-            # Apply via interpolation shift
+            # Apply via interpolation shift — per-line for multi-line surveys so
+            # each line's interpolation stays within its own time range.
             if lag != 0 and "time_s" in out.columns:
-                t = out["time_s"].to_numpy(dtype=np.float64)
-                mag = out["magnetic"].to_numpy(dtype=np.float64)
-                valid = ~np.isnan(mag)
-                if valid.sum() > 3:
-                    dt = _compute_dt_median(t[valid])
-                    t_shift = t + lag * dt
-                    interp_fn = interp1d(
-                        t[valid],
-                        mag[valid],
-                        bounds_error=False,
-                        fill_value=(float(mag[valid][0]), float(mag[valid][-1])),
-                    )
-                    out["magnetic"] = interp_fn(t_shift)
+                _lag_multi = "_line_id" in out.columns and out["_line_id"].nunique() > 1
+                if _lag_multi:
+                    _lag_total_affected = 0
+                    for _lag_lid in out["_line_id"].unique():
+                        _lag_lm = out["_line_id"] == _lag_lid
+                        _lag_lt = out.loc[_lag_lm, "time_s"].to_numpy(dtype=np.float64)
+                        _lag_lmag = out.loc[_lag_lm, "magnetic"].to_numpy(dtype=np.float64)
+                        _lag_lvalid = ~np.isnan(_lag_lmag)
+                        if _lag_lvalid.sum() > 3:
+                            _lag_ldt = _compute_dt_median(_lag_lt[_lag_lvalid])
+                            _lag_lt_shift = _lag_lt + lag * _lag_ldt
+                            _lag_interp = interp1d(
+                                _lag_lt[_lag_lvalid], _lag_lmag[_lag_lvalid],
+                                bounds_error=False,
+                                fill_value=(float(_lag_lmag[_lag_lvalid][0]), float(_lag_lmag[_lag_lvalid][-1])),
+                            )
+                            out.loc[_lag_lm, "magnetic"] = _lag_interp(_lag_lt_shift)
+                            _lag_total_affected += int(_lag_lvalid.sum())
                     _proc_log("3.3.lag", out["magnetic"].to_numpy(dtype=np.float64))
                     report.update(
                         {
                             "status": "completed",
                             "lag_samples": int(lag),
-                            "lag_distance_m": float(lag * dt),
                             "confidence": float(confidence),
-                            "affected_points": int(valid.sum()),
+                            "affected_points": _lag_total_affected,
                         }
                     )
+                else:
+                    t = out["time_s"].to_numpy(dtype=np.float64)
+                    mag = out["magnetic"].to_numpy(dtype=np.float64)
+                    valid = ~np.isnan(mag)
+                    if valid.sum() > 3:
+                        dt = _compute_dt_median(t[valid])
+                        t_shift = t + lag * dt
+                        interp_fn = interp1d(
+                            t[valid],
+                            mag[valid],
+                            bounds_error=False,
+                            fill_value=(float(mag[valid][0]), float(mag[valid][-1])),
+                        )
+                        out["magnetic"] = interp_fn(t_shift)
+                        _proc_log("3.3.lag", out["magnetic"].to_numpy(dtype=np.float64))
+                        report.update(
+                            {
+                                "status": "completed",
+                                "lag_samples": int(lag),
+                                "lag_distance_m": float(lag * dt),
+                                "confidence": float(confidence),
+                                "affected_points": int(valid.sum()),
+                            }
+                        )
 
             out.attrs["lag_report"] = report
             return out, f"lag correction ({lag} samples, confidence={confidence:.3f})"
@@ -1939,51 +2191,83 @@ class ProcessingService:
             return out, "lag correction skipped (error)"
 
     def _apply_heading_correction(self, frame: pd.DataFrame) -> tuple[pd.DataFrame, str]:
-        """Adaptive equal-count bin heading bias correction."""
+        """Adaptive equal-count bin heading bias correction, applied per-line for multi-line surveys.
+
+        For single-line: bins all points globally (one traverse direction).
+        For multi-line: applies independently per line so each line's heading
+        distribution sets its own reference median, preventing a dominant heading
+        from skewing corrections on minority-direction lines.
+        """
         out = frame.copy()
-        lon = out["longitude"].to_numpy(dtype=np.float64)
-        lat = out["latitude"].to_numpy(dtype=np.float64)
-        mag = out["magnetic"].to_numpy(dtype=np.float64)
         report = {"status": "skipped", "warnings": [], "fallbacks": [], "affected_points": 0}
 
-        if len(lon) < 4:
+        def _correct_segment(lon_arr, lat_arr, mag_arr, label):
+            """Return (corrected_mag, n_bins, bin_stats). Mutates report["warnings"]."""
+            if len(lon_arr) < 4:
+                return mag_arr.copy(), 0, []
+            dx = np.diff(lon_arr, prepend=lon_arr[0])
+            dy = np.diff(lat_arr, prepend=lat_arr[0])
+            hdg = np.arctan2(dy, dx + 1e-12)
+            hdg = median_filter(hdg, size=3, mode="nearest")
+            n_b = max(4, min(16, int(math.sqrt(len(hdg)))))
+            pcts = np.linspace(0, 100, n_b + 1)
+            edges = np.percentile(hdg, pcts)
+            edges[-1] += 1e-9
+            corrected = mag_arr.copy()
+            overall_med = float(np.nanmedian(mag_arr))
+            b_stats = []
+            for i in range(n_b):
+                bm = (hdg >= edges[i]) & (hdg < edges[i + 1])
+                if bm.sum() >= 4:
+                    bias = float(np.nanmedian(mag_arr[bm]))
+                    corrected[bm] = mag_arr[bm] - (bias - overall_med)
+                    b_stats.append({"count": int(bm.sum()), "bias": bias})
+                elif bm.sum() > 0:
+                    report["warnings"].append(f"{label} heading bin {i + 1} had sparse support and was left uncorrected.")
+            return corrected, n_b, b_stats
+
+        multi_line = "_line_id" in out.columns and out["_line_id"].nunique() > 1
+
+        if multi_line:
+            line_ids = out["_line_id"].unique()
+            total_affected = 0
+            per_line_stats = []
+            for lid in line_ids:
+                lm = out["_line_id"] == lid
+                line = out[lm]
+                corrected_mag, n_b, b_stats = _correct_segment(
+                    line["longitude"].to_numpy(dtype=np.float64),
+                    line["latitude"].to_numpy(dtype=np.float64),
+                    line["magnetic"].to_numpy(dtype=np.float64),
+                    f"Line {lid}",
+                )
+                out.loc[lm, "magnetic"] = corrected_mag
+                total_affected += int(lm.sum())
+                per_line_stats.append({"line_id": int(lid), "n_bins": n_b, "bin_stats": b_stats})
+            _proc_log("3.4.heading", out["magnetic"].to_numpy(dtype=np.float64))
+            report.update({"status": "completed", "affected_points": total_affected, "per_line": per_line_stats})
             out.attrs["heading_report"] = report
-            return out, "heading correction skipped (insufficient points)"
-
-        dx = np.diff(lon, prepend=lon[0])
-        dy = np.diff(lat, prepend=lat[0])
-        heading = np.arctan2(dy, dx + 1e-12)
-        heading = median_filter(heading, size=3, mode="nearest")
-
-        n_bins = max(4, min(16, int(math.sqrt(len(heading)))))
-        percentiles = np.linspace(0, 100, n_bins + 1)
-        bin_edges = np.percentile(heading, percentiles)
-        bin_edges[-1] += 1e-9
-
-        corrected_mag = mag.copy()
-        overall_median = float(np.nanmedian(mag))
-        bin_stats = []
-        for i in range(n_bins):
-            mask = (heading >= bin_edges[i]) & (heading < bin_edges[i + 1])
-            if mask.sum() >= 4:
-                bin_bias = float(np.nanmedian(mag[mask]))
-                corrected_mag[mask] = mag[mask] - (bin_bias - overall_median)
-                bin_stats.append({"count": int(mask.sum()), "bias": bin_bias})
-            elif mask.sum() > 0:
-                report["warnings"].append(f"Heading bin {i + 1} had sparse support and was left uncorrected.")
-
-        out["magnetic"] = corrected_mag
-        _proc_log("3.4.heading", out["magnetic"].to_numpy(dtype=np.float64))
-        report.update(
-            {
-                "status": "completed",
-                "affected_points": int(len(out)),
-                "bin_count": int(n_bins),
-                "bin_stats": bin_stats,
-            }
-        )
-        out.attrs["heading_report"] = report
-        return out, f"heading correction ({n_bins} adaptive bins)"
+            return out, f"heading correction per-line ({len(line_ids)} lines)"
+        else:
+            lon = out["longitude"].to_numpy(dtype=np.float64)
+            lat = out["latitude"].to_numpy(dtype=np.float64)
+            mag = out["magnetic"].to_numpy(dtype=np.float64)
+            if len(lon) < 4:
+                out.attrs["heading_report"] = report
+                return out, "heading correction skipped (insufficient points)"
+            corrected_mag, n_bins, bin_stats = _correct_segment(lon, lat, mag, "Bin")
+            out["magnetic"] = corrected_mag
+            _proc_log("3.4.heading", out["magnetic"].to_numpy(dtype=np.float64))
+            report.update(
+                {
+                    "status": "completed",
+                    "affected_points": int(len(out)),
+                    "bin_count": int(n_bins),
+                    "bin_stats": bin_stats,
+                }
+            )
+            out.attrs["heading_report"] = report
+            return out, f"heading correction ({n_bins} adaptive bins)"
 
     # ── Stage 4: Grid prep (unchanged) ──────────────────────────────────────
 
@@ -2804,13 +3088,33 @@ class ProcessingService:
 
     def _apply_add_ons(self, task: dict, results: dict) -> dict:
         surface = np.asarray(results["surface"], dtype=np.float64)
-        rf_variance = results.get("rf_variance")
         add_ons = (task.get("analysis_config") or {}).get("add_ons") or []
         selected = set(add_ons)
+        config = task.get("analysis_config") or {}
         detail_items: list[str] = []
         metadata = {"warnings": [], "fallbacks": [], "layer_labels": {}}
 
-        # Determine pixel spacing from grid
+        # ── Geometry detection ────────────────────────────────────────────────
+        # Determine whether this is a single-line or multi-line dataset.
+        # Multi-line: surface-based (2D grid) methods are valid.
+        # Single-line: profile-based methods must be used; grid-based
+        #              methods on a 1D-interpolated surface are labeled as proxies.
+        points = results.get("points") or []
+        unique_line_ids = set()
+        if points:
+            for pt in points:
+                lid = pt.get("line_id")
+                if lid is not None:
+                    unique_line_ids.add(lid)
+        is_multi_line = len(unique_line_ids) > 1
+        is_surface_valid = (
+            surface.ndim == 2
+            and surface.shape[0] > 2
+            and surface.shape[1] > 2
+            and is_multi_line
+        )
+
+        # ── Grid pixel spacing ────────────────────────────────────────────────
         grid_x = results.get("grid_x")
         if grid_x is not None and grid_x.ndim == 2 and grid_x.shape[1] > 1:
             dx = float(np.abs(np.mean(np.diff(grid_x[0, :]))))
@@ -2820,22 +3124,175 @@ class ProcessingService:
         dx = max(dx, 1e-9)
         dy = max(dy, 1e-9)
 
-        # ── Analytic signal (3D, Fourier VDR) ───────────────────────────────
-        if surface.ndim == 2 and surface.shape[0] > 1 and surface.shape[1] > 1:
-            analytic = _analytic_signal_3d(surface, dx, dy)
-            gx, gy = np.gradient(surface.astype(np.float64), dy, dx)
-            fvd = _first_vertical_derivative_fft(surface, dx, dy)
-            horizontal_derivative = np.sqrt(gx ** 2 + gy ** 2)
-        else:
-            # Along-line fallback
-            s1d = surface.ravel()
-            grad = np.gradient(s1d)
-            analytic = np.abs(grad).reshape(surface.shape)
-            fvd = np.gradient(grad).reshape(surface.shape)
-            horizontal_derivative = np.abs(grad).reshape(surface.shape)
+        metadata["geometry"] = "multi_line" if is_multi_line else "single_line"
+        metadata["surface_methods_valid"] = bool(is_surface_valid)
 
-        # ── RTP (Fourier domain, ε-damped) ───────────────────────────────────
-        config = task.get("analysis_config") or {}
+        # ── Profile-based add-ons (always computed when points available) ─────
+        # These are the authoritative outputs for single-line data and the
+        # cross-check for multi-line data.
+        svd_pre_smooth = bool(config.get("svd_pre_smooth", True))
+        profile_add_ons_by_line: dict[str, list] = {}  # line_id → per-point arrays
+        profile_add_ons_flat: dict[str, list] = {}     # flat point-indexed arrays
+
+        addon_keys_needed = {"first_vertical_derivative", "second_vertical_derivative",
+                             "horizontal_derivative", "thg", "tilt_derivative", "analytic_signal"}
+        compute_profile = bool(selected & addon_keys_needed) and bool(points)
+
+        if compute_profile and points:
+            # Build per-line arrays from results points
+            line_order: dict[int, list[int]] = {}   # line_id → list of point indices
+            for pidx, pt in enumerate(points):
+                lid = int(pt.get("line_id") or 0)
+                line_order.setdefault(lid, []).append(pidx)
+
+            n_pts = len(points)
+            prof_fvd = np.zeros(n_pts, dtype=np.float64)
+            prof_svd = np.zeros(n_pts, dtype=np.float64)
+            prof_hd = np.zeros(n_pts, dtype=np.float64)
+            prof_thg = np.zeros(n_pts, dtype=np.float64)
+            prof_tilt = np.zeros(n_pts, dtype=np.float64)
+            prof_asig = np.zeros(n_pts, dtype=np.float64)
+
+            for lid, pidx_list in line_order.items():
+                mag_line = np.array([float(points[i].get("magnetic") or 0.0) for i in pidx_list], dtype=np.float64)
+                along_line = np.array([float(points[i].get("along_line_m") or 0.0) for i in pidx_list], dtype=np.float64)
+
+                if len(mag_line) < 3:
+                    continue
+
+                res = _compute_profile_add_ons(mag_line, along_line, svd_pre_smooth=svd_pre_smooth)
+                for pidx_local, pidx_global in enumerate(pidx_list):
+                    prof_fvd[pidx_global] = res["fvd"][pidx_local]
+                    prof_svd[pidx_global] = res["svd"][pidx_local]
+                    prof_hd[pidx_global] = res["hd"][pidx_local]
+                    prof_thg[pidx_global] = res["thg"][pidx_local]
+                    prof_tilt[pidx_global] = res["tilt"][pidx_local]
+                    prof_asig[pidx_global] = res["analytic_signal"][pidx_local]
+
+            profile_add_ons_flat = {
+                "fvd": prof_fvd.tolist(),
+                "svd": prof_svd.tolist(),
+                "hd": prof_hd.tolist(),
+                "thg": prof_thg.tolist(),
+                "tilt": prof_tilt.tolist(),
+                "analytic_signal": prof_asig.tolist(),
+            }
+        else:
+            profile_add_ons_flat = {}
+
+        # ── Surface-based add-ons ─────────────────────────────────────────────
+        # For multi-line with a valid 2D grid. For single-line the surface is a
+        # nearest-neighbour interpolated proxy — label accordingly.
+        profile_basis_label = "profile" if not is_multi_line else "surface"
+
+        if is_surface_valid:
+            surf_fvd = _first_vertical_derivative_fft(surface, dx, dy)
+            surf_svd = _second_vertical_derivative_grid(surface, dx, dy)
+            gx, gy = np.gradient(surface.astype(np.float64), dy, dx)
+            surf_hd = np.sqrt(gx ** 2 + gy ** 2)
+            surf_thg = surf_hd.copy()
+            surf_tilt = _tilt_derivative(surface, dx, dy)
+            surf_analytic = _analytic_signal_3d(surface, dx, dy)
+        else:
+            # Single-line or degenerate surface: map profile values back onto
+            # the 2D grid for downstream display by interpolation if possible.
+            # Fall back to simple gradient if no point data.
+            if compute_profile and points and n_pts > 3:
+                try:
+                    lons = np.array([float(pt.get("longitude") or 0.0) for pt in points])
+                    lats = np.array([float(pt.get("latitude") or 0.0) for pt in points])
+                    gx_pts = np.column_stack([lons, lats])
+                    gx_grid = np.column_stack([grid_x.ravel(), results["grid_y"].ravel()])
+
+                    def _scatter_to_grid(vals: np.ndarray) -> np.ndarray:
+                        from scipy.interpolate import griddata as gd
+                        interped = gd(gx_pts, vals, gx_grid, method="nearest")
+                        return interped.reshape(surface.shape)
+
+                    surf_fvd = _scatter_to_grid(prof_fvd)
+                    surf_svd = _scatter_to_grid(prof_svd)
+                    surf_hd = _scatter_to_grid(prof_hd)
+                    surf_thg = _scatter_to_grid(prof_thg)
+                    surf_tilt = _scatter_to_grid(prof_tilt)
+                    surf_analytic = _scatter_to_grid(prof_asig)
+                    metadata["warnings"].append(
+                        "Single-line dataset: derivative surfaces are interpolated from profile-based values. "
+                        "Treat map displays as profile projections, not true 2D surfaces."
+                    )
+                except Exception as _exc:
+                    logger.warning("Profile-to-grid scatter failed (%s); using gradient fallback.", _exc)
+                    s1d = surface.ravel()
+                    _g = np.gradient(s1d)
+                    surf_fvd = np.gradient(_g).reshape(surface.shape)
+                    surf_svd = np.gradient(np.gradient(_g)).reshape(surface.shape)
+                    surf_hd = np.abs(_g).reshape(surface.shape)
+                    surf_thg = surf_hd.copy()
+                    surf_tilt = np.zeros_like(surface)
+                    surf_analytic = surf_hd.copy()
+            else:
+                s1d = surface.ravel()
+                _g = np.gradient(s1d)
+                surf_fvd = np.gradient(_g).reshape(surface.shape)
+                surf_svd = np.gradient(np.gradient(_g)).reshape(surface.shape)
+                surf_hd = np.abs(_g).reshape(surface.shape)
+                surf_thg = surf_hd.copy()
+                surf_tilt = np.zeros_like(surface)
+                surf_analytic = surf_hd.copy()
+
+        # ── Traceability metadata for each add-on ─────────────────────────────
+        addon_provenance = {
+            "first_vertical_derivative": {
+                "source_field": "corrected_magnetic",
+                "method": "FFT wavenumber-domain (surface)" if is_surface_valid else "profile finite-differences",
+                "profile_based": not is_surface_valid,
+                "smoothing_applied": False,
+                "description": "dT/dz approximation. Emphasises shallow sources.",
+                "warning": None if is_surface_valid else "Profile proxy: computed along traverse, not true 2D vertical derivative.",
+            },
+            "second_vertical_derivative": {
+                "source_field": "corrected_magnetic",
+                "method": "FFT wavenumber-domain -(k²) (surface)" if is_surface_valid else "profile central differences (pre-smoothed)" if svd_pre_smooth else "profile central differences",
+                "profile_based": not is_surface_valid,
+                "smoothing_applied": svd_pre_smooth,
+                "description": "d²T/dz². Noise-sensitive; pre-smoothing applied by default.",
+                "warning": "SVD amplifies noise. Pre-smoothing was " + ("applied." if svd_pre_smooth else "NOT applied — interpret with caution."),
+            },
+            "horizontal_derivative": {
+                "source_field": "corrected_magnetic",
+                "method": "2D gradient magnitude (surface)" if is_surface_valid else "along-profile dT/dx",
+                "profile_based": not is_surface_valid,
+                "smoothing_applied": False,
+                "description": "Lateral rate of change. Highlights contacts and edges.",
+                "warning": None if is_surface_valid else "Profile only: single along-line direction. Not full 2D HD.",
+            },
+            "thg": {
+                "source_field": "corrected_magnetic",
+                "method": "sqrt((dT/dx)² + (dT/dy)²) (surface)" if is_surface_valid else "abs(dT/dx) profile proxy",
+                "profile_based": not is_surface_valid,
+                "smoothing_applied": False,
+                "description": "Total Horizontal Gradient. Edge-sensitive.",
+                "warning": None if is_surface_valid else "1D profile THG: only along-line component available. Not true 2D THG.",
+            },
+            "tilt_derivative": {
+                "source_field": "corrected_magnetic",
+                "method": "arctan(FVD / THG) with ε-stabilised denominator",
+                "profile_based": not is_surface_valid,
+                "smoothing_applied": False,
+                "description": "Normalised edge response. Zero-crossing marks body edge.",
+                "warning": "Denominator stabilised with ε=1e-6 to prevent division by zero.",
+            },
+            "analytic_signal": {
+                "source_field": "corrected_magnetic",
+                "method": "sqrt(gx² + gy² + gz²) 3D Fourier (surface)" if is_surface_valid else "sqrt(HD² + FVD_proxy²) profile",
+                "profile_based": not is_surface_valid,
+                "smoothing_applied": False,
+                "description": "Analytic signal magnitude. Position-independent edge detection.",
+                "warning": None if is_surface_valid else "Profile-based analytic signal: only 1D derivative components. Not full 3D analytic signal.",
+            },
+        }
+        metadata["addon_provenance"] = addon_provenance
+
+        # ── RTP (unchanged; not in A/C scope but kept for backward compat) ────
         rtp_inc = config.get("rtp_inclination")
         rtp_dec = config.get("rtp_declination")
         if surface.ndim == 2 and surface.shape[0] > 1 and surface.shape[1] > 1:
@@ -2843,26 +3300,16 @@ class ProcessingService:
         else:
             rtp_surface = surface - float(np.nanmean(surface))
         if rtp_inc is None or rtp_dec is None:
-            metadata["fallbacks"].append(
-                {
-                    "stage": "rtp",
-                    "requested": "reduction_to_pole",
-                    "actual": "mean_centered_surface",
-                    "reason": "Inclination or declination was missing, so RTP could not be computed physically.",
-                    "severity": "warning",
-                }
-            )
-            metadata["warnings"].append("RTP inputs were incomplete; a mean-centred fallback surface was produced instead.")
+            metadata["fallbacks"].append({
+                "stage": "rtp",
+                "requested": "reduction_to_pole",
+                "actual": "mean_centered_surface",
+                "reason": "Inclination or declination was missing; RTP not computed physically.",
+                "severity": "warning",
+            })
+            metadata["warnings"].append("RTP inputs incomplete; mean-centred fallback produced.")
 
-        # ── Tilt derivative ───────────────────────────────────────────────────
-        if surface.ndim == 2 and surface.shape[0] > 1 and surface.shape[1] > 1:
-            tilt = _tilt_derivative(surface, dx, dy)
-            total_grad = _total_gradient(surface, dx, dy)
-        else:
-            tilt = np.zeros_like(surface)
-            total_grad = analytic
-
-        # ── EMAG2 regional residual (Gaussian separation) ────────────────────
+        # ── Regional / residual separation ────────────────────────────────────
         regional_field, regional_residual, regional_metadata = self._compute_regional_and_residual_surfaces(task, results)
         metadata.update({k: v for k, v in regional_metadata.items() if k not in {"warnings", "fallbacks", "layer_labels"}})
         metadata["warnings"].extend(regional_metadata.get("warnings") or [])
@@ -2873,21 +3320,21 @@ class ProcessingService:
         metadata["layer_labels"]["regional_field"] = "Regional field"
         metadata["layer_labels"]["regional_surface"] = "Regional magnetic field"
         metadata["layer_identity"] = {
-            "corrected_field": "Broadly corrected magnetic field used as the parent surface for interpretation.",
+            "corrected_field": "Corrected magnetic field — parent surface for all add-on computation.",
             "regional_field": "Broad background trend and long-wavelength magnetic character.",
             "residual_field": "Local anomaly expression and short-wavelength target-scale magnetic response.",
         }
 
-        # ── Filtered surface ─────────────────────────────────────────────────
+        # ── Surface filtered version (grid display only) ──────────────────────
         filter_type = config.get("filter_type", "")
-        if filter_type == "low-pass":
+        if filter_type in ("low-pass", "lowpass"):
             filtered_surface = gaussian_filter(surface, sigma=1.2)
-        elif filter_type == "high-pass":
+        elif filter_type in ("high-pass", "highpass"):
             filtered_surface = surface - gaussian_filter(surface, sigma=1.2)
         else:
             filtered_surface = surface
 
-        # ── Upward / downward continuation ───────────────────────────────────
+        # ── Upward / downward continuation ────────────────────────────────────
         if "upward_continuation" in selected and surface.ndim == 2:
             height = float(config.get("upward_continuation_height", 100.0))
             filtered_surface = _apply_upward_continuation(surface, height, dx, dy)
@@ -2897,25 +3344,46 @@ class ProcessingService:
             filtered_surface = _apply_downward_continuation(surface, height, dx, dy)
             detail_items.append(f"downward continuation ({height} m)")
 
-        # Build detail
+        # ── Build detail string ────────────────────────────────────────────────
+        if "first_vertical_derivative" in selected:
+            detail_items.append(f"FVD ({profile_basis_label})")
+        if "second_vertical_derivative" in selected:
+            detail_items.append(f"SVD ({profile_basis_label}, {'pre-smoothed' if svd_pre_smooth else 'raw'})")
+        if "horizontal_derivative" in selected:
+            detail_items.append(f"horizontal derivative ({profile_basis_label})")
+        if "thg" in selected:
+            detail_items.append(f"THG ({profile_basis_label})")
+        if "tilt_derivative" in selected:
+            detail_items.append(f"tilt derivative ({profile_basis_label})")
         if "analytic_signal" in selected:
-            detail_items.append("analytic signal (3D)")
+            detail_items.append(f"analytic signal ({profile_basis_label})")
         if regional_metadata.get("regional_residual_enabled"):
             detail_items.append(f"regional field ({regional_metadata.get('regional_method_used')})")
             detail_items.append("residual field")
         if "rtp" in selected:
             detail_items.append(f"RTP (inc={rtp_inc}, dec={rtp_dec})")
-        if "tilt_derivative" in selected:
-            detail_items.append("tilt derivative")
-        if "total_gradient" in selected:
-            detail_items.append("total gradient")
         if "uncertainty" in selected:
             detail_items.append("uncertainty surface")
 
+        # ── Warn about selected-but-noisy add-ons ─────────────────────────────
+        if "second_vertical_derivative" in selected and not svd_pre_smooth:
+            metadata["warnings"].append(
+                "SVD was requested without pre-smoothing. Noise amplification is likely on raw survey data."
+            )
+        if ("first_vertical_derivative" in selected or "second_vertical_derivative" in selected) and not is_multi_line:
+            metadata["warnings"].append(
+                "Derivative outputs for single-line survey are profile-based proxies, not true 2D vertical derivatives."
+            )
+
         return {
-            "analytic_signal": analytic.tolist(),
-            "first_vertical_derivative": fvd.tolist(),
-            "horizontal_derivative": horizontal_derivative.tolist(),
+            # Surface arrays (grid-shaped, for map display)
+            "analytic_signal": surf_analytic.tolist(),
+            "first_vertical_derivative": surf_fvd.tolist(),
+            "second_vertical_derivative": surf_svd.tolist(),
+            "horizontal_derivative": surf_hd.tolist(),
+            "thg": surf_thg.tolist(),
+            "total_gradient": surf_thg.tolist(),   # backward-compat alias
+            "tilt_derivative": surf_tilt.tolist(),
             "filtered_surface": filtered_surface.tolist(),
             "corrected_field": surface.tolist(),
             "regional_field": regional_field.tolist(),
@@ -2924,8 +3392,8 @@ class ProcessingService:
             "regional_residual": regional_residual.tolist(),
             "residual_surface": regional_residual.tolist(),
             "rtp_surface": rtp_surface.tolist(),
-            "tilt_derivative": tilt.tolist(),
-            "total_gradient": total_grad.tolist(),
+            # Profile-indexed arrays (one value per point, for profile chart display)
+            "profile_add_ons": profile_add_ons_flat,
             "selected_add_ons": add_ons,
             "detail": ", ".join(detail_items) if detail_items else "No add-on layers were requested",
             "metadata": metadata,

@@ -15,9 +15,11 @@ const ADD_ON_MAP = {
   "Reduction to Pole (RTP)": "rtp",
   "Analytic signal": "analytic_signal",
   "First Vertical Derivative": "first_vertical_derivative",
+  "Second Vertical Derivative": "second_vertical_derivative",
   "Horizontal Derivative": "horizontal_derivative",
+  "Total Horizontal Gradient": "thg",
+  "Tilt Derivative": "tilt_derivative",
   "Regional residual": "emag2",
-  "Uncertainty quantification": "uncertainty",
 };
 
 const MODEL_MAP = {
@@ -27,10 +29,10 @@ const MODEL_MAP = {
 };
 
 const REGIONAL_METHOD_HELP = {
-  polynomial: "Fits a broad mathematical surface to represent long-wavelength magnetic behavior.",
-  trend: "Represents the broad background field using a smooth large-scale trend.",
-  lowpass: "Extracts the regional component by preserving long-wavelength signals and suppressing local anomalies.",
-  igrf_context: "Uses geomagnetic reference context where available. Best interpreted as background field context rather than local trend fitting.",
+  polynomial: "Fits a low-order polynomial trend to station distance. Suitable for removing broad tilts in the corrected field. Single-line: profile polynomial. Multi-line: 2D trend surface.",
+  trend: "Represents the broad background field using a smooth large-scale spatial trend. Similar to polynomial but fitted over 2D space.",
+  lowpass: "Retains long-wavelength content as the regional field. Applied per-line for single-line surveys; grid low-pass for multi-line. Cutoff tied to smoothing scale.",
+  igrf_context: "Uses the IGRF geomagnetic reference as a long-wavelength background context. Not a local trend fit — more appropriate as a reference check than a local regional estimate.",
 };
 
 // Reverse maps for restoring saved state to the UI
@@ -60,6 +62,17 @@ export function collectAnalysisConfig() {
       ? "high-pass"
       : null;
 
+  // Filter cutoff: half-wavelength in stations
+  const filterCutoffRaw = parseInt(document.getElementById("filter-cutoff")?.value || "20", 10);
+  const filterCutoffStations = Number.isFinite(filterCutoffRaw) && filterCutoffRaw >= 2 ? filterCutoffRaw : 20;
+
+  // IGRF survey date (ISO date string, e.g. "2024-03-15")
+  const igrfDateVal = document.getElementById("igrf-survey-date")?.value || "";
+  const surveyDate = igrfDateVal ? `${igrfDateVal}T00:00:00Z` : null;
+
+  // SVD pre-smoothing
+  const svdPreSmooth = document.getElementById("svd-smooth-toggle")?.checked !== false;
+
   const runPrediction = document.getElementById("predModelToggle")?.checked !== false;
   const regionalResidualEnabled = document.getElementById("regionalResidualToggle")?.checked
     || addOns.includes("emag2")
@@ -67,9 +80,13 @@ export function collectAnalysisConfig() {
   const regionalMethod = document.getElementById("regionalMethodSelect")?.value || "lowpass";
   const regionalDegree = Number(document.getElementById("regionalDegreeInput")?.value || 1);
   const regionalScale = Number(document.getElementById("regionalScaleInput")?.value || 2.5);
+
   return {
     corrections,
     filter_type: filterType,
+    filter_cutoff_stations: filterCutoffStations,
+    survey_date: surveyDate,
+    svd_pre_smooth: svdPreSmooth,
     model,
     add_ons: addOns,
     run_prediction: runPrediction,
@@ -156,12 +173,19 @@ function syncRegionalResidualUI() {
   if (note) {
     if (method === "igrf_context") {
       note.style.display = "block";
-      note.textContent = "IGRF context is a background reference mode, not the same as polynomial detrending.";
+      note.textContent = "IGRF context is a background reference mode, not the same as polynomial detrending or local profile smoothing.";
     } else {
       note.style.display = "none";
       note.textContent = "";
     }
   }
+}
+
+function syncFilterUI() {
+  const highWarn = document.getElementById("filter-highpass-warn");
+  if (!highWarn) return;
+  const isHigh = document.getElementById("filt-high")?.classList.contains("selected");
+  highWarn.style.display = isHigh ? "block" : "none";
 }
 
 export function loadAnalysis(task) {
@@ -185,6 +209,7 @@ export function loadAnalysis(task) {
     }
   });
 
+  // Restore regional settings
   const regionalToggle = document.getElementById("regionalResidualToggle");
   if (regionalToggle) regionalToggle.checked = Boolean(config.regional_residual_enabled || savedAddOns.has("emag2"));
   const regionalMethod = document.getElementById("regionalMethodSelect");
@@ -193,6 +218,23 @@ export function loadAnalysis(task) {
   if (regionalDegree) regionalDegree.value = String(config.regional_polynomial_degree || 1);
   const regionalScale = document.getElementById("regionalScaleInput");
   if (regionalScale) regionalScale.value = String(config.regional_filter_scale || 2.5);
+
+  // Restore IGRF survey date
+  const igrfDateInput = document.getElementById("igrf-survey-date");
+  if (igrfDateInput && config.survey_date) {
+    // config.survey_date is ISO datetime; extract YYYY-MM-DD for the date input
+    igrfDateInput.value = String(config.survey_date).slice(0, 10);
+  }
+
+  // Restore filter cutoff
+  const filterCutoffInput = document.getElementById("filter-cutoff");
+  if (filterCutoffInput && config.filter_cutoff_stations) {
+    filterCutoffInput.value = String(config.filter_cutoff_stations);
+  }
+
+  // Restore SVD pre-smooth
+  const svdSmooth = document.getElementById("svd-smooth-toggle");
+  if (svdSmooth) svdSmooth.checked = config.svd_pre_smooth !== false;
 
   // Hide filter sub-options
   const filterOpts = document.getElementById("filter-opts");
@@ -233,8 +275,20 @@ export function loadAnalysis(task) {
           window.setFilter?.("high");
         }
       }
+      // Restore SVD sub-options if SVD was selected
+      if (addonKey === "second_vertical_derivative") {
+        const svdOpts = document.getElementById("svd-opts");
+        if (svdOpts) svdOpts.style.display = "block";
+      }
     }
   });
+
+  // IGRF opts: show only when IGRF is checked
+  const igrfEl = document.getElementById("chk-igrf");
+  const igrfOpts = document.getElementById("igrf-opts");
+  if (igrfEl && igrfOpts) {
+    igrfOpts.style.display = igrfEl.classList.contains("on") ? "block" : "none";
+  }
 
   // Restore prediction modelling toggle
   const toggle = document.getElementById("predModelToggle");
@@ -262,6 +316,7 @@ export function loadAnalysis(task) {
   applyDataStateRestrictions(task);
   renderDiurnalInfo(task);
   syncRegionalResidualUI();
+  syncFilterUI();
 }
 
 export function initAnalysis() {
@@ -275,7 +330,7 @@ export function initAnalysis() {
     });
   }
 
-  // Expose save-then-navigate function for the "Preview →" button
+  // Regional residual wiring
   document.getElementById("regionalResidualToggle")?.addEventListener("change", () => {
     const enabled = document.getElementById("regionalResidualToggle")?.checked;
     const regionalCard = Array.from(document.querySelectorAll("#screen-analysis .chk .chk-t"))
@@ -294,16 +349,33 @@ export function initAnalysis() {
   document.getElementById("regionalMethodSelect")?.addEventListener("change", syncRegionalResidualUI);
   document.getElementById("regionalDegreeInput")?.addEventListener("input", syncRegionalResidualUI);
   document.getElementById("regionalScaleInput")?.addEventListener("input", syncRegionalResidualUI);
+
+  // Filter type change → sync high-pass warning
+  document.getElementById("filt-high")?.addEventListener("click", () => window.setTimeout(syncFilterUI, 0));
+  document.getElementById("filt-low")?.addEventListener("click", () => window.setTimeout(syncFilterUI, 0));
+
+  // Keep regional card in sync when checkbox is toggled directly
   document.querySelectorAll("#screen-analysis .chk").forEach((el) => {
     el.addEventListener("click", () => window.setTimeout(syncRegionalResidualUI, 0));
   });
+
   renderDiurnalInfo(appState.task);
   syncRegionalResidualUI();
+  syncFilterUI();
 
   window.saveAndPreview = async () => {
     if (!appState.project || !appState.task) {
       showGlobalNotice("Complete project setup first before configuring analysis.");
       return;
+    }
+    // Validate IGRF date if IGRF is enabled
+    const igrfEl = document.getElementById("chk-igrf");
+    if (igrfEl?.classList.contains("on")) {
+      const dateVal = document.getElementById("igrf-survey-date")?.value;
+      if (!dateVal) {
+        showGlobalNotice("IGRF removal requires a survey date. Please enter a date or disable IGRF removal.");
+        return;
+      }
     }
     try {
       await persistAnalysis();
@@ -314,3 +386,21 @@ export function initAnalysis() {
     window.go?.(document.querySelector("[data-s=preview]"));
   };
 }
+
+// ── Toggle helpers exposed to inline HTML onclick ──────────────────────────
+
+window.toggleIGRF = (el) => {
+  toggleChk(el);
+  const igrfOpts = document.getElementById("igrf-opts");
+  if (igrfOpts) {
+    igrfOpts.style.display = el.classList.contains("on") ? "block" : "none";
+  }
+};
+
+window.toggleSVD = (el) => {
+  toggleChk(el);
+  const svdOpts = document.getElementById("svd-opts");
+  if (svdOpts) {
+    svdOpts.style.display = el.classList.contains("on") ? "block" : "none";
+  }
+};
